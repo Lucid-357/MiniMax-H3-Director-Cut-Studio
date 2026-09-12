@@ -1,0 +1,373 @@
+{
+ "92": {
+  "inputs": {
+   "filename_prefix": "video/DCS_TEST_SING_LORA",
+   "format": "auto",
+   "codec": "auto",
+   "video": [
+    "130",
+    0
+   ]
+  },
+  "class_type": "SaveVideo",
+  "_meta": {
+   "title": "\u4fdd\u5b58\u89c6\u9891"
+  }
+ },
+ "119": {
+  "inputs": {
+   "vae_name": "minimax_h3_video_vae_fp16.safetensors"
+  },
+  "class_type": "VAELoader",
+  "_meta": {
+   "title": "\u52a0\u8f7dVAE"
+  }
+ },
+ "120": {
+  "inputs": {
+   "vae_name": "minimax_h3_audio_vae_fp32.safetensors"
+  },
+  "class_type": "VAELoader",
+  "_meta": {
+   "title": "\u52a0\u8f7dVAE"
+  }
+ },
+ "121": {
+  "inputs": {
+   "samples": [
+    "631",
+    0
+   ],
+   "vae": [
+    "120",
+    0
+   ]
+  },
+  "class_type": "VAEDecodeAudio",
+  "_meta": {
+   "title": "VAE\u89e3\u7801\uff08\u97f3\u9891\uff09"
+  }
+ },
+ "122": {
+  "inputs": {
+   "samples": [
+    "631",
+    0
+   ],
+   "vae": [
+    "119",
+    0
+   ]
+  },
+  "class_type": "VAEDecode",
+  "_meta": {
+   "title": "VAE\u89e3\u7801"
+  }
+ },
+ "123": {
+  "inputs": {
+   "sampler_name": "res_multistep"
+  },
+  "class_type": "KSamplerSelect",
+  "_meta": {
+   "title": "K\u91c7\u6837\u5668\u9009\u62e9"
+  }
+ },
+ "124": {
+  "inputs": {
+   "scheduler": "simple",
+   "steps": 4,
+   "denoise": 1,
+   "model": [
+    "150",
+    0
+   ]
+  },
+  "class_type": "BasicScheduler",
+  "_meta": {
+   "title": "\u57fa\u672c\u8c03\u5ea6\u5668"
+  }
+ },
+ "125": {
+  "inputs": {
+   "noise": [
+    "129",
+    0
+   ],
+   "guider": [
+    "126",
+    0
+   ],
+   "sampler": [
+    "123",
+    0
+   ],
+   "sigmas": [
+    "124",
+    0
+   ],
+   "latent_image": [
+    "136",
+    1
+   ]
+  },
+  "class_type": "SamplerCustomAdvanced",
+  "_meta": {
+   "title": "\u81ea\u5b9a\u4e49\u91c7\u6837\u5668\uff08\u9ad8\u7ea7\uff09"
+  }
+ },
+ "126": {
+  "inputs": {
+   "model": [
+    "150",
+    0
+   ],
+   "conditioning": [
+    "136",
+    0
+   ]
+  },
+  "class_type": "BasicGuider",
+  "_meta": {
+   "title": "\u57fa\u672c\u5f15\u5bfc\u5668"
+  }
+ },
+ "127": {
+  "inputs": {
+   "unet_name": "Minimax-h3_Singularity_ref2va_Pruned_v1.3_int8.safetensors",
+   "weight_dtype": "default"
+  },
+  "class_type": "UNETLoader",
+  "_meta": {
+   "title": "UNet\u52a0\u8f7d\u5668"
+  }
+ },
+ "128": {
+  "inputs": {
+   "clip_name": "qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors",
+   "type": "minimax",
+   "device": "default"
+  },
+  "class_type": "CLIPLoader",
+  "_meta": {
+   "title": "\u52a0\u8f7dCLIP"
+  }
+ },
+ "129": {
+  "inputs": {
+   "noise_seed": 880912
+  },
+  "class_type": "RandomNoise",
+  "_meta": {
+   "title": "\u968f\u673a\u566a\u6ce2"
+  }
+ },
+ "130": {
+  "inputs": {
+   "fps": 24,
+   "bit_depth": 8,
+   "images": [
+    "122",
+    0
+   ],
+   "audio": [
+    "121",
+    0
+   ]
+  },
+  "class_type": "CreateVideo",
+  "_meta": {
+   "title": "\u521b\u5efa\u89c6\u9891"
+  }
+ },
+ "131": {
+  "inputs": {
+   "expression": "max(5, round(a * 24)) + (5 - (max(5, round(a * 24)) % 17)) % 17",
+   "values.a": [
+    "132",
+    0
+   ]
+  },
+  "class_type": "ComfyMathExpression",
+  "_meta": {
+   "title": "\u6570\u5b66\u8868\u8fbe\u5f0f"
+  }
+ },
+ "132": {
+  "inputs": {
+   "value": 3.75
+  },
+  "class_type": "PrimitiveFloat",
+  "_meta": {
+   "title": "Float (Duration)"
+  }
+ },
+ "136": {
+  "inputs": {
+   "prompt": [
+    "138",
+    0
+   ],
+   "width": 480,
+   "height": 864,
+   "length": [
+    "131",
+    1
+   ],
+   "ref_image_size": "match",
+   "clip": [
+    "128",
+    0
+   ],
+   "vae": [
+    "119",
+    0
+   ],
+   "audio_vae": [
+    "120",
+    0
+   ],
+   "ref_images.ref_image_0": [
+    "137",
+    0
+   ],
+   "ref_images.ref_image_1": [
+    "139",
+    0
+   ]
+  },
+  "class_type": "MiniMaxH3ReferenceToVideo",
+  "_meta": {
+   "title": "MiniMax H3 Reference to Video"
+  }
+ },
+ "137": {
+  "inputs": {
+   "image": "dcs-ref-a.png"
+  },
+  "class_type": "LoadImage",
+  "_meta": {
+   "title": "\u52a0\u8f7d\u56fe\u50cf1"
+  }
+ },
+ "138": {
+  "inputs": {
+   "value": "Realistic live-action cinematic look, 35mm lens, natural golden-hour light, shallow depth of field, fine film grain. The face, beard, hair and yellow raincoat stay exactly as in the references for the whole clip.\n\nA weathered fisherman stands on a wooden dock at golden hour, moored boats and open sea behind him. <Picture 1> and <Picture 2> are the same man, seen from two angles.\n\nSHOT 1: The scene opens exactly on <Picture 1>. He turns his head slowly to his left once, then settles back toward the camera and gives a single small nod. Wind lifts his hair and stirs the open front of his raincoat. The water behind him moves steadily.\n\nAudio: quiet harbour ambience and water lapping against the dock pilings."
+  },
+  "class_type": "PrimitiveStringMultiline",
+  "_meta": {
+   "title": "Input Text (Prompt)"
+  }
+ },
+ "139": {
+  "inputs": {
+   "image": "dcs-ref-b.png"
+  },
+  "class_type": "LoadImage",
+  "_meta": {
+   "title": "\u52a0\u8f7d\u56fe\u50cf2"
+  }
+ },
+ "150": {
+  "class_type": "LoraLoaderModelOnly",
+  "_meta": {
+   "title": "Turbo LoRA via stock loader (route A)"
+  },
+  "inputs": {
+   "model": [
+    "157",
+    0
+   ],
+   "lora_name": "minimax_h3_ref2v_turbo_4step_v0.1_comfyui_bf16.safetensors",
+   "strength_model": 1.0
+  }
+ },
+ "156": {
+  "inputs": {
+   "empty_cache": true,
+   "gc_collect": true,
+   "unload_all_models": true,
+   "any_input": [
+    "125",
+    0
+   ]
+  },
+  "class_type": "VRAM_Debug",
+  "_meta": {
+   "title": "VRAM Debug"
+  }
+ },
+ "157": {
+  "inputs": {
+   "attention": "comfy kitchen attention",
+   "model": [
+    "632",
+    0
+   ]
+  },
+  "class_type": "ModelAttentionBackend",
+  "_meta": {
+   "title": "ModelAttentionBackend"
+  }
+ },
+ "629": {
+  "inputs": {
+   "clean_file_cache": false,
+   "clean_processes": true,
+   "clean_dlls": true,
+   "retry_times": 3,
+   "anything": [
+    "156",
+    0
+   ]
+  },
+  "class_type": "RAMCleanup",
+  "_meta": {
+   "title": "\ud83c\udf88RAM-Cleanup"
+  }
+ },
+ "631": {
+  "inputs": {
+   "offload_model": true,
+   "offload_cache": false,
+   "anything": [
+    "629",
+    0
+   ]
+  },
+  "class_type": "VRAMCleanup",
+  "_meta": {
+   "title": "\ud83c\udf88VRAM-Cleanup"
+  }
+ },
+ "632": {
+  "inputs": {
+   "offload_model": true,
+   "offload_cache": false,
+   "anything": [
+    "633",
+    0
+   ]
+  },
+  "class_type": "VRAMCleanup",
+  "_meta": {
+   "title": "\ud83c\udf88VRAM-Cleanup"
+  }
+ },
+ "633": {
+  "inputs": {
+   "clean_file_cache": false,
+   "clean_processes": true,
+   "clean_dlls": true,
+   "retry_times": 3,
+   "anything": [
+    "127",
+    0
+   ]
+  },
+  "class_type": "RAMCleanup",
+  "_meta": {
+   "title": "\ud83c\udf88RAM-Cleanup"
+  }
+ }
+}
