@@ -12,3 +12,5 @@ models/*
 !models/README.md
 .director_cache/
 director_projects/
+# per-machine window size/position, written by the app
+dcs-window-geometry.json

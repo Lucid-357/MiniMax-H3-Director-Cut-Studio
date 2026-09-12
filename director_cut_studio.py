@@ -8694,8 +8694,15 @@ class DirectorCutStudio(QMainWindow):
         self.timeline_slider_seek_timer.timeout.connect(self._apply_timeline_slider_seek)
         CACHE_ROOT.mkdir(exist_ok=True)
         self.setWindowTitle(f"MiniMax H3 Director Cut Studio v{APP_VERSION}")
-        self.resize(1680, 980)
         self.setMinimumSize(1180, 720)
+        # Remember the window size and position across launches (owner, 2026-09-12). The file
+        # sits beside this script so it survives restarts and, on the box, container rebuilds.
+        self._window_geometry_path = Path(__file__).with_name("dcs-window-geometry.json")
+        self._window_geometry_timer = QTimer(self)
+        self._window_geometry_timer.setSingleShot(True)
+        self._window_geometry_timer.setInterval(500)
+        self._window_geometry_timer.timeout.connect(self._save_window_geometry)
+        self._restore_window_geometry()
         self._build_toolbar()
         self._build_workspace()
         self.statusBar().showMessage("Director Cut runtime ready")
@@ -17897,9 +17904,51 @@ class DirectorCutStudio(QMainWindow):
 
     def resizeEvent(self, event) -> None:  # noqa: N802
         super().resizeEvent(event)
+        self._schedule_window_geometry_save()
         if self.monitor_stack.currentWidget() == self.monitor_image:
             self.render_timeline_at(self.playhead_seconds, force_seek=True)
         self._scale_generated_video_frame()
+
+    def moveEvent(self, event) -> None:  # noqa: N802
+        super().moveEvent(event)
+        self._schedule_window_geometry_save()
+
+    def _window_geometry_persistence_enabled(self) -> bool:
+        # Headless test runs use the offscreen platform; they must never read or write the file.
+        return QApplication.platformName() != "offscreen"
+
+    def _restore_window_geometry(self) -> None:
+        self.resize(1680, 980)
+        if not self._window_geometry_persistence_enabled():
+            return
+        try:
+            saved = json.loads(self._window_geometry_path.read_text(encoding="utf-8"))
+            width = max(int(saved["width"]), self.minimumWidth())
+            height = max(int(saved["height"]), self.minimumHeight())
+            self.resize(width, height)
+            self.move(int(saved.get("x", 0)), int(saved.get("y", 0)))
+            self._restore_maximized = bool(saved.get("maximized", False))
+        except (OSError, ValueError, KeyError, TypeError):
+            self._restore_maximized = False
+
+    def _schedule_window_geometry_save(self) -> None:
+        timer = getattr(self, "_window_geometry_timer", None)
+        if timer is not None and self.isVisible():
+            timer.start()
+
+    def _save_window_geometry(self) -> None:
+        if not self._window_geometry_persistence_enabled():
+            return
+        maximized = self.isMaximized()
+        # While maximized, keep the last normal size so un-maximizing restores it.
+        rect = self.normalGeometry() if maximized else None
+        pos = self.pos() if not maximized else rect.topLeft()
+        width, height = (self.width(), self.height()) if not maximized else (rect.width(), rect.height())
+        payload = {"x": pos.x(), "y": pos.y(), "width": width, "height": height, "maximized": maximized}
+        try:
+            self._window_geometry_path.write_text(json.dumps(payload) + "\n", encoding="utf-8")
+        except OSError:
+            pass
 
     def set_activation_mode(self, mode: str) -> None:
         asset = self._selected_clip()
@@ -19343,6 +19392,7 @@ class DirectorCutStudio(QMainWindow):
             except OSError:
                 pass
             self.generated_proxy_working = None
+        self._save_window_geometry()
         super().closeEvent(event)
 
     def _sync_prompt_panel_from_timeline(
@@ -23278,7 +23328,10 @@ def main() -> int:
     app.setStyle("Fusion")
     app.setStyleSheet(APP_STYLE)
     window = DirectorCutStudio()
-    window.show()
+    if getattr(window, "_restore_maximized", False):
+        window.showMaximized()
+    else:
+        window.show()
     return app.exec()
 
 
