@@ -87,7 +87,7 @@
   "124": {
     "inputs": {
       "scheduler": "simple",
-      "steps": 4,
+      "steps": 8,
       "denoise": 1,
       "model": [
         "150",
@@ -145,7 +145,7 @@
   },
   "127": {
     "inputs": {
-      "unet_name": "minimax_h3_ref2va_pruned_w4a8_mixed.safetensors",
+      "unet_name": "minimax_h3_ref2va_int8_convrot.safetensors",
       "weight_dtype": "default"
     },
     "class_type": "UNETLoader",
@@ -155,7 +155,7 @@
   },
   "128": {
     "inputs": {
-      "clip_name": "qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors",
+      "clip_name": "qwen3vl_32b_h3_ultra_uncensored_heretic_int8_convrot.safetensors",
       "type": "minimax",
       "device": "default"
     },
@@ -178,7 +178,7 @@
       "fps": 24,
       "bit_depth": 8,
       "images": [
-        "122",
+        "147",
         0
       ],
       "audio": [
@@ -367,6 +367,21 @@
       "title": "加载音频"
     }
   },
+  "147": {
+    "inputs": {
+      "resize_type": "scale by multiplier",
+      "resize_type.scale": 2,
+      "quality": "ULTRA",
+      "images": [
+        "122",
+        0
+      ]
+    },
+    "class_type": "RTXVideoSuperResolution",
+    "_meta": {
+      "title": "RTX Video Super Resolution"
+    }
+  },
   "148": {
     "inputs": {
       "video": [
@@ -391,7 +406,7 @@
   },
   "150": {
     "inputs": {
-      "lora_name": "minimax_h3_ref2v_turbo_4step_v0.1_comfyui_bf16.safetensors",
+      "lora_name": "minimax_h3_turbo_v4_step600_ema.safetensors",
       "strength": 1,
       "low_vram": false,
       "model": [
