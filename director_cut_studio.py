@@ -1746,7 +1746,7 @@ class MediaCard(QFrame):
         self.filename.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
         self.filename.setToolTip(asset.filename)
         self.filename.setStyleSheet("color:#aeb3ba;")
-        self.ai_badge = QLabel("识别 --")
+        self.ai_badge = QLabel("Scan --")
         self.ai_badge.setStyleSheet("color:#68c9d8; font-size:10px;")
         foot.addWidget(self.filename, 1)
         foot.addWidget(self.ai_badge)
@@ -1801,9 +1801,9 @@ class MediaCard(QFrame):
         self.set_analysis_status(
             "AI ✓"
             if self.asset.semantic_enrichment
-            else "识别 ✓"
+            else "Scan ✓"
             if self.asset.recognition
-            else "识别 …"
+            else "Scan …"
         )
 
     def set_local_image_fallback(self) -> bool:
@@ -1845,9 +1845,9 @@ class MediaCard(QFrame):
         default_status = (
             "AI ✓"
             if self.asset.semantic_enrichment
-            else "识别 ✓"
+            else "Scan ✓"
             if self.asset.recognition
-            else "识别 --"
+            else "Scan --"
         )
         status = self.analysis_status or default_status
         if self.width() < 125:
@@ -3767,10 +3767,10 @@ class SpecialSkillCreatorDialog(QDialog):
         chinese_panel = QWidget()
         chinese_layout = QVBoxLayout(chinese_panel)
         chinese_layout.setContentsMargins(0, 0, 0, 0)
-        chinese_layout.addWidget(QLabel("SKILL.cn.md · 中文对照版本（可选）"))
+        chinese_layout.addWidget(QLabel("SKILL.cn.md · Chinese version (optional)"))
         self.chinese_edit = QPlainTextEdit()
         self.chinese_edit.setObjectName("specialSkillChineseEdit")
-        self.chinese_edit.setPlaceholderText("中文说明；留空则不建立中文版本")
+        self.chinese_edit.setPlaceholderText("Chinese description — leave empty to skip the Chinese version")
         chinese_layout.addWidget(self.chinese_edit, 1)
         editors.addWidget(chinese_panel)
         editors.setSizes([520, 420])
@@ -4328,7 +4328,7 @@ class ContentLayerDialog(QDialog):
             ("Delivery", self.delivery_combo),
             ("Overlap", self.overlap_combo),
             ("Lip Sync", self.lip_sync_check),
-            ("所属 Shot", self.shot_combo),
+            ("Parent shot", self.shot_combo),
         ):
             label = QLabel(title)
             form.addRow(label, widget)
@@ -6508,16 +6508,16 @@ class DesignPageDialog(QDialog):
         self.dialogue_language_combo.addItem("Auto", "auto")
         dialogue_language_labels = {
             "Arabic": "Arabic",
-            "Chinese": "中文",
+            "Chinese": "Chinese",
             "English": "English",
-            "French": "Français",
-            "German": "Deutsch",
-            "Italian": "Italiano",
-            "Japanese": "日本語",
-            "Korean": "한국어",
-            "Portuguese": "Português",
-            "Russian": "Русский",
-            "Spanish": "Español",
+            "French": "French",
+            "German": "German",
+            "Italian": "Italian",
+            "Japanese": "Japanese",
+            "Korean": "Korean",
+            "Portuguese": "Portuguese",
+            "Russian": "Russian",
+            "Spanish": "Spanish",
         }
         for language in H3_STABLE_DIALOGUE_LANGUAGES:
             self.dialogue_language_combo.addItem(
@@ -15259,7 +15259,7 @@ class DirectorCutStudio(QMainWindow):
             if not integrity_repairs and not recovered_workspace_state:
                 self.undo_stack.setClean()
             self._update_window_title()
-            migration_note = " 路 legacy source preserved" if is_legacy_project else ""
+            migration_note = " · legacy source preserved" if is_legacy_project else ""
             repair_note = (
                 f" · auto-repaired {len(integrity_repairs)} integrity item(s); save to persist"
                 if integrity_repairs else ""
@@ -15802,7 +15802,7 @@ class DirectorCutStudio(QMainWindow):
             asset.recognition = "MEDIA PREPARATION\nQueued for FFprobe and preview generation."
         card = self.cards.get(asset.node_id)
         if card:
-            card.set_analysis_status("准备 …")
+            card.set_analysis_status("Prep …")
         self._refresh_semantic_card(asset)
         if asset is self.selected_asset:
             self._refresh_recognition_inspector(asset)
@@ -15865,7 +15865,7 @@ class DirectorCutStudio(QMainWindow):
             percent = max(0, min(99, round(float(payload["progress"]) * 100)))
             card = self.cards.get(asset.node_id)
             if card:
-                card.set_analysis_status(f"准备 {percent}%")
+                card.set_analysis_status(f"Prep {percent}%")
             self.statusBar().showMessage(
                 f"{asset.tag} · {payload.get('stage', 'preparing')} · {percent}%"
             )
@@ -16100,8 +16100,8 @@ class DirectorCutStudio(QMainWindow):
             "ready": "AI ✓",
             "stale": "AI STALE",
             "failed": "AI !",
-            "not_generated": "识别 ✓" if self._asset_has_semantic_evidence(asset) else "识别 --",
-        }.get(status, "识别 …")
+            "not_generated": "Scan ✓" if self._asset_has_semantic_evidence(asset) else "Scan --",
+        }.get(status, "Scan …")
         card.set_analysis_status(badge)
 
     def _refresh_recognition_inspector(self, asset: MediaAsset | None = None) -> None:
@@ -16740,7 +16740,7 @@ class DirectorCutStudio(QMainWindow):
         asset.recognition += f"\n\n{detail}"
         card = self.cards.get(asset.node_id)
         if card:
-            card.set_analysis_status("识别 !")
+            card.set_analysis_status("Scan !")
         if asset is self.selected_asset:
             self._refresh_recognition_inspector(asset)
         self.statusBar().showMessage(f"{asset.tag} analysis failed — use Analyze to retry")
@@ -18884,7 +18884,7 @@ class DirectorCutStudio(QMainWindow):
                 asset.recognition += "\n\nAnalysis cancelled. Any late worker response will be ignored."
             card = self.cards.get(asset.node_id)
             if card:
-                card.set_analysis_status("已取消")
+                card.set_analysis_status("Cancelled")
             self._refresh_recognition_inspector(asset)
             self.statusBar().showMessage(f"Cancelled analysis for {asset.tag}")
 
@@ -18916,7 +18916,7 @@ class DirectorCutStudio(QMainWindow):
                     raise RuntimeError("BLIP service is still stopping")
             card = self.cards.get(asset.node_id)
             if card:
-                card.set_analysis_status("识别 0%")
+                card.set_analysis_status("Scan 0%")
             requests: list[tuple[str, Path, str]] = []
             for label, source in sources:
                 if asset.media_type == "image" and label != "full frame":
@@ -19011,7 +19011,7 @@ class DirectorCutStudio(QMainWindow):
         card = self.cards.get(asset.node_id)
         if pending:
             if card:
-                card.set_analysis_status("识别 …")
+                card.set_analysis_status("Scan …")
             return
         summary = render_blip_summary(
             (
@@ -19039,7 +19039,7 @@ class DirectorCutStudio(QMainWindow):
         self._mark_dirty()
         self.schedule_prompt_generation()
         if card:
-            card.set_analysis_status("识别 ✓" if "BLIP VISUAL SUMMARY" in summary else "识别 !")
+            card.set_analysis_status("Scan ✓" if "BLIP VISUAL SUMMARY" in summary else "Scan !")
         if asset is self.selected_asset:
             self._refresh_recognition_inspector(asset)
         self._maybe_auto_enrich(asset)
@@ -19083,7 +19083,7 @@ class DirectorCutStudio(QMainWindow):
             affected_assets.append(asset)
             card = self.cards.get(asset.node_id)
             if card:
-                card.set_analysis_status("识别 !")
+                card.set_analysis_status("Scan !")
         self.blip_jobs.clear()
         for asset in affected_assets:
             results = self.blip_results.pop(asset.node_id, [])
@@ -19140,7 +19140,7 @@ class DirectorCutStudio(QMainWindow):
             )
             card = self.cards.get(asset.node_id)
             if card:
-                card.set_analysis_status("音频 0%")
+                card.set_analysis_status("Audio 0%")
         except Exception as exc:
             for job_id, job_asset in list(self.audio_jobs.items()):
                 if job_asset is asset:
@@ -19198,7 +19198,7 @@ class DirectorCutStudio(QMainWindow):
             percent = max(0, min(99, round(float(payload["progress"]) * 100)))
             card = self.cards.get(asset.node_id)
             if card:
-                card.set_analysis_status(f"音频 {percent}%")
+                card.set_analysis_status(f"Audio {percent}%")
             self.statusBar().showMessage(
                 f"{asset.tag} audio · {payload.get('decoded_seconds', 0):.1f}/"
                 f"{payload.get('max_seconds', 0):.1f}s"
@@ -19219,7 +19219,7 @@ class DirectorCutStudio(QMainWindow):
         self._sync_prompt_panel_from_timeline(reconcile_brief=True)
         card = self.cards.get(asset.node_id)
         if card:
-            card.set_analysis_status("识别 ✓" if not payload.get("error") else "识别 !")
+            card.set_analysis_status("Scan ✓" if not payload.get("error") else "Scan !")
         if asset is self.selected_asset:
             self._refresh_recognition_inspector(asset)
         self._maybe_auto_enrich(asset)

@@ -103,7 +103,7 @@ class PromptStudio(tk.Tk):
         self.skill_menu.delete(0, "end")
         default = self.skill_profiles[DEFAULT_SKILL]
         self.skill_menu.add_command(
-            label=f"✓ Default — {default.display_name}（始终绑定）", state="disabled"
+            label=f"✓ Default — {default.display_name} (always bound)", state="disabled"
         )
         specials = sorted(
             (profile for profile in self.skill_profiles.values() if profile.special),
@@ -112,7 +112,7 @@ class PromptStudio(tk.Tk):
         self.skill_menu.add_separator()
         self.skill_menu.add_command(label="Special Skills", state="disabled")
         self.skill_menu.add_radiobutton(
-            label="None — 不附加特别场景",
+            label="None — no special scenario",
             variable=self.special_menu_var,
             value=NONE_SPECIAL,
             command=lambda: self._select_special(None),
@@ -126,8 +126,8 @@ class PromptStudio(tk.Tk):
                 command=lambda selected=key: self._select_special(selected),
             )
         self.skill_menu.add_separator()
-        self.skill_menu.add_command(label="重新扫描 Skill folders", command=self._rescan_skills)
-        self.skill_menu.add_command(label="查看当前 Skill 原文…", command=self._show_current_skill)
+        self.skill_menu.add_command(label="Rescan Skill folders", command=self._rescan_skills)
+        self.skill_menu.add_command(label="View current Skill source…", command=self._show_current_skill)
 
     def _default_profile(self):
         return self.skill_profiles[DEFAULT_SKILL]
@@ -141,9 +141,9 @@ class PromptStudio(tk.Tk):
         default = self.skill_profiles[DEFAULT_SKILL]
         special = self._special_profile()
         if special is not None and special.standalone:
-            return f"绑定：Standalone Special {special.display_name}"
+            return f"Binding: Standalone Special {special.display_name}"
         special_name = special.display_name if special else "None"
-        return f"绑定：Default {default.display_name} + Special {special_name}"
+        return f"Binding: Default {default.display_name} + Special {special_name}"
 
     def _build_ui(self) -> None:
         header = ttk.Frame(self, style="Dark.TFrame", padding=(18, 14))
@@ -152,16 +152,16 @@ class PromptStudio(tk.Tk):
         title_box = ttk.Frame(header, style="Dark.TFrame")
         title_box.pack(side="left")
         ttk.Label(title_box, text="H3 PROMPT STUDIO", style="Title.TLabel").pack(anchor="w")
-        ttk.Label(title_box, text="把创意简介整理成清晰、连续、可检查的 Reference-to-Video 分镜提示词", style="Sub.TLabel").pack(anchor="w")
+        ttk.Label(title_box, text="Turn a creative brief into a clear, continuous, checkable Reference-to-Video shot prompt", style="Sub.TLabel").pack(anchor="w")
         self.profile_var = tk.StringVar(value=self._skill_binding_summary())
         ttk.Label(title_box, textvariable=self.profile_var, style="Sub.TLabel").pack(anchor="w", pady=(3, 0))
 
         actions = ttk.Frame(header, style="Dark.TFrame")
         actions.pack(side="right")
-        ttk.Button(actions, text="离线整理", style="Accent.TButton", command=self._generate_offline).pack(side="left", padx=4)
-        ttk.Button(actions, text="AI 英文润色", command=self._generate_ai).pack(side="left", padx=4)
-        ttk.Button(actions, text="复制结果", command=self._copy_output).pack(side="left", padx=4)
-        ttk.Button(actions, text="保存…", command=self._save_output).pack(side="left", padx=4)
+        ttk.Button(actions, text="Build offline", style="Accent.TButton", command=self._generate_offline).pack(side="left", padx=4)
+        ttk.Button(actions, text="AI English polish", command=self._generate_ai).pack(side="left", padx=4)
+        ttk.Button(actions, text="Copy result", command=self._copy_output).pack(side="left", padx=4)
+        ttk.Button(actions, text="Save…", command=self._save_output).pack(side="left", padx=4)
 
         paned = ttk.Panedwindow(self, orient="horizontal")
         paned.pack(fill="both", expand=True, padx=12, pady=(0, 12))
@@ -183,48 +183,48 @@ class PromptStudio(tk.Tk):
     def _build_form(self, parent: ttk.Frame) -> None:
         self._build_workflow_section(parent)
         ttk.Separator(parent).pack(fill="x", pady=16)
-        ttk.Label(parent, text="01  创意与视觉", style="Section.TLabel").pack(anchor="w")
-        self.brief = self._text_field(parent, "故事简介 *", 4, "说明人物、目标、场景和戏剧进展；中文或英文均可。")
-        self.style = self._text_field(parent, "全局视觉风格", 3, "风格、线条、色板、光线、地点和时间。")
-        self.references = self._text_field(parent, "参考素材与一致性", 3, "明确每个 <Picture N> 对应哪个人物、物体或镜头。")
-        self.audio = self._text_field(parent, "音频规则", 2, "例如：Use <Audio 1> exactly as supplied; preserve timing and dialogue.")
+        ttk.Label(parent, text="01  Concept & visuals", style="Section.TLabel").pack(anchor="w")
+        self.brief = self._text_field(parent, "Story brief *", 4, "Describe the characters, goal, setting and dramatic progression; Chinese or English both work.")
+        self.style = self._text_field(parent, "Global visual style", 3, "Style, linework, palette, lighting, location and time of day.")
+        self.references = self._text_field(parent, "References & consistency", 3, "State which character, object or shot each <Picture N> corresponds to.")
+        self.audio = self._text_field(parent, "Audio rules", 2, "e.g. Use <Audio 1> exactly as supplied; preserve timing and dialogue.")
 
         ttk.Separator(parent).pack(fill="x", pady=16)
-        ttk.Label(parent, text="02  分镜时间线", style="Section.TLabel").pack(anchor="w")
-        self.shots = self._text_field(parent, "镜头构思 *", 7, "每行一个镜头，按时间顺序写。可写机位、主体动作、运镜和环境反馈。")
-        self.dialogue = self._text_field(parent, "对白／屏幕文字（必须精确保留）", 4, "格式：镜头编号|文字，例如 1|GET READY TO MEET YOUR MAKER")
-        self.transition = self._text_field(parent, "镜头之间的转场", 2, "同一种转场会插入每两个镜头之间；AI 模式可按内容重新设计。")
-        self.ending = self._text_field(parent, "结尾保持", 2, "明确最后保持什么画面、持续到何时，以及是否禁止追加镜头。")
+        ttk.Label(parent, text="02  Shot timeline", style="Section.TLabel").pack(anchor="w")
+        self.shots = self._text_field(parent, "Shot plan *", 7, "One shot per line, in time order. Include camera position, subject action, camera movement and environment response.")
+        self.dialogue = self._text_field(parent, "Dialogue / on-screen text (kept exactly)", 4, "Format: shot number|text, e.g. 1|GET READY TO MEET YOUR MAKER")
+        self.transition = self._text_field(parent, "Transitions between shots", 2, "The same transition is inserted between every pair of shots; AI mode can redesign it to suit the content.")
+        self.ending = self._text_field(parent, "Ending hold", 2, "State what final image is held, until when, and whether extra shots are forbidden.")
 
         ttk.Separator(parent).pack(fill="x", pady=16)
-        ttk.Label(parent, text="03  约束与输出", style="Section.TLabel").pack(anchor="w")
-        self.must_keep = self._text_field(parent, "必须保留／避免", 3, "身份、服装、道具、比例、拼写，以及不能新增的内容。")
-        self.technical = self._text_field(parent, "技术规格", 2, "时长、比例、帧率或镜头时段；不确定可留空。")
+        ttk.Label(parent, text="03  Constraints & output", style="Section.TLabel").pack(anchor="w")
+        self.must_keep = self._text_field(parent, "Must keep / avoid", 3, "Identity, costume, props, proportions, spelling, and anything that must not be added.")
+        self.technical = self._text_field(parent, "Technical specs", 2, "Duration, aspect ratio, frame rate or shot timings; leave empty if unsure.")
 
-        settings = ttk.LabelFrame(parent, text="可选：OpenAI-compatible AI 接口", padding=10)
+        settings = ttk.LabelFrame(parent, text="Optional: OpenAI-compatible AI endpoint", padding=10)
         settings.pack(fill="x", pady=(16, 8))
         self.endpoint_var = tk.StringVar(value=os.getenv("H3_API_ENDPOINT", ""))
         self.model_var = tk.StringVar(value=os.getenv("H3_API_MODEL", ""))
         self.key_var = tk.StringVar(value=os.getenv("H3_API_KEY", ""))
         for label, variable, secret in (
-            ("完整 Endpoint", self.endpoint_var, False),
-            ("模型名称", self.model_var, False),
-            ("API Key（不会保存）", self.key_var, True),
+            ("Full endpoint", self.endpoint_var, False),
+            ("Model name", self.model_var, False),
+            ("API key (not saved)", self.key_var, True),
         ):
             ttk.Label(settings, text=label).pack(anchor="w", pady=(5, 2))
             ttk.Entry(settings, textvariable=variable, show="•" if secret else "").pack(fill="x")
         ttk.Label(
             settings,
-            text="支持以 /responses 结尾的 Responses 接口；其他地址按 chat/completions 格式请求。",
+            text="Endpoints ending in /responses use the Responses API; any other URL is called in chat/completions format.",
             style="Muted.TLabel",
             wraplength=500,
         ).pack(anchor="w", pady=(8, 0))
 
     def _build_workflow_section(self, parent: ttk.Frame) -> None:
-        ttk.Label(parent, text="00  ComfyUI Workflow 与素材节点", style="Section.TLabel").pack(anchor="w")
+        ttk.Label(parent, text="00  ComfyUI workflow & asset nodes", style="Section.TLabel").pack(anchor="w")
         ttk.Label(
             parent,
-            text="载入 API-format JSON 后，程序会按节点连接自动建立 Picture、Video 和 Audio 映射。",
+            text="After loading an API-format JSON, Picture, Video and Audio mappings are built automatically from the node connections.",
             style="Muted.TLabel",
             wraplength=520,
         ).pack(anchor="w", pady=(3, 6))
@@ -235,18 +235,18 @@ class PromptStudio(tk.Tk):
         ttk.Entry(path_row, textvariable=self.workflow_path_var, state="readonly").pack(
             side="left", fill="x", expand=True
         )
-        ttk.Button(path_row, text="载入 API…", command=self._choose_workflow).pack(side="left", padx=(6, 0))
-        ttk.Button(path_row, text="重新扫描", command=self._reload_workflow).pack(side="left", padx=(6, 0))
+        ttk.Button(path_row, text="Load API…", command=self._choose_workflow).pack(side="left", padx=(6, 0))
+        ttk.Button(path_row, text="Rescan", command=self._reload_workflow).pack(side="left", padx=(6, 0))
 
         columns = ("tag", "kind", "node", "range", "state", "filename")
         self.asset_tree = ttk.Treeview(parent, columns=columns, show="headings", height=8)
         headings = {
-            "tag": "H3 标签",
-            "kind": "类型",
-            "node": "节点",
-            "range": "素材时间范围",
-            "state": "当前窗",
-            "filename": "素材文件",
+            "tag": "H3 tag",
+            "kind": "Type",
+            "node": "Node",
+            "range": "Asset time range",
+            "state": "Current window",
+            "filename": "Asset file",
         }
         widths = {"tag": 95, "kind": 75, "node": 55, "range": 105, "state": 65, "filename": 210}
         for name in columns:
@@ -255,29 +255,29 @@ class PromptStudio(tk.Tk):
         self.asset_tree.pack(fill="x", pady=(8, 4))
         self.asset_tree.bind("<<TreeviewSelect>>", self._on_asset_select)
 
-        clip_box = ttk.LabelFrame(parent, text="当前 Generation Clip 时间窗", padding=8)
+        clip_box = ttk.LabelFrame(parent, text="Current generation clip window", padding=8)
         clip_box.pack(fill="x", pady=(7, 3))
         self.clip_start_var = tk.StringVar(value="0.00")
         self.clip_end_var = tk.StringVar(value="5.00")
-        ttk.Label(clip_box, text="开始(s)").pack(side="left")
+        ttk.Label(clip_box, text="Start (s)").pack(side="left")
         ttk.Entry(clip_box, textvariable=self.clip_start_var, width=8).pack(side="left", padx=(4, 10))
-        ttk.Label(clip_box, text="结束(s)").pack(side="left")
+        ttk.Label(clip_box, text="End (s)").pack(side="left")
         ttk.Entry(clip_box, textvariable=self.clip_end_var, width=8).pack(side="left", padx=(4, 10))
-        ttk.Button(clip_box, text="应用时间窗", command=self._apply_clip_window).pack(side="left")
-        ttk.Button(clip_box, text="导出 Active API…", command=self._export_active_workflow).pack(side="right")
+        ttk.Button(clip_box, text="Apply window", command=self._apply_clip_window).pack(side="left")
+        ttk.Button(clip_box, text="Export active API…", command=self._export_active_workflow).pack(side="right")
 
-        asset_box = ttk.LabelFrame(parent, text="选中素材的使用范围", padding=8)
+        asset_box = ttk.LabelFrame(parent, text="Selected asset's active range", padding=8)
         asset_box.pack(fill="x", pady=(3, 6))
         self.asset_start_var = tk.StringVar(value="0.00")
         self.asset_end_var = tk.StringVar(value="5.00")
         self.asset_enabled_var = tk.BooleanVar(value=True)
-        ttk.Label(asset_box, text="开始(s)").pack(side="left")
+        ttk.Label(asset_box, text="Start (s)").pack(side="left")
         ttk.Entry(asset_box, textvariable=self.asset_start_var, width=8).pack(side="left", padx=(4, 10))
-        ttk.Label(asset_box, text="结束(s)").pack(side="left")
+        ttk.Label(asset_box, text="End (s)").pack(side="left")
         ttk.Entry(asset_box, textvariable=self.asset_end_var, width=8).pack(side="left", padx=(4, 10))
-        ttk.Checkbutton(asset_box, text="允许激活", variable=self.asset_enabled_var).pack(side="left")
-        ttk.Button(asset_box, text="应用到素材", command=self._apply_asset_range).pack(side="right")
-        self.workflow_summary_var = tk.StringVar(value="尚未载入 workflow")
+        ttk.Checkbutton(asset_box, text="Allow activation", variable=self.asset_enabled_var).pack(side="left")
+        ttk.Button(asset_box, text="Apply to asset", command=self._apply_asset_range).pack(side="right")
+        self.workflow_summary_var = tk.StringVar(value="No workflow loaded yet")
         self.workflow_warning_var = tk.StringVar()
         ttk.Label(parent, textvariable=self.workflow_summary_var, style="Muted.TLabel").pack(anchor="w")
         ttk.Label(
@@ -292,8 +292,8 @@ class PromptStudio(tk.Tk):
         notebook.pack(fill="both", expand=True)
         prompt_tab = ttk.Frame(notebook, padding=8)
         check_tab = ttk.Frame(notebook, padding=8)
-        notebook.add(prompt_tab, text="生成结果")
-        notebook.add(check_tab, text="结构检查")
+        notebook.add(prompt_tab, text="Result")
+        notebook.add(check_tab, text="Structure check")
         self.output = tk.Text(
             prompt_tab,
             wrap="word",
@@ -313,12 +313,12 @@ class PromptStudio(tk.Tk):
         out_scroll.pack(side="right", fill="y")
         self.check = tk.Text(check_tab, wrap="word", font=("Microsoft YaHei UI", 11), padx=16, pady=14, relief="flat")
         self.check.pack(fill="both", expand=True)
-        self.status_var = tk.StringVar(value="就绪")
+        self.status_var = tk.StringVar(value="Ready")
         ttk.Label(parent, textvariable=self.status_var, style="Muted.TLabel").pack(anchor="w", pady=(8, 0))
 
     def _choose_workflow(self) -> None:
         filename = filedialog.askopenfilename(
-            title="载入 ComfyUI API workflow",
+            title="Load ComfyUI API workflow",
             filetypes=[("ComfyUI workflow", "*.json"), ("All files", "*.*")],
             initialdir=str(Path.cwd()),
         )
@@ -341,7 +341,7 @@ class PromptStudio(tk.Tk):
         try:
             scan = load_workflow(path)
         except (OSError, ValueError) as exc:
-            self.status_var.set("Workflow 载入失败")
+            self.status_var.set("Workflow failed to load")
             if show_error:
                 messagebox.showerror(APP_TITLE, str(exc))
             return
@@ -356,25 +356,25 @@ class PromptStudio(tk.Tk):
         counts = scan.counts
         paired = sum(bool(asset.paired_audio_binding) for asset in scan.assets if asset.media_type == "video")
         self.workflow_summary_var.set(
-            f"检测到 {len(scan.nodes)} 个节点 · H3 节点 {len(scan.h3_node_ids)} 个 · "
-            f"图片 {counts['image']}/9 · 视频 {counts['video']}/3（配套音轨 {paired}）· "
-            f"独立音频 {counts['audio']}/3 · 项目 {scan.duration_seconds:.2f}s"
+            f"{len(scan.nodes)} nodes found · H3 nodes {len(scan.h3_node_ids)} · "
+            f"images {counts['image']}/9 · videos {counts['video']}/3 (paired audio {paired}) · "
+            f"standalone audio {counts['audio']}/3 · project {scan.duration_seconds:.2f}s"
         )
         self.workflow_warning_var.set("\n".join(f"! {warning}" for warning in scan.warnings))
         self._sync_reference_fields()
-        self.status_var.set(f"已载入 workflow：{path.name}；自动映射 {len(scan.assets)} 个素材节点")
+        self.status_var.set(f"Loaded workflow: {path.name}; auto-mapped {len(scan.assets)} asset nodes")
 
     def _clip_window(self) -> tuple[float, float]:
         if not self.workflow_scan:
-            raise ValueError("请先载入 workflow。")
+            raise ValueError("Load a workflow first.")
         try:
             start = float(self.clip_start_var.get())
             end = float(self.clip_end_var.get())
         except ValueError as exc:
-            raise ValueError("时间窗必须是数字。") from exc
+            raise ValueError("The window must be numeric.") from exc
         if start < 0 or end <= start or end > self.workflow_scan.duration_seconds:
             raise ValueError(
-                f"时间窗必须满足 0 ≤ 开始 < 结束 ≤ {self.workflow_scan.duration_seconds:.2f}s。"
+                f"The window must satisfy 0 ≤ start < end ≤ {self.workflow_scan.duration_seconds:.2f}s。"
             )
         return start, end
 
@@ -383,7 +383,7 @@ class PromptStudio(tk.Tk):
             return
         selected = self.asset_tree.selection()
         selected_node = selected[0] if selected else ""
-        kind_names = {"image": "图片", "video": "视频+配套音轨", "audio": "独立音频"}
+        kind_names = {"image": "Image", "video": "Video + paired audio", "audio": "Standalone audio"}
         try:
             clip_start, clip_end = self._clip_window()
         except ValueError:
@@ -392,7 +392,7 @@ class PromptStudio(tk.Tk):
             self.asset_tree.delete(row)
         for asset in self.workflow_scan.assets:
             relevant = asset.overlaps(clip_start, clip_end)
-            state = "激活" if relevant else ("禁用" if not asset.enabled else "窗外")
+            state = "Active" if relevant else ("Disabled" if not asset.enabled else "Outside window")
             self.asset_tree.insert(
                 "",
                 "end",
@@ -403,7 +403,7 @@ class PromptStudio(tk.Tk):
                     asset.node_id,
                     f"{asset.start_seconds:.2f}–{asset.end_seconds:.2f}s",
                     state,
-                    asset.filename or "（未指定文件）",
+                    asset.filename or "(no file set)",
                 ),
             )
         if selected_node and self.asset_tree.exists(selected_node):
@@ -426,7 +426,7 @@ class PromptStudio(tk.Tk):
     def _apply_asset_range(self) -> None:
         asset = self._selected_asset()
         if not asset or not self.workflow_scan:
-            messagebox.showinfo(APP_TITLE, "请先在素材列表选择一个节点。")
+            messagebox.showinfo(APP_TITLE, "Select a node in the asset list first.")
             return
         try:
             start = float(self.asset_start_var.get())
@@ -436,7 +436,7 @@ class PromptStudio(tk.Tk):
         except ValueError:
             messagebox.showerror(
                 APP_TITLE,
-                f"素材范围必须满足 0 ≤ 开始 < 结束 ≤ {self.workflow_scan.duration_seconds:.2f}s。",
+                f"The asset range must satisfy 0 ≤ start < end ≤ {self.workflow_scan.duration_seconds:.2f}s。",
             )
             return
         asset.start_seconds = start
@@ -444,7 +444,7 @@ class PromptStudio(tk.Tk):
         asset.enabled = self.asset_enabled_var.get()
         self._refresh_asset_tree()
         self._sync_reference_fields()
-        self.status_var.set(f"{asset.tag} 使用范围已更新为 {start:.2f}–{end:.2f}s")
+        self.status_var.set(f"{asset.tag} range updated to {start:.2f}–{end:.2f}s")
 
     def _apply_clip_window(self) -> None:
         try:
@@ -455,7 +455,7 @@ class PromptStudio(tk.Tk):
         self._refresh_asset_tree()
         self._sync_reference_fields()
         active_count = len(self.workflow_scan.active_assets(start, end)) if self.workflow_scan else 0
-        self.status_var.set(f"当前 Generation Clip：{start:.2f}–{end:.2f}s；激活 {active_count} 个素材")
+        self.status_var.set(f"Current generation clip: {start:.2f}–{end:.2f}s; {active_count} assets active")
 
     def _sync_reference_fields(self) -> None:
         if not self.workflow_scan:
@@ -470,7 +470,7 @@ class PromptStudio(tk.Tk):
 
     def _export_active_workflow(self) -> None:
         if not self.workflow_scan:
-            messagebox.showinfo(APP_TITLE, "请先载入 workflow。")
+            messagebox.showinfo(APP_TITLE, "Load a workflow first.")
             return
         try:
             start, end = self._clip_window()
@@ -493,7 +493,7 @@ class PromptStudio(tk.Tk):
         )
         compiled, active = compile_active_workflow(self.workflow_scan, start, end, prompt=prompt)
         filename = filedialog.asksaveasfilename(
-            title="导出当前时间窗的 Active ComfyUI API",
+            title="Export the active ComfyUI API for the current window",
             initialfile=f"active_{start:.2f}-{end:.2f}s_api.json",
             defaultextension=".json",
             filetypes=[("ComfyUI API", "*.json")],
@@ -501,7 +501,7 @@ class PromptStudio(tk.Tk):
         if not filename:
             return
         Path(filename).write_text(json.dumps(compiled, ensure_ascii=False, indent=2), encoding="utf-8")
-        self.status_var.set(f"已导出 Active API：{len(active)} 个素材 · {end-start:.2f}s")
+        self.status_var.set(f"Exported active API: {len(active)} assets · {end-start:.2f}s")
 
     def _select_special(self, key: str | None) -> None:
         # Re-read the files on every menu click so edits in the local Skill
@@ -513,13 +513,13 @@ class PromptStudio(tk.Tk):
         self.special_menu_var.set(key or NONE_SPECIAL)
         self._populate_skill_menu()
         self.profile_var.set(self._skill_binding_summary())
-        self.status_var.set(f"Skill 绑定已更新：{self._skill_binding_summary().removeprefix('绑定：')}")
+        self.status_var.set(f"Skill binding updated: {self._skill_binding_summary().removeprefix('Binding: ')}")
 
     def _rescan_skills(self) -> None:
         try:
             self.skill_profiles = load_skill_profiles(Path.cwd())
         except (OSError, ValueError) as exc:
-            messagebox.showerror(APP_TITLE, f"Skill 扫描失败：{exc}")
+            messagebox.showerror(APP_TITLE, f"Skill scan failed: {exc}")
             return
         if self.current_special_key not in self.skill_profiles:
             self.current_special_key = None
@@ -527,7 +527,7 @@ class PromptStudio(tk.Tk):
         self._populate_skill_menu()
         self.profile_var.set(self._skill_binding_summary())
         special_count = sum(item.special for item in self.skill_profiles.values())
-        self.status_var.set(f"Skill folders 已重新扫描：1 个 Default，{special_count} 个 Special")
+        self.status_var.set(f"Skill folders rescanned: 1 Default, {special_count} Special")
 
     def _show_current_skill(self) -> None:
         self.skill_profiles = load_skill_profiles(Path.cwd())
@@ -584,7 +584,7 @@ class PromptStudio(tk.Tk):
 
     def _input_ok(self, spec: PromptSpec) -> bool:
         if not spec.brief or not spec.shots:
-            messagebox.showwarning(APP_TITLE, "请至少填写“故事简介”和一行“镜头构思”。")
+            messagebox.showwarning(APP_TITLE, "Fill in at least the “Story brief” and one line of “Shot plan”.")
             return False
         return True
 
@@ -624,7 +624,7 @@ class PromptStudio(tk.Tk):
         report = validate_prompt(text, reference_tags_from_spec(spec))
         self.check.delete("1.0", "end")
         self.check.insert("1.0", report.as_text())
-        self.status_var.set(f"完成 · {len(text):,} 字符 · 结构完整度 {report.score}/100")
+        self.status_var.set(f"Done · {len(text):,} characters · structure score {report.score}/100")
 
     def _generate_offline(self) -> None:
         spec = self._spec()
@@ -682,9 +682,9 @@ class PromptStudio(tk.Tk):
                 )
             )
         if not endpoint or not model:
-            messagebox.showwarning(APP_TITLE, "AI 英文润色需要填写完整 Endpoint 和模型名称。")
+            messagebox.showwarning(APP_TITLE, "AI English polish needs a full endpoint and a model name.")
             return
-        self.status_var.set("AI 正在重写，请稍候…")
+        self.status_var.set("AI is rewriting, please wait…")
 
         def work() -> None:
             try:
@@ -706,7 +706,7 @@ class PromptStudio(tk.Tk):
         threading.Thread(target=work, daemon=True).start()
 
     def _show_ai_error(self, detail: str) -> None:
-        self.status_var.set("AI 请求失败；离线整理仍可使用")
+        self.status_var.set("AI request failed; offline build is still available")
         messagebox.showerror(APP_TITLE, detail)
 
     def _copy_output(self) -> None:
@@ -715,21 +715,21 @@ class PromptStudio(tk.Tk):
             return
         self.clipboard_clear()
         self.clipboard_append(text)
-        self.status_var.set("已复制到剪贴板")
+        self.status_var.set("Copied to clipboard")
 
     def _save_output(self) -> None:
         text = self._get(self.output)
         if not text:
-            messagebox.showinfo(APP_TITLE, "还没有可保存的生成结果。")
+            messagebox.showinfo(APP_TITLE, "There is no result to save yet.")
             return
         filename = filedialog.asksaveasfilename(
-            title="保存 H3 提示词",
+            title="Save H3 prompt",
             defaultextension=".txt",
             filetypes=[("Text", "*.txt"), ("Markdown", "*.md"), ("All files", "*.*")],
         )
         if filename:
             Path(filename).write_text(text, encoding="utf-8")
-            self.status_var.set(f"已保存：{filename}")
+            self.status_var.set(f"Saved: {filename}")
 
     @staticmethod
     def _replace(widget: tk.Text, value: str) -> None:
@@ -737,7 +737,7 @@ class PromptStudio(tk.Tk):
         widget.insert("1.0", value)
 
     def _load_example(self) -> None:
-        self._replace(self.brief, "夜城屋顶上，一个自信的小男孩英雄向巨型机械怪兽挑衅；怪兽随后以震动整座城市的咆哮回应。")
+        self._replace(self.brief, "On a rooftop in a city at night, a confident young boy hero taunts a giant mechanical monster; the monster answers with a roar that shakes the whole city.")
         self._replace(self.style, "Bold comic-book ink style, heavy linework, red and blue-black palette, night city.")
         self._replace(self.references, "Use <Picture 1> only for the boy's identity and costume in CUT 1. Use <Picture 2> only for the mech-kaiju design and scale in CUT 2. Maintain exact visual identity.")
         self._replace(self.audio, "Use <Audio 1> exactly as supplied. Do not replace, trim, retime, or add dialogue.")

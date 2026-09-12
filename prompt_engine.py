@@ -64,7 +64,7 @@ class ValidationResult:
     items: list[tuple[str, str]]
 
     def as_text(self) -> str:
-        rows = [f"结构完整度：{self.score}/100"]
+        rows = [f"Structure score: {self.score}/100"]
         icons = {"ok": "✓", "warning": "!", "error": "×"}
         rows.extend(f"{icons.get(level, '•')} {message}" for level, message in self.items)
         return "\n".join(rows)
@@ -269,7 +269,7 @@ def _extract_response_text(data: dict) -> str:
             return content.strip()
         if isinstance(content, list):
             return "".join(part.get("text", "") for part in content).strip()
-    raise ValueError("接口已返回数据，但找不到生成文字。请检查接口类型。")
+    raise ValueError("The endpoint returned data, but no generated text was found. Check the endpoint type.")
 
 
 def call_compatible_api(
@@ -283,9 +283,9 @@ def call_compatible_api(
     """Call either a Responses endpoint or a chat-completions compatible endpoint."""
     endpoint = endpoint.strip()
     if not endpoint.startswith(("http://", "https://")):
-        raise ValueError("API 地址必须以 http:// 或 https:// 开头。")
+        raise ValueError("The API URL must start with http:// or https://.")
     if not model.strip():
-        raise ValueError("请填写模型名称。")
+        raise ValueError("Enter a model name.")
 
     user_text = build_ai_brief(spec)
     instructions = system_prompt or DEFAULT_SYSTEM_PROMPT
@@ -319,9 +319,9 @@ def call_compatible_api(
             data = json.loads(response.read().decode("utf-8"))
     except error.HTTPError as exc:
         detail = exc.read().decode("utf-8", errors="replace")[:800]
-        raise RuntimeError(f"API 请求失败（HTTP {exc.code}）：{detail}") from exc
+        raise RuntimeError(f"API request failed (HTTP {exc.code}): {detail}") from exc
     except error.URLError as exc:
-        raise RuntimeError(f"无法连接 API：{exc.reason}") from exc
+        raise RuntimeError(f"Could not connect to the API: {exc.reason}") from exc
     return _extract_response_text(data)
 
 
@@ -348,36 +348,36 @@ def validate_prompt(prompt: str, expected_tags: Iterable[str] = ()) -> Validatio
     if is_ref2va:
         positions = [prompt.index(section) for section in h3_sections]
         if positions == sorted(positions):
-            items.append(("ok", "H3 Ref2VA 六个区段齐全且顺序正确。"))
+            items.append(("ok", "All six H3 Ref2VA sections are present and in order."))
         else:
             score -= 20
-            items.append(("error", "H3 Ref2VA 六个区段的顺序不正确。"))
+            items.append(("error", "The six H3 Ref2VA sections are out of order."))
         shots = [int(value) for value in re.findall(r"\[Shot\s+(\d+)\]", prompt, flags=re.I)]
         unique_shots = list(dict.fromkeys(shots))
         if unique_shots == list(range(1, len(unique_shots) + 1)) and unique_shots:
-            items.append(("ok", f"镜头编号连续，共 {len(unique_shots)} 个 Shot。"))
+            items.append(("ok", f"Shot numbers are continuous: {len(unique_shots)} shots."))
         else:
             score -= 15
-            items.append(("error", "没有检测到连续的 [Shot N] 结构。"))
+            items.append(("error", "No continuous [Shot N] structure detected."))
     elif cuts:
         numbers = [int(value) for value in cuts]
         expected = list(range(1, len(numbers) + 1))
         if numbers == expected:
-            items.append(("ok", f"镜头编号连续，共 {len(cuts)} 个 CUT。"))
+            items.append(("ok", f"Shot numbers are continuous: {len(cuts)} CUTs."))
         else:
             score -= 15
-            items.append(("error", f"CUT 编号不是连续的：{numbers}。"))
+            items.append(("error", f"CUT numbers are not continuous: {numbers}."))
     else:
         score -= 30
-        items.append(("error", "没有检测到 CUT 1: 结构。"))
+        items.append(("error", "No CUT 1: structure detected."))
 
     if not is_ref2va:
         ideal_transitions = max(0, len(cuts) - 1)
         if len(transitions) == ideal_transitions:
-            items.append(("ok", "转场数量与镜头数量匹配。"))
+            items.append(("ok", "Transition count matches the shot count."))
         else:
             score -= 10
-            items.append(("warning", f"检测到 {len(transitions)} 个转场，{len(cuts)} 个镜头通常需要 {ideal_transitions} 个。"))
+            items.append(("warning", f"Found {len(transitions)} transitions; {len(cuts)} shots usually need {ideal_transitions}."))
 
     expected = set(expected_tags)
     present = _tag_set(prompt)
@@ -385,30 +385,30 @@ def validate_prompt(prompt: str, expected_tags: Iterable[str] = ()) -> Validatio
     invented = present - expected if expected else set()
     if missing:
         score -= min(25, 8 * len(missing))
-        items.append(("error", "缺少参考标签：" + ", ".join(sorted(missing))))
+        items.append(("error", "Missing reference tags: " + ", ".join(sorted(missing))))
     elif expected:
-        items.append(("ok", "所有输入的参考标签均已保留。"))
+        items.append(("ok", "All input reference tags are preserved."))
     if invented:
         score -= min(15, 5 * len(invented))
-        items.append(("warning", "输出出现未在素材栏声明的标签：" + ", ".join(sorted(invented))))
+        items.append(("warning", "Output uses tags not declared in the asset panel: " + ", ".join(sorted(invented))))
 
     if re.search(r"\b(?:END|Hold|freeze|final (?:shot|frame))\b", prompt, flags=re.I):
-        items.append(("ok", "包含明确的结尾保持指令。"))
+        items.append(("ok", "Includes an explicit ending-hold instruction."))
     else:
         score -= 10
-        items.append(("warning", "建议补充最终画面保持或禁止追加镜头的指令。"))
+        items.append(("warning", "Consider adding a final-frame hold or a no-extra-shots instruction."))
 
     if len(prompt) > 8000:
         score -= 8
-        items.append(("warning", "提示词超过 8,000 字符，建议删除重复形容词和次要特效。"))
+        items.append(("warning", "The prompt exceeds 8,000 characters; consider removing repeated adjectives and minor effects."))
     else:
-        items.append(("ok", f"当前长度 {len(prompt):,} 字符。"))
+        items.append(("ok", f"Current length {len(prompt):,} characters."))
 
     if re.search(r"\bthree words\b", prompt, flags=re.I):
         quoted = re.findall(r'"[^"]+"', prompt)
         if len(quoted) != 3:
             score -= 7
-            items.append(("warning", "文字数量描述可能与引号中的文字单元数量不一致。"))
+            items.append(("warning", "The stated text count may not match the number of quoted text units."))
 
     return ValidationResult(max(0, score), items)
 
