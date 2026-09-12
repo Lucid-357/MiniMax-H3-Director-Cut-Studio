@@ -12,16 +12,2856 @@ import subprocess
 import textwrap
 import wave
 
+from drone_route_engine import analyse_red_route, route_span_language
+from combat_environment_engine import apply_environmental_combat_physics
+from combat_action_engine import apply_combat_action_continuity
+from segment_engine import normalize_speech_overlap_policy
+
 
 MAX_DESIGN_DURATION_SECONDS = 600.0
 ACTION_BUDGET_WINDOW_SECONDS = 5.0
 MAX_CORE_ACTIONS_PER_WINDOW = 3
 MAX_REQUIRED_RESPONSES_PER_WINDOW = 2
 MAX_OPTIONAL_ACTIONS_PER_WINDOW = 2
+DEFAULT_SPEECH_CHARACTERS_PER_SECOND = 3.6
+DEFAULT_SPEECH_WORDS_PER_SECOND = 2.7
+ANALYSIS_ONLY_MEDIA_USAGES = frozenset({
+    "analysis_only",
+    "route_control_analysis_only",
+})
+
+STREET_FIGHTER_SPECIAL_SKILL = "street-fighter-live-action-h3"
+HONG_KONG_COMIC_FIGHTER_SPECIAL_SKILL = "hong-kong-comic-fighter"
+BEAT_SYNCED_ENTRANCE_SPECIAL_SKILL = "beat-synced-entrance-18s"
+COMBAT_ACTION_SPECIAL_SKILLS = frozenset({
+    STREET_FIGHTER_SPECIAL_SKILL,
+    HONG_KONG_COMIC_FIGHTER_SPECIAL_SKILL,
+})
+STREET_FIGHTER_CAST_TEMPLATE_TOKEN = "{{STREET_FIGHTER_CAST_BINDINGS}}"
+HONG_KONG_COMIC_SOURCE_TEMPLATE_TOKEN = "{{HONG_KONG_COMIC_SOURCE_EVIDENCE}}"
+HONG_KONG_COMIC_TECHNIQUE_TEXT_CONTRACT = (
+    "COMIC TECHNIQUE TITLE CONTRACT: every completed signature technique receives exactly one "
+    "short Chinese move name on an editable Timeline on_screen_text layer. The title appears only "
+    "around the technique's contact/release, never inside a Z-Image or H3 reference, never as random "
+    "AI-generated lettering, and never more than one title at a time."
+)
+STREET_FIGHTER_FPV_COMBAT_CONTRACT = (
+    "CONTINUOUS FPV COMBAT ORBIT: the camera physically translates around the shared "
+    "midpoint of S1 and S2, alternating direction and height when the attack cause changes, "
+    "with visible parallax and changing occlusion; constant close "
+    "combat distance, stable subject scale, no in-place rotation, no zoom-out, no pull-back, "
+    "no slow motion, and no non-combat walking. FULL-SPEED FIGHT ONLY: every technique, contact "
+    "and recoil is active real-time combat; no entrance, exit, neutral travel, idle pose, bullet "
+    "time, impact freeze, speed ramp or replay. Only after the final recoil completes, settle both "
+    "fighters and the camera into a stable supported composition for the last 0.75-1.00 second. "
+    "2X ACTION CADENCE: execute every body "
+    "load, strike or defence, contact and recoil in roughly half the previous screen time, with "
+    "continuous explosive acceleration and no artificial fast-forward artifact."
+)
+STREET_FIGHTER_MARKET_CONTRACT = (
+    "HONG KONG KOWLOON WET-MARKET ARENA: the entire fight remains inside a dense Hong Kong "
+    "Kowloon Walled City-style fish, seafood and vegetable wet market with cramped tiled aisles, "
+    "aged concrete, overhead pipes and cables, hanging practical lamps, fish tanks, crushed ice, "
+    "wet produce crates, metal stalls, drainage channels and a continuously wet slippery floor. "
+    "Background spectators and vendors form a readable perimeter around the fight lane but never "
+    "enter the combat space, cover P1/P2 or become additional fighters."
+)
+STREET_FIGHTER_P1_P2_PIXEL_LOCK = (
+    "P1/P2 ABSOLUTE CAST LOCK: S1 is exactly the real uploaded P1 pixels and S2 is exactly the "
+    "real uploaded P2 pixels. Preserve 100% of each reference's recognizable face, facial geometry, "
+    "apparent age, skin tone, hairstyle, hair colour, body proportions, complete upper and lower "
+    "wardrobe, garment colours and materials, shoes and accessories in every frame. P1/P2 order "
+    "overrides every generic male/female S1/S2 convention. BLIP or AI Enrich text is descriptive "
+    "metadata only; it never replaces the uploaded pixels. Never synthesize substitute fighters, "
+    "swap identities or clothes, blend faces, change gender presentation, duplicate P1/P2 or let "
+    "any Z-Image person redefine either fighter."
+)
+
+
+def _compact_character_evidence(value: object, limit: int = 320) -> str:
+    """Return one safe, compact character-description line for Design seeding."""
+
+    text = " ".join(str(value or "").replace("\x00", " ").split()).strip(" ;；")
+    if len(text) > limit:
+        text = text[: max(1, limit - 1)].rstrip(" ,，;；:：") + "…"
+    return text
+
+
+def _blip_overview_from_media_row(row: dict) -> str:
+    """Prefer the authored compact BLIP Overview over lower-value region captions."""
+
+    raw = str(
+        row.get("raw_analysis_summary")
+        or row.get("recognition")
+        or row.get("analysis_summary")
+        or ""
+    )
+    patterns = (
+        r"^BLIP\s*[·-]?\s*Overview\s*[:：]\s*(.+)$",
+        r"^BLIP\s+visual\s+caption\s*[·-]?\s*full\s+frame\s*[:：]\s*(.+)$",
+        r"^Overview\s*[:：]\s*(.+)$",
+    )
+    for pattern in patterns:
+        match = re.search(pattern, raw, re.I | re.M)
+        if match:
+            return _compact_character_evidence(match.group(1))
+    return ""
+
+
+def _semantic_character_summary_from_media_row(row: dict) -> str:
+    """Extract the most useful person description from rendered or JSON AI Enrich."""
+
+    raw = str(row.get("semantic_enrichment") or "").strip()
+    if not raw:
+        return ""
+    try:
+        payload = json.loads(raw)
+    except (TypeError, ValueError, json.JSONDecodeError):
+        payload = None
+    if isinstance(payload, dict):
+        subjects = payload.get("subjects") or []
+        if isinstance(subjects, list) and subjects and isinstance(subjects[0], dict):
+            subject = subjects[0]
+            parts = [
+                str(subject.get(key, "")).strip()
+                for key in ("appearance", "wardrobe")
+                if str(subject.get(key, "")).strip()
+            ]
+            if parts:
+                return _compact_character_evidence("; ".join(parts))
+        summary = _compact_character_evidence(payload.get("summary", ""))
+        if summary:
+            return summary
+
+    subject_match = re.search(
+        r"^SUBJECTS\s*\n\s*-\s*(.+?)(?=\n\s*(?:-|[A-Z][A-Z /_-]{2,})\s*(?:\n|$)|\Z)",
+        raw,
+        re.I | re.M | re.S,
+    )
+    if subject_match:
+        subject = _compact_character_evidence(subject_match.group(1))
+        if subject and "none established" not in subject.casefold():
+            return subject
+    summary_match = re.search(
+        r"^SUMMARY\s*\n(.+?)(?=\n\s*[A-Z][A-Z /_-]{2,}\s*(?:\n|$)|\Z)",
+        raw,
+        re.I | re.M | re.S,
+    )
+    if summary_match:
+        summary = _compact_character_evidence(summary_match.group(1))
+        if summary and "not established" not in summary.casefold():
+            return summary
+    return ""
+
+
+def street_fighter_character_bindings(existing_media: list[dict] | None) -> list[dict]:
+    """Build deterministic S1→P1 / S2→P2 bindings from loaded Picture evidence."""
+
+    inventory: dict[str, dict] = {}
+    for raw in existing_media or []:
+        if not isinstance(raw, dict) or not bool(raw.get("loaded", False)):
+            continue
+        media_id = str(raw.get("media_id") or "").strip().upper().lstrip("@")
+        media_type = str(raw.get("media_type") or raw.get("type") or "").lower()
+        if media_id in {"P1", "P2"} and media_type == "image":
+            inventory[media_id] = raw
+    bindings: list[dict] = []
+    for speaker, media_id in (("S1", "P1"), ("S2", "P2")):
+        row = inventory.get(media_id)
+        if row is None:
+            continue
+        description = _blip_overview_from_media_row(row)
+        evidence_source = "BLIP · Overview"
+        if not description:
+            description = _semantic_character_summary_from_media_row(row)
+            evidence_source = "AI Enrich"
+        if not description:
+            description = "已加载人物参考；视觉描述待分析"
+            evidence_source = "Loaded reference"
+        bindings.append({
+            "speaker": speaker,
+            "media_id": media_id,
+            "description": description,
+            "evidence_source": evidence_source,
+        })
+    return bindings
+
+
+def render_special_design_requirement_template(
+    template: object,
+    special_skill_key: object,
+    existing_media: list[dict] | None,
+) -> str:
+    """Resolve media-aware placeholders without modifying the reusable Skill file."""
+
+    text = str(template or "")
+    if HONG_KONG_COMIC_SOURCE_TEMPLATE_TOKEN in text:
+        source_rows: list[str] = []
+        for raw in existing_media or []:
+            if not isinstance(raw, dict) or not bool(raw.get("loaded", False)):
+                continue
+            media_id = str(raw.get("media_id", "")).strip().upper()
+            media_type = str(raw.get("media_type") or raw.get("type") or "").casefold()
+            if not re.fullmatch(r"P\d+", media_id) or media_type != "image":
+                continue
+            provenance = " ".join(str(raw.get(field, "")) for field in (
+                "recognition", "raw_analysis_summary", "analysis_summary", "local_path",
+            )).casefold()
+            if "ai design generated reference" in provenance or "generated_references" in provenance:
+                continue
+            # Complex multi-panel comic pages are a known weak case for the
+            # compact BLIP caption. Prefer the richer semantic pass when it is
+            # available; pixels and explicit user mapping still outrank both.
+            overview = _semantic_character_summary_from_media_row(raw)
+            evidence_source = "AI Enrich"
+            if not overview:
+                overview = _blip_overview_from_media_row(raw)
+                evidence_source = "BLIP · Overview"
+            if not overview:
+                overview = "已加载港漫画面；以图片像素中的人物、场景、天气、材质与光线为准"
+                evidence_source = "Loaded Picture"
+            source_file = Path(str(raw.get("local_path") or "")).name
+            source_file_note = (
+                f"〔source_file={source_file}；仅用于把剧本页码映射到@{media_id}，"
+                "不得当作地点、角色或画面内容〕"
+                if source_file else ""
+            )
+            source_rows.append(
+                f"@{media_id}（{evidence_source}：{overview}）{source_file_note}"
+            )
+        source_text = "；".join(source_rows) if source_rows else (
+            "请先加载港漫图片；人物、地点、地形、建筑、天气、色调与可互动材质必须从当前图片读取"
+        )
+        text = text.replace(HONG_KONG_COMIC_SOURCE_TEMPLATE_TOKEN, source_text)
+    if STREET_FIGHTER_CAST_TEMPLATE_TOKEN not in text:
+        return text
+    bindings = {
+        row["speaker"]: row
+        for row in street_fighter_character_bindings(existing_media)
+    } if str(special_skill_key or "").strip().casefold() == STREET_FIGHTER_SPECIAL_SKILL else {}
+
+    def cast_line(speaker: str) -> str:
+        binding = bindings.get(speaker)
+        if binding:
+            style = "空手道与柔道" if speaker == "S1" else "截拳道、咏春与MMA地面战"
+            return (
+                f"{speaker}是@{binding['media_id']}（{binding['evidence_source']}："
+                f"{binding['description']}）格斗者，固定使用{style}"
+            )
+        if speaker == "S1":
+            return "S1是穿旧白色无袖武道服的沉稳亚洲男格斗者，固定使用空手道与柔道"
+        return "S2是穿深红运动夹克、黑色格斗裤的敏捷女格斗者，固定使用截拳道、咏春与MMA地面战"
+
+    resolved = cast_line("S1") + "；" + cast_line("S2") + "。"
+    if len(bindings) == 2:
+        resolved += (
+            " @P1只定义S1，@P2只定义S2；两张图都是全片人物身份与外观参考，"
+            "所有出现对应人物的Shot都必须引用正确图片，禁止交换、混脸、复制或转移服装。"
+        )
+    return text.replace(STREET_FIGHTER_CAST_TEMPLATE_TOKEN, resolved)
+
+
+def enforce_street_fighter_character_bindings(
+    plan: dict,
+    existing_media: list[dict] | None,
+    special_skill_key: object,
+) -> dict:
+    """Make the two loaded fighter Pictures authoritative throughout the H3 plan."""
+
+    if str(special_skill_key or "").strip().casefold() != STREET_FIGHTER_SPECIAL_SKILL:
+        return plan
+    bindings = street_fighter_character_bindings(existing_media)
+    if not bindings:
+        return plan
+    duration = float(plan.get("duration_seconds", 0.5) or 0.5)
+    uses = [row for row in plan.get("existing_media_uses") or [] if isinstance(row, dict)]
+    for binding in bindings:
+        speaker = binding["speaker"]
+        media_id = binding["media_id"]
+        use = next((row for row in uses if row.get("media_id") == media_id), None)
+        if use is None:
+            use = {
+                "requirement_id": f"street_fighter_{speaker.lower()}_{media_id.lower()}_identity",
+                "media_id": media_id,
+                "media_type": "image",
+                "usage": "h3_reference",
+                "reuse_policy": "whole_design",
+                "start_seconds": 0.0,
+                "end_seconds": duration,
+                "track": "V1" if speaker == "S1" else "V2",
+                "subject_keywords": [],
+                "instruction": "",
+            }
+            uses.append(use)
+        use.update({
+            "media_type": "image",
+            "usage": "h3_reference",
+            "reuse_policy": "whole_design",
+            "start_seconds": 0.0,
+            "end_seconds": duration,
+            "identity_anchor": True,
+        })
+        keywords = [str(value) for value in use.get("subject_keywords") or []]
+        for value in (speaker, f"{speaker} identity", binding["description"]):
+            if value and value not in keywords:
+                keywords.append(value)
+        use["subject_keywords"] = keywords
+        identity_direction = (
+            f"CAST IDENTITY LOCK: {speaker} is exclusively @{media_id}. Use @{media_id} as "
+            f"{speaker}'s authoritative face, hair, skin tone, age, body proportions, complete "
+            "wardrobe, footwear and accessory reference in every appearance. Never assign this "
+            f"identity to {'S2' if speaker == 'S1' else 'S1'}, blend the two faces, or duplicate "
+            f"the fighter. Evidence: {binding['evidence_source']}: {binding['description']}"
+        )
+        if identity_direction not in str(use.get("instruction", "")):
+            use["instruction"] = (
+                str(use.get("instruction", "")).rstrip(" .")
+                + (". " if str(use.get("instruction", "")).strip() else "")
+                + identity_direction
+            )
+    plan["existing_media_uses"] = uses
+
+    mapping = {row["speaker"]: row["media_id"] for row in bindings}
+    lock_parts = [
+        f"{speaker} is exclusively @{media_id}"
+        for speaker, media_id in (("S1", mapping.get("S1")), ("S2", mapping.get("S2")))
+        if media_id
+    ]
+    shot_lock = (
+        "CAST REFERENCE LOCK: " + "; ".join(lock_parts)
+        + ". Preserve each assigned face, hair, body, wardrobe and footwear; never swap, blend, "
+          "duplicate or transfer either identity between fighters."
+    )
+    for shot in plan.get("shots") or []:
+        if not isinstance(shot, dict):
+            continue
+        current = str(shot.get("additional_direction", "")).strip()
+        if "CAST REFERENCE LOCK:" not in current:
+            shot["additional_direction"] = current.rstrip(" .") + (". " if current else "") + shot_lock
+    constraints = str(plan.get("constraints", "")).strip()
+    if "CAST REFERENCE LOCK:" not in constraints:
+        plan["constraints"] = constraints.rstrip(" .") + (". " if constraints else "") + shot_lock
+    return plan
+
+
+def enforce_beat_synced_entrance_contract(
+    plan: dict,
+    existing_media: list[dict] | None,
+    special_skill_key: object,
+) -> dict:
+    """Repair the five-beat entrance profile independently of model wording.
+
+    P3 is a third featured Picture subject, never a corridor plate. The corridor
+    is generated by H3. P5 is either an already loaded or automatically generated
+    environment-population plate shared by the campus bridge and final reveal.
+    """
+
+    if str(special_skill_key or "").strip().casefold() != BEAT_SYNCED_ENTRANCE_SPECIAL_SKILL:
+        return plan
+
+    duration = float(plan.get("duration_seconds", 18.0) or 18.0)
+    inventory = _media_inventory(existing_media)
+    p5_loaded = bool(inventory.get("P5", {}).get("loaded", False))
+    if existing_media is not None:
+        missing = [
+            media_id for media_id in ("P1", "P2", "P3", "P4", "A1")
+            if not bool(inventory.get(media_id, {}).get("loaded", False))
+        ]
+        if missing:
+            raise ValueError(
+                "Beat-Synced Entrance requires loaded Media Pool sources: "
+                + ", ".join(f"@{media_id}" for media_id in missing)
+            )
+
+    scale = duration / 18.0
+    cuts = [round(value * scale * 2.0) / 2.0 for value in (0.0, 6.0, 9.0, 11.5, 13.5, 18.0)]
+    cuts[0], cuts[-1] = 0.0, duration
+    for index in range(1, len(cuts)):
+        cuts[index] = max(cuts[index], cuts[index - 1] + 0.5)
+    cuts[-1] = duration
+
+    original_shots = [
+        deepcopy(row) for row in plan.get("shots") or [] if isinstance(row, dict)
+    ] or [{}]
+
+    def base_shot(index: int) -> dict:
+        row = deepcopy(original_shots[min(index, len(original_shots) - 1)])
+        for key in (
+            "combat_action_chain", "incoming_combat_state", "outgoing_combat_state",
+            "next_action_trigger", "event_causality_chain", "physical_feedback_chain",
+            "causal_risk_original_action", "causal_risk_repair_status",
+            "causal_risk_repair_notes", "combat_continuity_status",
+            "combat_continuity_notes", "combat_fact_context", "combat_story_duty",
+            "combat_story_duty_instruction", "combat_action_beats",
+            "combat_action_carrier", "combat_force_vector",
+            "incoming_combat_state_vector", "outgoing_combat_state_vector",
+            "camera_position_sector", "camera_motion_relation", "camera_action_trigger",
+            "dynamic_camera_direction", "contact_material", "environment_force_vector",
+            "causal_validation_status", "causal_validation_issues",
+            "causal_validation_inherited_fields", "final_action_resolution",
+            "final_camera_resolution", "action_budget", "h3_executable_action",
+            "h3_optional_flourish",
+        ):
+            row.pop(key, None)
+        return row
+
+    corridor = (
+        "Use one coherent H3-generated cinematic corridor; no Picture defines the corridor. "
+        "Preserve its architecture, vanishing point, materials, colour temperature, lighting "
+        "direction and travel axis across this beat."
+    )
+    gaze = (
+        "CORRIDOR MODEL FACE AND ACTIVITY LOCK: the fashion-model extras move at a relaxed, "
+        "unhurried natural pace and remain readable in frame; no running, power-walking, fast "
+        "crossing or back-only pass is permitted. Each selected model turns head and upper torso "
+        "naturally toward the lens and presents a frontal or three-quarter face for 1.0-1.5 seconds, "
+        "with both eyes and facial features unobstructed. Distribute the extras across grounded "
+        "corridor activities instead of making them all walk: one opens or closes a locker and "
+        "arranges books, two lean near a wall or locker and chat with a brief shoulder pat, and one "
+        "holds books while side-stepping through foot traffic and checking a watch. Optional "
+        "background activity may include reading or one playful touch of a door frame or ceiling, "
+        "but only when it does not hide @P1 or overload the six-second beat. Extras remain distinct, "
+        "never form a frozen lineup and never obscure the principal."
+    )
+    specs = [
+        {
+            "preset": "Beat-Synced Principal Entrance", "framing": "Frontal medium-wide",
+            "camera_angle": "Eye level to slightly low angle",
+            "camera_movement": "Smooth physical backward tracking at fixed subject scale",
+            "movement_speed": "Relaxed natural walking speed, unhurried and beat-synchronized", "movement_amplitude": "Long corridor advance",
+            "subject_action": "@P1 walks directly toward the lens. Distinct fashion-model extras remain at separate corridor activity stations, perform slow natural book, locker, conversation and foot-traffic actions, and present readable frontal or three-quarter faces.",
+            "environment_response": "Generated corridor reflections, relaxed footsteps, locker contact, book handling and clothing motion remain coherent and beat-responsive.",
+            "continuity_state": "End with @P1 physically reaching the first corridor corner, still moving forward, face and complete wardrobe unchanged; the corner wall is visible and motivates the next reveal.",
+            "optional_flourish": "Subtle practical-light reflections and natural hair motion on passing models.",
+            "additional_direction": corridor + " " + gaze,
+        },
+        {
+            "preset": "P1-to-P2 Corridor Corner Encounter", "framing": "Moving two-shot resolving to a frontal medium shot of @P2",
+            "camera_angle": "Eye level", "camera_movement": "Follow @P1 around the physical corner, then hand off into a short backward track in front of @P2",
+            "movement_speed": "Natural walking speed with one clean beat-synchronized focus handoff", "movement_amplitude": "One corner arc and short direct advance",
+            "subject_action": "@P1 reaches and physically rounds the visible corridor corner; the wall briefly occludes part of the frame and naturally reveals @P2 already walking in the newly exposed corridor section; @P1 notices and passes @P2 as the camera transfers its follow to @P2.",
+            "environment_response": "The same generated corridor architecture, floor, light and travel axis continue around the corner; parallax and wall occlusion prove that @P2 was spatially present rather than materializing.",
+            "continuity_state": "End with @P1 continuing out of foreground while @P2 owns the camera follow and approaches the next visible corner, exact @P1 and @P2 appearances preserved.",
+            "optional_flourish": "A natural eye-contact beat between @P1 and @P2 without stopping their movement.",
+            "additional_direction": corridor + " CAUSAL ENCOUNTER LOCK: @P2 must be revealed by the camera clearing real corner geometry; never pop in, dissolve in, morph from @P1 or replace @P1 between frames.",
+        },
+        {
+            "preset": "P2-to-P3 Corridor Corner Encounter", "framing": "Moving two-shot resolving to a frontal medium close shot of @P3",
+            "camera_angle": "Eye level", "camera_movement": "Follow @P2 through the second physical corner, then hand off smoothly to @P3 without a teleporting cut",
+            "movement_speed": "Natural brisk walking speed with a clear corner reveal", "movement_amplitude": "Compact corner arc and encounter",
+            "subject_action": "@P2 reaches and physically rounds the second visible corridor corner; the corner edge temporarily hides the far passage and then reveals @P3 already present beyond it; @P2 acknowledges @P3 and the camera settles on @P3.",
+            "environment_response": "The same H3-generated corridor continues around the second corner with coherent wall parallax, floor contact and lighting; @P3 enters visibility only as the corner clears.",
+            "continuity_state": "End with @P3 fully readable near camera while @P2 remains physically placed at the encounter edge; exact @P2 and @P3 faces, bodies and wardrobes remain preserved.",
+            "optional_flourish": "A beat-synchronized eye lift from @P3 after becoming fully visible.",
+            "additional_direction": corridor + " @P3 is a person and featured visual subject, never an environment reference. CAUSAL ENCOUNTER LOCK: reveal @P3 through real corner occlusion and parallax; never pop in, dissolve in, morph from @P2 or replace @P2 between frames.",
+        },
+        {
+            "preset": "P1 Corridor-to-Campus Corner Discovery", "framing": "Campus-side frontal medium view showing @P1's complete surprised face before an architectural wipe",
+            "camera_angle": "Eye level from outside the doorway facing @P1",
+            "camera_movement": "Track backward outside the doorway while facing @P1, then slide behind the adjacent solid campus corner until it fully covers the lens",
+            "movement_speed": "Continuous natural movement with one clearly readable reaction beat", "movement_amplitude": "Short threshold crossing, facial reaction and one motivated corner wipe",
+            "subject_action": "From local 0.00-0.70s @P1 crosses the exit toward camera with face and both eyes clear, then from 0.70-1.45s @P1 looks toward the unseen next subject with widened eyes, raised brows and parted mouth in unmistakable surprise, and finally from 1.45-2.00s the adjacent wall or door frame completes one full-frame wipe.",
+            "environment_response": "Interior reflections fall away at the doorway as the @P5 school-exterior architecture, daylight, ground plane and populated open-space depth become clearly visible before the corner surface covers the image.",
+            "continuity_state": "Preserve exact @P1 face and wardrobe through the frontal surprise reaction; end only on complete architectural occlusion after @P1 fixes the eyeline toward the next subject.",
+            "optional_flourish": "One natural exposure adaptation while crossing the doorway.",
+            "location_transition": "INDOOR→OUTDOOR: @P1 physically crosses the same visible doorway from the generated interior passage into the campus exterior before the corner wipe.",
+            "continuity_mode": "Hard Cut",
+            "additional_direction": corridor + " FACE-FIRST CAUSAL BRIDGE: the camera must see @P1's unobstructed frontal or three-quarter face and surprised expression before the full architectural wipe. @P5 is the immutable campus environment and background-life authority; no back-only exit, teleport, dissolve, identity replacement or renewed long entrance walk.",
+        },
+        {
+            "preset": "P4 Slow-Motion Final Reveal", "framing": "Preserve @P4 subject count, identities, wardrobe and relative arrangement inside the @P5 populated school exterior",
+            "camera_angle": "Eye level matching the @P5 school-exterior camera axis",
+            "camera_movement": "Very slow horizontal slide through the @P5 school exterior while preserving its camera height, horizon and viewing direction; then lock the Final Hold",
+            "movement_speed": "True @P4 subject slow motion at 45-60% perceived speed; @A1 remains normal speed",
+            "movement_amplitude": "Minimal lateral travel, then zero camera motion for the final 0.5 second",
+            "subject_action": "Reveal every @P4 subject already present inside the @P5 populated school exterior while preserving exact @P4 faces, bodies, hair, wardrobe, accessories, subject count and arrangement, then use physical slow motion and settle before the Final Hold.",
+            "environment_response": "Use @P5 as the sole environment and background-life authority. Relight and ground all @P4 subjects into its daylight, perspective and ground plane with shared contact shadows, colour temperature and atmospheric depth while background people continue varied school-leaving activity.",
+            "continuity_state": "Inherit only wipe timing and camera motion from the incoming 24 frames. Preserve @P5 campus architecture, camera axis, daylight, ground plane and background-life layout; preserve @P4 only as foreground-subject evidence. Hold the integrated composition during the final 0.5 second.",
+            "optional_flourish": "Only campus-consistent atmospheric and clothing micro-motion during the slow-motion reveal.",
+            "continuity_mode": "Motion Reference",
+            "incoming_environment_state": "P5 CAMPUS CONTINUITY: @P5 owns the complete outdoor school environment, background people, camera axis, light and ground plane; the preceding 24 frames supply only wipe timing and motion continuity; @P4 supplies foreground subjects only.",
+            "outgoing_environment_state": "The integrated @P4 subjects, @P5 campus perspective and population, shared light, ground contact and shadows remain coherent through the locked final frame.",
+            "location_transition": "ARCHITECTURAL WIPE TO P5 CAMPUS COMPOSITE: clear the preceding wall wipe into the @P5 school exterior and reveal the @P4 subjects already standing inside it.",
+            "additional_direction": "P4+P5 CAMPUS COMPOSITE. Treat @P4 only as the immutable authority for foreground-subject identity, face, body, hair, wardrobe, accessories, subject count and relative arrangement. Treat @P5 as the immutable authority for school-exterior background, architecture, road, bus-stop area, background people, geometry, lighting, camera axis and ground plane. The incoming motion-reference frames control only wipe and camera-motion continuity. Integrate rather than replace either source.",
+        },
+    ]
+    repaired_shots: list[dict] = []
+    for index, spec in enumerate(specs):
+        shot = base_shot(index)
+        shot.update(spec)
+        shot.update({
+            "id": f"S{index + 1}", "track": "V1",
+            "start_seconds": cuts[index], "end_seconds": cuts[index + 1],
+        })
+        repaired_shots.append(shot)
+    plan["shots"] = repaired_shots
+
+    unrelated_uses = [
+        row for row in plan.get("existing_media_uses") or []
+        if isinstance(row, dict)
+        and str(row.get("media_id", "")).strip().upper() not in {"P1", "P2", "P3", "P4", "P5", "A1"}
+    ]
+
+    def image_use(requirement_id: str, media_id: str, start: float, end: float, track: str, instruction: str) -> dict:
+        return {
+            "requirement_id": requirement_id, "media_id": media_id,
+            "media_type": "image", "usage": "h3_reference",
+            "reuse_policy": "time_scoped", "start_seconds": start,
+            "end_seconds": end, "track": track,
+            "subject_keywords": ["featured subject", media_id], "instruction": instruction,
+        }
+
+    beat_media_uses = [
+        image_use("beat_p1_opening_encounter", "P1", cuts[0], cuts[2], "V1", "Exact P1 face, body, complete wardrobe and accessories for the opening walk and the physical corner encounter with P2."),
+        image_use("beat_p2_corner_chain", "P2", cuts[1], cuts[3], "V2", "Exact P2 visible identity, body, wardrobe and accessories from the P1 encounter through P2's physical corner encounter with P3."),
+        image_use("beat_p3_corner_encounter", "P3", cuts[2], cuts[3], "V3", "Exact P3 visible subject identity and appearance revealed beyond the second physical corner. P3 is not an environment plate."),
+        image_use("beat_p1_campus_exit", "P1", cuts[3], cuts[4], "V1", "Return to exact P1 for the continuous interior-to-P5-campus exit, frontal surprise reaction and architectural wipe that causally introduces P4."),
+        image_use("beat_p4_final", "P4", cuts[4], cuts[5], "V4", "P4 SUBJECT COMPOSITE: use exact P4 visible-subject identities, faces, bodies, hair, wardrobe, accessories, subject count and relative arrangement only. Integrate them into the P5 populated school exterior; do not use P4 as a background plate."),
+        {
+            "requirement_id": "beat_a1_master", "media_id": "A1", "media_type": "audio",
+            "usage": "h3_reference", "reuse_policy": "whole_design", "start_seconds": 0.0,
+            "end_seconds": duration, "track": "A1", "subject_keywords": ["continuous master audio"],
+            "instruction": "Play A1 once as continuous Master Audio. For every hidden H3 Segment, use the A1 source position equal to that Segment's Timeline start; never restart, duplicate, replace, time-stretch or crossfade A1.",
+        },
+    ]
+    if p5_loaded:
+        beat_media_uses.append(image_use(
+            "beat_p5_population_plate", "P5", cuts[3], cuts[5], "V5",
+            "P5 ENVIRONMENT POPULATION KEYFRAME: immutable school-exterior environment, architecture, road, bus-stop area, daylight, ground plane, camera axis and varied background school-life people. P5 supplies no P1-P4 identity.",
+        ))
+    plan["existing_media_uses"] = unrelated_uses + beat_media_uses
+    plan["transitions"] = [
+        {"time_seconds": cuts[1], "preset": "Corridor Corner Reveal", "direction": "Follow P1 behind real corner geometry; reveal P2 only when the wall clears. Preserve continuous Master Audio."},
+        {"time_seconds": cuts[2], "preset": "Corridor Corner Reveal", "direction": "Follow P2 behind the second real corner; reveal P3 only when the wall clears. Preserve continuous Master Audio."},
+        {"time_seconds": cuts[3], "preset": "Eyeline Continuity Cut", "direction": "Use P3's final eyeline and travel direction to return to P1 already approaching the visible campus exit."},
+        {"time_seconds": cuts[4], "preset": "Architectural Occlusion Scene Cut", "direction": "Cut only while the campus corner wall or door frame completely covers the image; the next frame clears into the same campus, with P4 supplying subjects only."},
+    ]
+    plan["markers"] = [{
+        "time_seconds": max(cuts[4], duration - 0.5), "preset": "Final Hold",
+        "direction": "Finish @P4 slow motion, then freeze camera and subject state through the final frame while @A1 continues normally.",
+    }]
+    plan["non_diegetic_music"] = "N/A — @A1 is the only continuous Master Audio and remains at normal speed."
+    plan["overall_soundscape"] = "@A1 plays once continuously at normal speed. H3 may add subtle diegetic corridor footsteps, cloth and room tone below A1; no dialogue, narration, replacement score or restarted music."
+    old_constraints = re.sub(
+        r"No extra may look directly into camera for longer than 0\.3 seconds[^.]*\.?",
+        "", str(plan.get("constraints", "")), flags=re.I,
+    ).replace(
+        "No slow dissolves, decorative transition packs, random flashes, teleportation or unexplained slow motion.",
+        "No slow dissolves, decorative transition packs, random flashes or teleportation.",
+    )
+    contract = (
+        "BEAT-SYNCED FIVE-BEAT LOCK: P1, P2 and P3 are distinct Picture subjects connected by "
+        "physical corner reveals rather than hard replacement cuts; P3 is never an environment. "
+        "H3 generates one coherent interior passage and a motivated P1 exit to the campus exterior. "
+        "Corridor models perform relaxed book, locker, conversation and foot-traffic activities and "
+        "show readable frontal or three-quarter faces. The campus-side bridge shows P1's face and surprised "
+        "reaction before a complete architectural wipe. P5 owns the school exterior, background-life cast, "
+        "light and camera axis across Beats 4-5; the final 24 frames carry only wipe and camera motion. "
+        "P4 supplies only the final foreground subjects and their arrangement; discard the P4 source background. "
+        "A small slow lateral camera slide and true 45-60% physical slow motion play under uninterrupted 1x A1. "
+        "No identity may pop in, morph or replace another."
+    )
+    plan["constraints"] = old_constraints.strip(" .") + (". " if old_constraints.strip() else "") + contract
+    warnings = [str(value) for value in plan.get("design_warnings") or []]
+    notice = "Repaired Beat-Synced Entrance roles: corridor models are slow and face-readable; P3 is the third featured subject; the P1 bridge is face-first; P5 owns the populated school exterior; P4 subjects are integrated into P5; A1 is source-windowed per Segment."
+    if notice not in warnings:
+        warnings.append(notice)
+    plan["design_warnings"] = warnings
+    return plan
+
+
+def enforce_hong_kong_comic_source_mapping(
+    plan: dict,
+    existing_media: list[dict] | None,
+    special_skill_key: object,
+) -> dict:
+    """Keep drawn comic pages as analysis evidence rather than H3 visual inputs."""
+
+    if str(special_skill_key or "").strip().casefold() != HONG_KONG_COMIC_FIGHTER_SPECIAL_SKILL:
+        return plan
+    duration = float(plan.get("duration_seconds", 0.5) or 0.5)
+    uses = [row for row in plan.get("existing_media_uses") or [] if isinstance(row, dict)]
+    analysis_ids: list[str] = []
+    for raw in existing_media or []:
+        if not isinstance(raw, dict) or not bool(raw.get("loaded", False)):
+            continue
+        media_id = str(raw.get("media_id", "")).strip().upper()
+        media_type = str(raw.get("media_type") or raw.get("type") or "").casefold()
+        if not re.fullmatch(r"P\d+", media_id) or media_type != "image":
+            continue
+        evidence = " ".join(str(raw.get(field, "")) for field in (
+            "raw_analysis_summary", "analysis_summary", "recognition",
+            "semantic_enrichment", "clip_prompt", "local_path",
+        )).casefold()
+        is_generated_reference = (
+            "ai design generated reference" in evidence
+            or "generated_references" in evidence
+        )
+        source_provenance_id = _normalized_media_id(
+            raw.get("source_plate_media_id") or raw.get("derived_from_media_id") or ""
+        )
+        has_source_provenance = bool(
+            source_provenance_id
+            and source_provenance_id != media_id
+            and str(raw.get("source_plate_mode", "")).strip().casefold()
+            in {"source_img2img", "p1_img2img"}
+        )
+        legacy_market_pollution = is_generated_reference and any(term in evidence for term in (
+            "wet market", "seafood market", "fish tank", "produce crate",
+            "kowloon walled city-style", "indoor_seafood_aisle",
+        ))
+        if legacy_market_pollution:
+            use = next(
+                (row for row in uses if str(row.get("media_id", "")).upper() == media_id),
+                None,
+            )
+            if use is not None:
+                use.update({
+                    "usage": "analysis_only",
+                    "reuse_policy": "analysis_only",
+                    "identity_anchor": False,
+                    "instruction": (
+                        "LEGACY GENERATED VENUE EXCLUDED: this reference contains a fixed wet-market "
+                        "scene generated by another Special Skill. It is not a source comic fact and "
+                        "must not enter H3 or define the new environment."
+                    ),
+                })
+                analysis_ids.append(media_id)
+            continue
+        if is_generated_reference and not has_source_provenance:
+            use = next(
+                (row for row in uses if str(row.get("media_id", "")).upper() == media_id),
+                None,
+            )
+            if use is not None:
+                use.update({
+                    "usage": "analysis_only",
+                    "reuse_policy": "analysis_only",
+                    "identity_anchor": False,
+                    "instruction": (
+                        "UNPROVEN GENERATED COMIC REFERENCE EXCLUDED: this old generated Picture "
+                        "has no valid source_plate_media_id/source_img2img provenance. It may contain "
+                        "invented faces, costumes or locations and cannot condition the new H3 render."
+                    ),
+                })
+                analysis_ids.append(media_id)
+            continue
+        drawing_terms = (
+            "comic", "manga", "manhua", "illustration", "drawing", "drawn", "panel",
+            "halftone", "ink line", "speech bubble", "漫画", "漫畫", "港漫", "插画", "插畫",
+            "线稿", "線稿", "网点", "網點", "对白框", "對白框",
+        )
+        photo_terms = (
+            "photoreal", "live-action", "live action", "photograph", "real person",
+            "真人", "实拍", "實拍", "照片",
+        )
+        looks_drawn = any(term in evidence for term in drawing_terms)
+        explicitly_photoreal = any(term in evidence for term in photo_terms)
+        # This Skill is selected specifically for Hong Kong comic input, so an
+        # unanalysed Picture is treated conservatively as source-panel evidence.
+        if explicitly_photoreal and not looks_drawn:
+            continue
+        use = next(
+            (row for row in uses if str(row.get("media_id", "")).upper() == media_id),
+            None,
+        )
+        if use is None:
+            use = {
+                "requirement_id": f"hong_kong_comic_source_{media_id.casefold()}",
+                "media_id": media_id,
+                "media_type": "image",
+                "track": "V1",
+            }
+            uses.append(use)
+        use.update({
+            "usage": "analysis_only",
+            "reuse_policy": "analysis_only",
+            "start_seconds": 0.0,
+            "end_seconds": duration,
+            "identity_anchor": False,
+            "instruction": (
+                "COMIC SOURCE ANALYSIS ONLY: use this Picture to recover character, costume, panel "
+                "order, composition, environment, weather, light, colour and material facts. Do not "
+                "load its page border, halftone, printed text, speech bubbles or drawn texture into H3; "
+                "the time-scoped photoreal source_img2img keyframes are the H3 visual references."
+            ),
+        })
+        analysis_ids.append(media_id)
+    plan["existing_media_uses"] = uses
+    if analysis_ids:
+        warnings = [str(value) for value in plan.get("design_warnings") or []]
+        warning = (
+            "Hong Kong comic source mapping: " + ", ".join(analysis_ids)
+            + " remain analysis-only; use minimal photoreal source_img2img keyframes for H3."
+        )
+        if warning not in warnings:
+            warnings.append(warning)
+        plan["design_warnings"] = warnings
+    return plan
+
+
+def enforce_hong_kong_comic_generated_source_plates(
+    plan: dict,
+    existing_media: list[dict] | None,
+    special_skill_key: object,
+) -> dict:
+    """Bind every generated comic-conversion still to a real loaded source page.
+
+    The language model sometimes asks Z-Image for a photoreal fighter/action
+    frame without setting ``source_plate_media_id``.  That silently turns an
+    img2img conversion into free text-to-image generation, replacing the
+    comic's faces, hair, costume, environment and action design.  Resolve the
+    best source from authored media-use labels, then fall back to chronological
+    Picture position.  Original comic pages stay analysis-only for H3.
+    """
+
+    if str(special_skill_key or "").strip().casefold() != HONG_KONG_COMIC_FIGHTER_SPECIAL_SKILL:
+        return plan
+
+    inventory: dict[str, dict] = {}
+    for raw in existing_media or []:
+        if not isinstance(raw, dict) or not bool(raw.get("loaded", False)):
+            continue
+        media_id = str(raw.get("media_id", "")).strip().upper()
+        media_type = str(raw.get("media_type") or raw.get("type") or "").casefold()
+        evidence = " ".join(str(raw.get(field, "")) for field in (
+            "recognition", "raw_analysis_summary", "analysis_summary", "local_path",
+        )).casefold()
+        if not re.fullmatch(r"P\d+", media_id) or media_type != "image":
+            continue
+        if "ai design generated reference" in evidence or "generated_references" in evidence:
+            continue
+        inventory[media_id] = raw
+    if not inventory:
+        return plan
+
+    def media_number(media_id: str) -> int:
+        match = re.search(r"\d+", media_id)
+        return int(match.group()) if match else 10**9
+
+    source_ids = sorted(inventory, key=media_number)
+    duration = max(0.5, float(plan.get("duration_seconds", 0.5) or 0.5))
+    uses = [row for row in plan.get("existing_media_uses") or [] if isinstance(row, dict)]
+
+    # Reassert analysis-only after identity normalization.  A legacy plan may
+    # have promoted P1 to a whole-design H3 identity anchor before this pass.
+    for use in uses:
+        media_id = str(use.get("media_id", "")).strip().upper()
+        if media_id not in inventory:
+            continue
+        use.update({
+            "usage": "analysis_only",
+            "reuse_policy": "analysis_only",
+            "identity_anchor": False,
+            "start_seconds": 0.0,
+            "end_seconds": duration,
+        })
+        use["instruction"] = (
+            "COMIC SOURCE ANALYSIS ONLY: this loaded Picture is pixel authority for identity, "
+            "costume, pose, composition, environment, weather, light and material. It must feed "
+            "the matching Z-Image source_img2img request, but its panel border, halftone, printed "
+            "text and speech bubbles must never be loaded directly into H3."
+        )
+    plan["existing_media_uses"] = uses
+
+    ignored_tokens = {
+        "act", "state", "reference", "composition", "photoreal", "identity", "anchor",
+        "fighter", "image", "generated", "live", "action", "impact", "final", "resolve",
+    }
+
+    def tokens(value: object) -> set[str]:
+        raw = re.sub(r"(?<=[a-z])(?=[A-Z])", "_", str(value or ""))
+        values = set(re.findall(r"[a-z0-9]+", raw.casefold()))
+        return {
+            value for value in values
+            if value not in ignored_tokens
+            and len(value) > 1
+            and not re.fullmatch(r"(?:act|segment)\d+", value)
+        }
+
+    labelled_uses: list[tuple[str, set[str], set[str], dict]] = []
+    for use in uses:
+        media_id = str(use.get("media_id", "")).strip().upper()
+        if media_id not in inventory:
+            continue
+        requirement_tokens = tokens(use.get("requirement_id", ""))
+        label = " ".join((
+            str(use.get("requirement_id", "")), str(use.get("instruction", "")),
+            " ".join(str(value) for value in use.get("subject_keywords") or []),
+        ))
+        labelled_uses.append((media_id, requirement_tokens, tokens(label), use))
+
+    converted: list[str] = []
+    for request in plan.get("media_requests") or []:
+        if not isinstance(request, dict) or str(request.get("media_type", "")).casefold() != "image":
+            continue
+        request_id = str(request.get("requirement_id", "") or "comic_conversion")
+        current_source = str(request.get("source_plate_media_id", "")).strip().upper()
+        request_id_tokens = tokens(request_id)
+        request_tokens = tokens(" ".join((
+            request_id, str(request.get("prompt", "")),
+            " ".join(str(value) for value in request.get("subject_keywords") or []),
+        )))
+        scored: list[tuple[int, int, int, str]] = []
+        for media_id, use_id_tokens, use_tokens, _ in labelled_uses:
+            id_overlap = len(request_id_tokens & use_id_tokens)
+            full_overlap = len(request_tokens & use_tokens)
+            scored.append((id_overlap, full_overlap, -media_number(media_id), media_id))
+        best_id_overlap, best_full_overlap, _, best_id = max(
+            scored, default=(0, 0, 0, source_ids[0])
+        )
+
+        # Internal auto_image_sN rows describe Shot N, not speaker S1/S2.
+        # Prefer an explicit shotN-labelled source use when the model supplied
+        # one.  This keeps sequential panel evidence aligned to its actual Shot.
+        auto_shot = re.fullmatch(r"auto_image_s(\d+)(?:_\d+)?", request_id, re.I)
+        if auto_shot:
+            shot_token = f"shot{int(auto_shot.group(1))}"
+            shot_match = next(
+                (
+                    media_id for media_id, use_id_tokens, _use_tokens, _use in labelled_uses
+                    if shot_token in use_id_tokens
+                ),
+                "",
+            )
+            if shot_match:
+                best_id = shot_match
+                best_id_overlap = max(best_id_overlap, 1)
+
+        # A model-provided source ID is not authoritative when its own
+        # requirement label has a stronger, exact character/Shot mapping.
+        # Previously both S1 and S2 identity portraits could silently bind to
+        # the same valid P5 because validity was checked but semantic conflict
+        # was not.  Keep an explicit valid source only when no stronger label
+        # evidence exists.
+        if current_source not in inventory or best_id_overlap > 0:
+            if best_id_overlap <= 0:
+                start = float(request.get("start_seconds", 0.0) or 0.0)
+                end = float(request.get("end_seconds", start) or start)
+                midpoint = max(0.0, min(duration, (start + end) / 2.0))
+                position = midpoint / duration
+                best_id = source_ids[min(len(source_ids) - 1, int(position * len(source_ids)))]
+            current_source = best_id
+        request.update({
+            "source_plate_media_id": current_source,
+            "derived_from_media_id": current_source,
+            "source_plate_mode": "source_img2img",
+            "source_image_denoise": min(
+                0.68, max(0.48, float(request.get("source_image_denoise", 0.58) or 0.58))
+            ),
+        })
+        source_contract = (
+            f"SOURCE COMIC PLATE LOCK: transform @{current_source} through source_img2img. Preserve "
+            "the source pixels' fighter identity, face structure, hair, body proportions, costume "
+            "blocks and colours, pose/contact relationship, terrain, horizon, weather, light direction "
+            "and scene palette. Convert only ink, paper and halftone into photoreal skin, cloth, rock, "
+            "dust and cinematic depth. Do not freely redesign either fighter or the location."
+        )
+        prompt = str(request.get("prompt", "")).strip()
+        # Replace a stale/neutralized lock as well as a stale @Picture ID.
+        # Analysis-only mention sanitization may have rewritten an earlier
+        # contract to "pre-analysed non-visual control instructions"; the
+        # local source_img2img request itself must retain the concrete source.
+        prompt = re.sub(
+            r"\s*SOURCE COMIC PLATE LOCK:.*?Do not freely redesign either fighter or the location\.",
+            "",
+            prompt,
+            flags=re.I | re.S,
+        ).strip(" .")
+        request["prompt"] = prompt + (". " if prompt else "") + source_contract
+        _append_subject_count_guard(
+            request,
+            identity=bool(request.get("identity_anchor", False)),
+        )
+        negative = str(request.get("negative_prompt", "")).strip()
+        source_negative = (
+            "unrelated face, generic black-clad replacement fighter, changed hairstyle, missing long "
+            "ponytail, changed trousers, changed coat colour, invented costume, source-location replacement, "
+            "comic border, speech bubble, printed glyph, halftone, manga text"
+        )
+        if source_negative not in negative:
+            request["negative_prompt"] = negative.rstrip(" ,") + (", " if negative else "") + source_negative
+        request["comic_source_mapping_status"] = "source_plate_bound"
+        converted.append(f"{request_id}->{current_source}")
+
+    if converted:
+        warnings = [str(value) for value in plan.get("design_warnings") or []]
+        notice = (
+            "Hong Kong comic source_img2img mapping enforced: " + ", ".join(converted)
+            + ". Original comic pages remain analysis-only for H3."
+        )
+        if notice not in warnings:
+            warnings.append(notice)
+        plan["design_warnings"] = warnings
+    return plan
+
+
+def _hong_kong_comic_technique_name(action: object, index: int) -> str:
+    text = str(action or "").casefold()
+    named = (
+        (r"无界紫电拳|無界紫電拳|purple electric", "无界紫电拳"),
+        (r"极霸之拳|極霸之拳", "极霸之拳"),
+        (r"太阳|太陽|烈日|日轮|日輪|solar|corona", "烈阳天劫"),
+        (r"palm|掌", "裂空震天掌"),
+        (r"kick|roundhouse|knee|踢|腿|膝", "天崩裂岳腿"),
+        (r"elbow|forearm|肘|臂", "断空战肘"),
+        (r"throw|takedown|slam|摔|投|抱摔", "撼岳天摔"),
+        (r"fist|punch|hook|拳|勾", "极霸之拳"),
+    )
+    for pattern, name in named:
+        if re.search(pattern, text, flags=re.I):
+            return name
+    fallbacks = ("破界绝杀", "无相天冲", "撼世霸击", "裂天神击", "乾坤震爆")
+    return fallbacks[index % len(fallbacks)]
+
+
+def enforce_hong_kong_comic_technique_text_layers(
+    plan: dict,
+    special_skill_key: object,
+    authored_requirement: object = "",
+) -> dict:
+    """Guarantee editable move titles when the reusable comic template asks for them."""
+
+    if str(special_skill_key or "").strip().casefold() != HONG_KONG_COMIC_FIGHTER_SPECIAL_SKILL:
+        return plan
+    requirement = str(authored_requirement or "")
+    if not re.search(
+        r"每(?:一|个|個).{0,8}招式.{0,8}(?:文字|名称|名稱|字幕)|"
+        r"招式.{0,8}(?:文字|名称|名稱|标题|標題)|"
+        r"technique.{0,12}(?:title|name|text)",
+        requirement,
+        flags=re.I,
+    ):
+        return plan
+    layers = [row for row in plan.get("text_layers") or [] if isinstance(row, dict)]
+    title_layers = [
+        row for row in layers
+        if str(row.get("role", "")).casefold() == "on_screen_text"
+    ]
+    used_names = {str(row.get("content", "")).strip() for row in title_layers}
+    for index, shot in enumerate(plan.get("shots") or []):
+        if not isinstance(shot, dict):
+            continue
+        action = str(shot.get("subject_action", ""))
+        settle_match = re.search(
+            r"final settle|no new attack|both stop changing position|最终稳定|最終穩定|不开始新攻击|不開始新攻擊",
+            action,
+            flags=re.I,
+        )
+        before_settle = action[:settle_match.start()] if settle_match else action
+        has_completed_technique = bool(re.search(
+            r"attack|strike|punch|kick|palm|elbow|contact|impact|release|launch|"
+            r"攻击|攻擊|拳|掌|踢|肘|接触|接觸|撞击|撞擊|命中|释放|釋放|爆发|爆發",
+            before_settle,
+            flags=re.I,
+        ))
+        if settle_match and not has_completed_technique:
+            continue
+        start = float(shot.get("start_seconds", 0.0) or 0.0)
+        end = float(shot.get("end_seconds", start + 0.5) or start + 0.5)
+        if any(
+            float(row.get("start_seconds", 0.0) or 0.0) < end
+            and float(row.get("end_seconds", 0.0) or 0.0) > start
+            for row in title_layers
+        ):
+            continue
+        name = _hong_kong_comic_technique_name(action, index)
+        if name in used_names:
+            suffixes = ("·破", "·震", "·灭", "·终")
+            name += suffixes[index % len(suffixes)]
+        layer_start = snap_half_second(min(end - 0.5, start + max(0.5, (end - start) * 0.45)), end)
+        layer_start = max(start, min(layer_start, end - 0.5))
+        layer_end = min(end, layer_start + 1.0)
+        layer = {
+            "start_seconds": layer_start,
+            "end_seconds": max(layer_start + 0.5, layer_end),
+            "track": "V4",
+            "content": name,
+            "role": "on_screen_text",
+            "speaker": "S1",
+            "language": "Chinese",
+            "delivery": (
+                "Editable Hong Kong-comic impact title; bold high-contrast brush lettering, "
+                "briefly synchronized to the completed technique without covering either face"
+            ),
+            "lip_sync": False,
+            "explicit_user_requested": True,
+            "authored_timing_locked": False,
+            "timeline_visible_text_kind": "comic_technique_title",
+        }
+        layers.append(layer)
+        title_layers.append(layer)
+        used_names.add(name)
+    plan["text_layers"] = sorted(
+        layers,
+        key=lambda row: (
+            float(row.get("start_seconds", 0.0) or 0.0),
+            float(row.get("end_seconds", 0.0) or 0.0),
+            str(row.get("track", "")),
+        ),
+    )
+    plan["constraints"] = (
+        str(plan.get("constraints", "")).rstrip(" .")
+        + (". " if str(plan.get("constraints", "")).strip() else "")
+        + HONG_KONG_COMIC_TECHNIQUE_TEXT_CONTRACT
+    ) if "COMIC TECHNIQUE TITLE CONTRACT:" not in str(plan.get("constraints", "")) else str(plan.get("constraints", ""))
+    return plan
+
+
+def _street_fighter_realtime_action_text(value: object) -> str:
+    """Remove positive slow/walking staging from executable fighter action text."""
+
+    text = str(value or "").strip()
+    # Protect negative constraints before rewriting positive staging prose.
+    # Otherwise ``no slow motion`` becomes the contradictory
+    # ``no in real time`` and ``no walking`` becomes ``no uses ...``.
+    protected: list[str] = []
+
+    def protect(match: re.Match) -> str:
+        protected.append(match.group(0))
+        return f"__NEGATIVE_ACTION_RULE_{len(protected) - 1}__"
+
+    text = re.sub(
+        r"(?i)\b(?:no|without|never)\s+(?:(?:extreme\s+)?slow[- ]motion|"
+        r"bullet[- ]time|impact[- ]freeze(?:\s+frame)?|speed[- ]ramp(?:ing)?|"
+        r"(?:non[- ]combat\s+)?(?:walks?|walking|strolls?|strolling))\b|"
+        r"(?:禁止|不要|不得|严禁|嚴禁)(?:使用|采用|採用|出现|出現)?(?:慢动作|慢動作|"
+        r"子弹时间|子彈時間|冲击定格|衝擊定格|速度渐变|速度漸變|走路|步行|慢慢走)",
+        protect,
+        text,
+    )
+    substitutions = (
+        (r"(?i)\b(?:in\s+)?(?:extreme\s+)?slow[- ]motion\b", "in real time"),
+        (r"(?i)\bbullet[- ]time\b", "real-time"),
+        (r"(?i)\bimpact[- ]freeze(?:\s+frame)?\b", "real-time impact"),
+        (r"(?i)\bspeed[- ]ramp(?:ing)?\b", "continuous full speed"),
+        (r"(?i)\bslowly\b", "at full speed"),
+        (r"(?i)\b(?:walks?|walking|strolls?|strolling)\b", "uses explosive combat footwork"),
+        (r"慢动作|慢動作|子弹时间|子彈時間|冲击定格|衝擊定格|速度渐变|速度漸變", "实时全速"),
+        (r"走路|步行|缓慢走|緩慢走|慢慢走|走进|走進|走入|走出|走向", "以爆发格斗步法切入"),
+    )
+    for pattern, replacement in substitutions:
+        text = re.sub(pattern, replacement, text)
+    for index, original in enumerate(protected):
+        text = text.replace(f"__NEGATIVE_ACTION_RULE_{index}__", original)
+    return " ".join(text.split())
+
+
+HONG_KONG_COMIC_SUPERHERO_OPENING_CONTRACT = (
+    "SUPERHERO PRESSURE ARRIVAL: preserve the first 0.75-1.25 seconds. Begin on a low close "
+    "view as the lead fighter plants weight or lands into the existing confrontation; hair and "
+    "clothing snap, only source-visible grit or loose stone rises, and a physically cast shadow "
+    "expands across the real terrain. The camera makes one fast low-to-eye-level rising arc to the "
+    "face and the opponent answers with the first attack by about 1.25 seconds. This is not walking, "
+    "a pose montage, teleportation, a scenic intro or an unrelated explosion."
+)
+
+
+def _append_once_text(value: object, contract: str) -> str:
+    text = str(value or "").strip()
+    signature = contract.split(":", 1)[0].casefold()
+    if signature and signature in text.casefold():
+        return text
+    return text.rstrip(" .") + (". " if text else "") + contract
+
+
+def enforce_hong_kong_comic_superhero_opening(
+    plan: dict,
+    special_skill_key: object,
+) -> dict:
+    """Keep a compact power arrival without sacrificing the first combat act."""
+
+    if str(special_skill_key or "").strip().casefold() != HONG_KONG_COMIC_FIGHTER_SPECIAL_SKILL:
+        return plan
+    shots = [row for row in plan.get("shots") or [] if isinstance(row, dict)]
+    if not shots:
+        return plan
+    first = min(shots, key=lambda row: float(row.get("start_seconds", 0.0) or 0.0))
+    if float(first.get("start_seconds", 0.0) or 0.0) > 0.01:
+        return plan
+    action = str(first.get("subject_action", "")).strip()
+    if "SUPERHERO PRESSURE ARRIVAL:" not in action:
+        first["subject_action"] = (
+            "[0.00-1.00s SUPERHERO PRESSURE ARRIVAL] The lead fighter plants weight or lands "
+            "into the confrontation; clothing and hair snap, source-visible grit rises and the "
+            "opponent immediately launches the first defence/counter. "
+            + action
+        ).strip()
+    first["camera_movement"] = (
+        "One fast physical low-angle close rising FPV arc and whip-tilt from the planted foot "
+        "to the lead fighter's face, continuing around the two-fighter midpoint as the first "
+        "attack begins; real parallax, no lens zoom and no in-place spin."
+    )
+    first["movement_speed"] = "Explosive real-time"
+    first["additional_direction"] = _append_once_text(
+        first.get("additional_direction", ""),
+        HONG_KONG_COMIC_SUPERHERO_OPENING_CONTRACT,
+    )
+    constraints = str(plan.get("constraints", ""))
+    if "SUPERHERO PRESSURE ARRIVAL:" not in constraints:
+        plan["constraints"] = _append_once_text(
+            constraints, HONG_KONG_COMIC_SUPERHERO_OPENING_CONTRACT
+        )
+    return plan
+
+
+def enforce_street_fighter_fpv_combat_direction(
+    plan: dict,
+    special_skill_key: object,
+) -> dict:
+    """Keep the Street Fighter render on full-speed combat and a physical FPV orbit.
+
+    This is deliberately deterministic.  It prevents an otherwise valid Design response
+    from restoring legacy pull-backs, slow-motion finishing shots or walking coverage after
+    the Special Skill prompt has already asked the model not to use them.
+    """
+
+    if str(special_skill_key or "").strip().casefold() not in COMBAT_ACTION_SPECIAL_SKILLS:
+        return plan
+
+    sector_cycle = (
+        ("front three-quarter at eye level", "low side profile"),
+        ("low side profile", "rear three-quarter at hip level"),
+        ("rear three-quarter at hip level", "high rear oblique"),
+        ("high rear oblique", "opposite side profile at eye level"),
+        ("opposite side profile at eye level", "opposite front three-quarter"),
+        ("opposite front three-quarter", "low front three-quarter"),
+        ("low front three-quarter", "side profile at shin level"),
+        ("side profile at shin level", "front three-quarter at eye level"),
+    )
+    combat_terms = re.compile(
+        r"(?i)\b(?:attack|block|parry|counter|kick|strike|punch|palm|elbow|knee|clinch|grip|"
+        r"throw|takedown|grapple|guard|evade|dodge|slip|pivot|submission|combat|fight)\b|"
+        r"攻|防|挡|擋|拨|撥|踢|击|擊|拳|掌|肘|膝|摔|抱|抓|锁|鎖|绞|絞|压制|壓制|闪|閃"
+    )
+    for index, shot in enumerate(plan.get("shots") or []):
+        if not isinstance(shot, dict):
+            continue
+        start_sector, end_sector = sector_cycle[index % len(sector_cycle)]
+        orbit_direction = "clockwise" if index % 2 == 0 else "counterclockwise"
+        shot["camera_movement"] = (
+            f"Full-speed physical FPV {orbit_direction} orbital translation around the shared midpoint "
+            f"of S1 and S2, travelling from {start_sector} to {end_sector} while both fighters "
+            "execute the assigned attack-and-defence exchange; genuine foreground occlusion and "
+            "background parallax, constant close combat distance, stable subject scale and a "
+            "readable horizon."
+        )
+        shot["movement_speed"] = "Very fast"
+        shot["movement_amplitude"] = "Large"
+
+        raw_action = str(shot.get("subject_action", ""))
+        has_noncombat_walk = bool(re.search(
+            r"(?i)\b(?:walks?|walking|strolls?|strolling|walks?\s+into|"
+            r"enters?\s+(?:the\s+)?(?:room|arena|scene|corridor)|exits?)\b|"
+            r"走路|步行|缓慢走|緩慢走|慢慢走|走进|走進|走入|走出|走向",
+            raw_action,
+        ))
+        action = _street_fighter_realtime_action_text(raw_action)
+        if has_noncombat_walk or not combat_terms.search(action):
+            action = (
+                "S1 and S2 are already within arm's reach and execute an immediate full-speed "
+                "attack, defence and counter exchange; their combat footwork carries forward "
+                "the incoming guard and contact state."
+            )
+        shot["subject_action"] = action
+        shot["optional_flourish"] = _street_fighter_realtime_action_text(
+            shot.get("optional_flourish", "")
+        )
+        direction = _street_fighter_realtime_action_text(
+            shot.get("additional_direction", "")
+        )
+        if "CONTINUOUS FPV COMBAT ORBIT:" not in direction:
+            direction = direction.rstrip(" .") + (". " if direction else "")
+            direction += STREET_FIGHTER_FPV_COMBAT_CONTRACT
+        shot["additional_direction"] = direction
+
+    constraints = str(plan.get("constraints", "")).strip()
+    if "CONTINUOUS FPV COMBAT ORBIT:" not in constraints:
+        constraints = constraints.rstrip(" .") + (". " if constraints else "")
+        constraints += STREET_FIGHTER_FPV_COMBAT_CONTRACT
+    plan["constraints"] = constraints
+
+    markers = [row for row in plan.get("markers") or [] if isinstance(row, dict)]
+    converted_final_marker = False
+    for marker in markers:
+        if not isinstance(marker, dict):
+            continue
+        marker_text = " ".join((
+            str(marker.get("preset", "")), str(marker.get("direction", ""))
+        )).casefold()
+        if any(term in marker_text for term in ("final hold", "ending hold", "stable hold")):
+            marker["preset"] = "Final Combat Resolve"
+            marker["direction"] = (
+                "Complete the final contact and recoil at full speed, then settle both fighters on "
+                "readable support while the physical FPV camera decelerates into a stable eye-level "
+                "three-quarter composition for the last 0.75-1.00 second."
+            )
+            converted_final_marker = True
+        else:
+            marker["direction"] = _street_fighter_realtime_action_text(
+                marker.get("direction", "")
+            )
+            if any(
+                token in str(marker.get("preset", "")).casefold()
+                for token in ("final", "ending")
+            ):
+                marker["preset"] = "Final Combat Resolve"
+                marker["direction"] = (
+                    "Complete the final contact and recoil at full speed, then settle both fighters on "
+                    "readable support while the physical FPV camera decelerates into a stable eye-level "
+                    "three-quarter composition for the last 0.75-1.00 second."
+                )
+                converted_final_marker = True
+    if not converted_final_marker:
+        markers.append({
+            "time_seconds": snap_half_second(
+                max(0.0, float(plan.get("duration_seconds", 0.5) or 0.5) - 0.5),
+                float(plan.get("duration_seconds", 0.5) or 0.5),
+            ),
+            "preset": "Final Combat Resolve",
+            "direction": (
+                "Complete the final contact and recoil at full speed, then settle both fighters on "
+                "readable support while the physical FPV camera decelerates into a stable eye-level "
+                "three-quarter composition for the last 0.75-1.00 second."
+            ),
+        })
+    plan["markers"] = markers
+    for transition in plan.get("transitions") or []:
+        if isinstance(transition, dict):
+            transition["direction"] = _street_fighter_realtime_action_text(
+                transition.get("direction", "")
+            )
+    return plan
+
+
+def enforce_street_fighter_cast_market_and_spectators(
+    plan: dict,
+    existing_media: list[dict] | None,
+    special_skill_key: object,
+) -> dict:
+    """Lock P1/P2 while giving Z-Image only the market/audience plate.
+
+    Independent T2I fighter stills compete with the uploaded P1/P2 pixels and
+    are the main source of generic male/female substitutions.  In P1/P2 cast
+    mode, this pass removes those competing person-bearing requests and adds
+    one reusable environment-only audience plate for H3.
+    """
+
+    if str(special_skill_key or "").strip().casefold() != STREET_FIGHTER_SPECIAL_SKILL:
+        return plan
+
+    def append_contract(value: object, contract: str) -> str:
+        text = str(value or "").strip()
+        if contract.split(":", 1)[0] + ":" in text:
+            return text
+        return text.rstrip(" .") + (". " if text else "") + contract
+
+    plan["global_visual_style"] = append_contract(
+        plan.get("global_visual_style", ""), STREET_FIGHTER_MARKET_CONTRACT
+    )
+    plan["constraints"] = append_contract(
+        plan.get("constraints", ""), STREET_FIGHTER_MARKET_CONTRACT
+    )
+    for shot in plan.get("shots") or []:
+        if not isinstance(shot, dict):
+            continue
+        shot["additional_direction"] = append_contract(
+            shot.get("additional_direction", ""), STREET_FIGHTER_MARKET_CONTRACT
+        )
+        environment = str(shot.get("environment_response", "")).strip()
+        market_state = (
+            "The ongoing contact affects only the established Kowloon-style wet seafood and "
+            "vegetable market: nearby puddles, crushed ice, hanging lamps, fish tanks, produce "
+            "crates and perimeter spectators react after the physical impact."
+        )
+        if "established Kowloon-style wet seafood" not in environment:
+            shot["environment_response"] = (
+                environment.rstrip(" .") + (". " if environment else "") + market_state
+            )
+
+    bindings = street_fighter_character_bindings(existing_media)
+    bound_ids = {row["media_id"] for row in bindings}
+    has_complete_cast = {"P1", "P2"}.issubset(bound_ids)
+    if has_complete_cast:
+        plan["constraints"] = append_contract(
+            plan.get("constraints", ""), STREET_FIGHTER_P1_P2_PIXEL_LOCK
+        )
+        for shot in plan.get("shots") or []:
+            if isinstance(shot, dict):
+                shot["additional_direction"] = append_contract(
+                    shot.get("additional_direction", ""), STREET_FIGHTER_P1_P2_PIXEL_LOCK
+                )
+        for use in plan.get("existing_media_uses") or []:
+            if not isinstance(use, dict) or str(use.get("media_id", "")).upper() not in {"P1", "P2"}:
+                continue
+            use["usage"] = "h3_reference"
+            use["reuse_policy"] = "whole_design"
+            use["start_seconds"] = 0.0
+            use["end_seconds"] = float(plan.get("duration_seconds", 0.5) or 0.5)
+            use["identity_anchor"] = True
+            use["instruction"] = append_contract(
+                use.get("instruction", ""), STREET_FIGHTER_P1_P2_PIXEL_LOCK
+            )
+
+    filtered_requests: list[dict] = []
+    omitted: list[str] = []
+    fighter_request_re = re.compile(
+        r"(?i)(?:\bS[12]\b|\b(?:fighters?|combatants?|warriors?)\b|karate|judo|wing chun|"
+        r"jeet kune do|street fighter|格斗者|格鬥者|武者|空手道|柔道|咏春|詠春|截拳道)"
+    )
+    audience_requirement_id = "street_fighter_kowloon_market_spectators"
+    for request in plan.get("media_requests") or []:
+        if not isinstance(request, dict):
+            continue
+        requirement_id = str(request.get("requirement_id", ""))
+        if requirement_id == audience_requirement_id:
+            continue
+        if has_complete_cast and str(request.get("media_type", "")).lower() == "image":
+            request_text = " ".join(
+                [str(request.get("prompt", ""))]
+                + [str(value) for value in request.get("subject_keywords") or []]
+            )
+            if bool(request.get("identity_anchor", False)) or fighter_request_re.search(request_text):
+                omitted.append(requirement_id or "generated_fighter_reference")
+                continue
+        filtered_requests.append(request)
+
+    existing_audience_use = next(
+        (
+            row for row in plan.get("existing_media_uses") or []
+            if isinstance(row, dict)
+            and str(row.get("requirement_id", "")) == audience_requirement_id
+        ),
+        None,
+    )
+    duration = float(plan.get("duration_seconds", 0.5) or 0.5)
+    if existing_audience_use is not None:
+        existing_audience_use.update({
+            "usage": "h3_reference",
+            "reuse_policy": "whole_design",
+            "start_seconds": 0.0,
+            "end_seconds": duration,
+        })
+    else:
+        filtered_requests.append({
+            "requirement_id": audience_requirement_id,
+            "media_type": "image",
+            "usage": "h3_reference",
+            "reuse_policy": "whole_design",
+            "start_seconds": 0.0,
+            "end_seconds": duration,
+            "track": "V3",
+            "subject_keywords": [
+                "Hong Kong Kowloon Walled City-style wet market arena",
+                "fish seafood vegetable stalls",
+                "background spectators and vendors",
+            ],
+            "prompt": (
+                "Cinematic photoreal live-action environment reference, Hong Kong Kowloon Walled "
+                "City-style enclosed fish, seafood and vegetable wet market at night. One coherent "
+                "cramped fight arena with aged tiled and concrete stalls, hanging practical lamps, "
+                "dense overhead pipes and cables, fish tanks, crushed ice, seafood trays, wet produce "
+                "crates, metal counters, drainage channels, steam and a wet slippery reflective floor. "
+                "Twelve to eighteen distinct adult local market vendors and spectators stand only at "
+                "the far perimeter, reacting toward the empty central fight lane; varied faces, ages, "
+                "wardrobe and poses, no duplicate person, no one entering the central lane. Environment "
+                "and background-audience plate only: do not depict either principal fighter and do not "
+                "invent substitutes for P1 or P2. Clean readable central combat space, practical cyan, "
+                "yellow-green and warm stall lighting, humid air, subtle steam, physically correct wet "
+                "reflections, stable architecture, no readable signs, no text, no logos, no watermark."
+            ),
+            "negative_prompt": (
+                "principal fighter, foreground fighter, two central fighters, duplicate person, cloned "
+                "crowd face, crowd inside fight lane, boxing ring, clean supermarket, dry floor, empty "
+                "market, stage spotlight, readable sign, subtitle, text, logo, watermark"
+            ),
+        })
+    plan["media_requests"] = filtered_requests
+
+    warnings = [str(value) for value in plan.get("design_warnings") or []]
+    if omitted:
+        warnings.append(
+            "Removed competing Z-Image fighter reference request(s) "
+            + ", ".join(omitted)
+            + "; uploaded P1 and P2 remain the only principal-fighter identity sources."
+        )
+    audience_notice = (
+        "Reserved one reusable Z-Image environment plate for the Kowloon-style wet seafood and "
+        "vegetable market spectators; the plate may not redefine P1 or P2."
+    )
+    if audience_notice not in warnings:
+        warnings.append(audience_notice)
+    plan["design_warnings"] = list(dict.fromkeys(warnings))
+    return plan
+
+H3_STABLE_DIALOGUE_LANGUAGES = (
+    "Arabic",
+    "Chinese",
+    "English",
+    "French",
+    "German",
+    "Italian",
+    "Japanese",
+    "Korean",
+    "Portuguese",
+    "Russian",
+    "Spanish",
+)
 
 
 class DesignDurationContractError(ValueError):
     """The model changed a duration that the user specified explicitly."""
+
+
+class DesignDialogueLanguageContractError(ValueError):
+    """The model ignored the dialogue language selected in Design."""
+
+
+class DesignSpeechLayerContractError(ValueError):
+    """The model described requested speech without creating editable Text Layers."""
+
+
+class DesignJSONDecodeError(ValueError):
+    """The model returned a malformed or completion-truncated Design JSON object."""
+
+    def __init__(self, message: str, *, line: int, column: int, position: int) -> None:
+        super().__init__(message)
+        self.line = int(line)
+        self.column = int(column)
+        self.position = int(position)
+
+
+def is_analysis_only_media_use(value: object) -> bool:
+    """Return True when a Media Pool row is planning evidence, never H3 input."""
+
+    row = value if isinstance(value, dict) else {}
+    return str(row.get("usage", "")).strip().casefold() in ANALYSIS_ONLY_MEDIA_USAGES
+
+
+def speech_timing_budget(
+    content: object,
+    language: object = "",
+    delivery: object = "",
+    allocated_seconds: float = 0.0,
+) -> dict:
+    """Estimate whether exact authored speech can fit its Timeline interval.
+
+    This is deliberately deterministic and conservative.  It is not a TTS
+    duration oracle; it protects H3 native dialogue from being asked to speak
+    so quickly that words are advanced, reordered, omitted or paraphrased.
+    """
+    text = " ".join(str(content or "").split())
+    allocated = max(0.0, float(allocated_seconds or 0.0))
+    if not text:
+        return {
+            "required_seconds": 0.0,
+            "allocated_seconds": allocated,
+            "overflow_seconds": 0.0,
+            "risk": False,
+            "rate_label": "empty",
+        }
+    language_text = str(language or "").lower()
+    delivery_text = str(delivery or "").lower()
+    cjk_count = len(re.findall(r"[\u3400-\u9fff\u3040-\u30ff\uac00-\ud7af]", text))
+    latin_words = len(re.findall(r"[A-Za-z0-9]+(?:['’-][A-Za-z0-9]+)?", text))
+    is_cjk = bool(cjk_count) or any(
+        token in language_text
+        for token in ("chinese", "mandarin", "japanese", "korean", "中文", "普通话")
+    )
+    pace = 1.0
+    if re.search(r"fast|rapid|urgent|agitated|angry|激动|急促|快速", delivery_text):
+        pace = 1.16
+    elif re.search(
+        r"slow|tearful|hesitant|whisper|controlled|emotional|低声|哭|迟疑|缓慢",
+        delivery_text,
+    ):
+        pace = 0.86
+    if is_cjk:
+        units = cjk_count + latin_words * 2.0
+        base_seconds = units / max(0.1, DEFAULT_SPEECH_CHARACTERS_PER_SECOND * pace)
+        rate_label = f"{DEFAULT_SPEECH_CHARACTERS_PER_SECOND * pace:.2f} chars/s"
+    else:
+        words = max(latin_words, len(text.split()))
+        base_seconds = words / max(0.1, DEFAULT_SPEECH_WORDS_PER_SECOND * pace)
+        rate_label = f"{DEFAULT_SPEECH_WORDS_PER_SECOND * pace:.2f} words/s"
+    pause_seconds = (
+        len(re.findall(r"[,，、;；:]", text)) * 0.10
+        + len(re.findall(r"[.!?。！？]", text)) * 0.22
+        + len(re.findall(r"…|\.\.\.", text)) * 0.32
+    )
+    required = max(0.5, math.ceil((base_seconds + pause_seconds) * 2.0) / 2.0)
+    overflow = max(0.0, required - allocated)
+    return {
+        "required_seconds": round(required, 3),
+        "allocated_seconds": round(allocated, 3),
+        "overflow_seconds": round(overflow, 3),
+        "risk": overflow > 0.01,
+        "rate_label": rate_label,
+    }
+
+
+def _shift_interval_at_boundary(row: dict, boundary: float, delta: float) -> None:
+    start = float(row.get("start_seconds", 0.0))
+    end = float(row.get("end_seconds", start))
+    if start >= boundary - 1e-9:
+        row["start_seconds"] = round(start + delta, 6)
+        row["end_seconds"] = round(end + delta, 6)
+    elif end > boundary + 1e-9:
+        row["end_seconds"] = round(end + delta, 6)
+
+
+def _owning_shot_for_interval(shots: list[dict], start: float, end: float) -> dict | None:
+    """Return the Shot that owns the largest part of a timed speech event.
+
+    A line may end exactly on a Shot boundary.  The previous implementation
+    shifted only rows *after* that boundary, so a final line could extend the
+    project duration without extending its Shot.  Selecting the owner before
+    ripple editing lets the Shot absorb the complete authored performance.
+    """
+
+    midpoint = (start + end) / 2.0
+    candidates: list[tuple[float, int, dict]] = []
+    for index, shot in enumerate(shots):
+        if not isinstance(shot, dict):
+            continue
+        shot_start = float(shot.get("start_seconds", 0.0) or 0.0)
+        shot_end = float(shot.get("end_seconds", shot_start) or shot_start)
+        overlap = max(0.0, min(end, shot_end) - max(start, shot_start))
+        contains_midpoint = shot_start - 1e-9 <= midpoint <= shot_end + 1e-9
+        if overlap > 0.0 or contains_midpoint or (
+            shot_start - 1e-9 <= start <= shot_end + 1e-9
+        ):
+            candidates.append((overlap, -index, shot))
+    if candidates:
+        return max(candidates, key=lambda row: (row[0], row[1]))[2]
+    preceding = [
+        shot for shot in shots
+        if isinstance(shot, dict)
+        and float(shot.get("end_seconds", 0.0) or 0.0) <= start + 1e-9
+    ]
+    return max(
+        preceding,
+        key=lambda shot: float(shot.get("end_seconds", 0.0) or 0.0),
+        default=(shots[-1] if shots else None),
+    )
+
+
+def ensure_complete_shot_coverage(plan: dict) -> dict:
+    """Guarantee exactly one chronological Shot lane across the full duration.
+
+    Media and Text tracks may overlap.  Camera Shot blocks may not, and no
+    renderable time is allowed to exist without a Shot.  Gaps are resolved at
+    their nearest shared boundary; the first and last Shots absorb leading or
+    trailing time.  Timed speech is then rebound deterministically by midpoint.
+    """
+
+    duration = max(0.5, float(plan.get("duration_seconds", 0.5) or 0.5))
+    shots = sorted(
+        [row for row in (plan.get("shots") or []) if isinstance(row, dict)],
+        key=lambda row: (
+            float(row.get("start_seconds", 0.0) or 0.0),
+            float(row.get("end_seconds", 0.0) or 0.0),
+        ),
+    )
+    if not shots:
+        return plan
+    warnings = [str(value) for value in plan.get("design_warnings") or []]
+    first_start = float(shots[0].get("start_seconds", 0.0) or 0.0)
+    if first_start > 1e-9:
+        shots[0]["start_seconds"] = 0.0
+        warnings.append(
+            f"Extended the first Shot backward from {first_start:.2f}s to 0.00s so no render time is Shot-less."
+        )
+    previous = shots[0]
+    for current in shots[1:]:
+        previous_end = float(previous.get("end_seconds", 0.0) or 0.0)
+        current_start = float(current.get("start_seconds", 0.0) or 0.0)
+        if abs(current_start - previous_end) > 1e-9:
+            boundary = round((previous_end + current_start) / 2.0 * 2.0) / 2.0
+            minimum = float(previous.get("start_seconds", 0.0) or 0.0) + 0.5
+            maximum = float(current.get("end_seconds", current_start) or current_start) - 0.5
+            boundary = round(min(max(boundary, minimum), maximum), 6)
+            previous["end_seconds"] = boundary
+            current["start_seconds"] = boundary
+            warnings.append(
+                f"Closed a Shot-lane gap/overlap at {boundary:.2f}s; every renderable frame now belongs to one Shot."
+            )
+        previous = current
+    last_end = float(shots[-1].get("end_seconds", 0.0) or 0.0)
+    if last_end < duration - 1e-9:
+        shots[-1]["end_seconds"] = duration
+        warnings.append(
+            f"Extended the final Shot from {last_end:.2f}s to {duration:.2f}s so dialogue expansion cannot create a Shot-less Segment."
+        )
+    elif last_end > duration + 1e-9:
+        shots[-1]["end_seconds"] = duration
+    for index, shot in enumerate(shots, 1):
+        shot["id"] = f"S{index}"
+    for layer in plan.get("text_layers") or []:
+        if not isinstance(layer, dict):
+            continue
+        start = float(layer.get("start_seconds", 0.0) or 0.0)
+        end = float(layer.get("end_seconds", start) or start)
+        owner = _owning_shot_for_interval(shots, start, end)
+        if owner is not None:
+            layer["shot_id"] = str(owner.get("id", ""))
+    plan["shots"] = shots
+    plan["design_warnings"] = list(dict.fromkeys(warnings))
+    return plan
+
+
+def auto_adjust_speech_shot_timing(plan: dict) -> dict:
+    """Extend overloaded speech, its owning Shot and every later cue coherently."""
+    result = plan
+    original_duration = float(result.get("duration_seconds", 0.0) or 0.0)
+    result.setdefault("_speech_timing_base_duration", original_duration)
+    speech_layers = [
+        row for row in result.get("text_layers") or []
+        if isinstance(row, dict)
+        and str(row.get("role", "")).lower() in {"dialogue", "voice_over", "lyrics"}
+        and str(row.get("content", "")).strip()
+    ]
+    warnings = [str(value) for value in result.get("design_warnings") or []]
+    for layer in sorted(speech_layers, key=lambda row: (float(row["start_seconds"]), float(row["end_seconds"]))):
+        start = float(layer["start_seconds"])
+        end = float(layer["end_seconds"])
+        budget = speech_timing_budget(
+            layer.get("content", ""), layer.get("language", ""),
+            layer.get("delivery", ""), end - start,
+        )
+        layer["speech_budget"] = dict(budget)
+        if not budget["risk"]:
+            continue
+        if bool(layer.get("authored_timing_locked", False)):
+            layer["speech_budget"]["authored_timing_locked"] = True
+            warnings.append(
+                f"Exact authored speech at {start:.2f}-{end:.2f}s needs about "
+                f"{budget['required_seconds']:.2f}s. Its user timecode is locked, so the "
+                "Timeline clip remains red until the Shot is lengthened or the words are shortened."
+            )
+            continue
+        delta = math.ceil(float(budget["overflow_seconds"]) * 2.0) / 2.0
+        if float(result.get("duration_seconds", 0.0)) + delta > MAX_DESIGN_DURATION_SECONDS:
+            layer["speech_budget"]["blocked_by_max_duration"] = True
+            warnings.append(
+                f"Speech at {start:.2f}-{end:.2f}s needs about {budget['required_seconds']:.2f}s "
+                "and remains over budget because the 600-second Design limit was reached."
+            )
+            continue
+        boundary = end
+        shots = [row for row in result.get("shots") or [] if isinstance(row, dict)]
+        owning_shot = _owning_shot_for_interval(shots, start, end)
+        layer.setdefault("authored_start_seconds", start)
+        layer.setdefault("authored_end_seconds", end)
+        layer["end_seconds"] = round(end + delta, 6)
+        layer["speech_timing_auto_adjusted"] = True
+        layer["speech_budget_was_overloaded"] = True
+        for candidate in result.get("text_layers") or []:
+            if candidate is not layer and isinstance(candidate, dict):
+                _shift_interval_at_boundary(candidate, boundary, delta)
+        for family in ("shots", "existing_media_uses", "media_requests"):
+            for candidate in result.get(family) or []:
+                if isinstance(candidate, dict):
+                    if family == "shots" and candidate is owning_shot:
+                        candidate["end_seconds"] = round(
+                            max(float(candidate.get("end_seconds", end)), end) + delta,
+                            6,
+                        )
+                    else:
+                        _shift_interval_at_boundary(candidate, boundary, delta)
+        for family in ("transitions", "markers"):
+            for candidate in result.get(family) or []:
+                if not isinstance(candidate, dict):
+                    continue
+                cue_time = float(candidate.get("time_seconds", 0.0))
+                if cue_time >= boundary - 1e-9:
+                    candidate["time_seconds"] = round(cue_time + delta, 6)
+        result["duration_seconds"] = round(
+            float(result.get("duration_seconds", 0.0)) + delta, 6
+        )
+        layer["speech_budget"] = speech_timing_budget(
+            layer.get("content", ""), layer.get("language", ""),
+            layer.get("delivery", ""), float(layer["end_seconds"]) - start,
+        )
+        warnings.append(
+            f"Speech at {start:.2f}-{boundary:.2f}s exceeded its safe delivery budget; "
+            f"extended the owning Shot and all later Timeline events by {delta:.2f}s."
+        )
+    result["design_warnings"] = warnings
+    # Speech expansion can occur after the Design marker was normalized.
+    # Keep an ending/final-hold cue attached to the actual tail instead of
+    # leaving it stranded several seconds before the final Shot ends.
+    final_marker_time = snap_half_second(
+        max(0.0, float(result.get("duration_seconds", 0.5) or 0.5) - 1.0),
+        float(result.get("duration_seconds", 0.5) or 0.5),
+    )
+    for marker in result.get("markers") or []:
+        if not isinstance(marker, dict):
+            continue
+        marker_text = " ".join((
+            str(marker.get("preset", "")), str(marker.get("direction", ""))
+        )).casefold()
+        if any(token in marker_text for token in (
+            "final", "ending hold", "final hold", "final combat resolve",
+        )):
+            marker["time_seconds"] = final_marker_time
+    return ensure_complete_shot_coverage(result)
+
+
+_VISIBLE_PERSON_RE = re.compile(
+    r"\b(?:woman|man|girl|boy|female|male|person|protagonist|hero|heroine|actor|character)\b|"
+    r"女人|女子|女性|男人|男子|男性|女孩|男孩|主角|人物|角色|刺客|将军|將軍",
+    re.I,
+)
+
+_IDENTITY_REFERENCE_RE = re.compile(
+    r"(?:strict|primary|authoritative).{0,40}(?:identity|face)|"
+    r"(?:identity|face).{0,40}(?:anchor|match|consistent|preserv)|"
+    r"(?:preserv|keep).{0,40}(?:facial|face|identity)|"
+    r"人脸.{0,20}(?:保持|一致|相同)|"
+    r"(?:脸|面孔|身份).{0,20}(?:锚点|錨點|保持|一致|匹配)",
+    re.I | re.S,
+)
+
+_IDENTITY_WORD_RE = re.compile(
+    r"\b(?:face|facial|identity|same\s+person|same\s+character|look\s+exactly|consistent|match(?:es|ing)?)\b|"
+    r"人脸|面孔|长相|長相|样子|樣子|身份|"
+    r"同一人|同一人物|全程保持|保持一致",
+    re.I,
+)
+
+_GENERATED_IDENTITY_PREFIX = (
+    "PRIMARY RECURRING CHARACTER IDENTITY ANCHOR. Show one clear, unobstructed, "
+    "recognizable face with exact age range, facial structure, hair, skin tone, wardrobe "
+    "and owned props suitable for reuse through the full story. "
+)
+
+_CHARACTER_CONTINUITY_CONTRACT = {
+    "fixed": [
+        "face and recognizable identity",
+        "age",
+        "skin tone",
+        "hairstyle and hair color",
+        "body proportions and stable anatomy",
+        "top/outerwear style, material and color",
+        "trousers, skirt or other lower-body garment style and color",
+        "shoes style and color",
+        "accessory ownership",
+    ],
+    "variable": [
+        "facial expression",
+        "pose",
+        "arm angle",
+        "leg angle",
+        "walking and running phase",
+        "physically plausible hair and clothing motion caused by movement or wind",
+    ],
+    "story_only": [
+        "wardrobe change",
+        "hairstyle change",
+        "injury",
+        "dirt or stains",
+        "clothing or prop damage",
+        "removing shoes",
+        "losing or transferring an accessory",
+    ],
+}
+
+_SUPPORT_CONTINUITY_DIRECTION = (
+    " Preserve the anchor's current hairstyle, hair color, skin tone, body proportions, "
+    "top/outerwear, lower-body garment, shoes and accessory ownership. Expression, pose, "
+    "arm/leg angles, gait phase and physical cloth/hair motion may change. Never invent a "
+    "wardrobe or hairstyle change, injury, dirt, damage, shoe removal or accessory loss."
+)
+
+
+def _character_continuity_contract_text(anchor_label: str) -> str:
+    fixed = ", ".join(_CHARACTER_CONTINUITY_CONTRACT["fixed"])
+    variable = ", ".join(_CHARACTER_CONTINUITY_CONTRACT["variable"])
+    story_only = ", ".join(_CHARACTER_CONTINUITY_CONTRACT["story_only"])
+    return (
+        f"CHARACTER CONTINUITY CONTRACT for {anchor_label}. FIXED unless an explicitly authored "
+        f"Shot changes state: {fixed}. FREE TO VARY with the physical action: {variable}. "
+        f"STORY-ONLY CHANGES: {story_only}; never invent these changes. Every authored change must "
+        "name its exact trigger Shot, enter that Shot's outgoing continuity state, and persist as "
+        "the incoming state of every following Shot until another explicit change occurs."
+    )
+
+
+def _attach_character_continuity_contract(
+    plan: dict,
+    anchor: dict,
+    *,
+    anchor_label: str,
+    prompt_field: str,
+) -> None:
+    contract = _character_continuity_contract_text(anchor_label)
+    anchor["character_continuity_contract"] = deepcopy(
+        _CHARACTER_CONTINUITY_CONTRACT
+    )
+    if "CHARACTER CONTINUITY CONTRACT" not in str(anchor.get(prompt_field, "")):
+        anchor[prompt_field] = (
+            str(anchor.get(prompt_field, "")).rstrip(" .")
+            + (". " if str(anchor.get(prompt_field, "")).strip() else "")
+            + contract
+        )
+    plan["character_continuity_contract"] = deepcopy(
+        _CHARACTER_CONTINUITY_CONTRACT
+    )
+    if "CHARACTER CONTINUITY CONTRACT" not in str(plan.get("constraints", "")):
+        plan["constraints"] = (
+            str(plan.get("constraints", "")).rstrip(" .")
+            + (". " if str(plan.get("constraints", "")).strip() else "")
+            + contract
+        )
+
+
+def _existing_identity_anchor(plan: dict) -> dict | None:
+    """Prefer a loaded user Picture whenever it is declared as the face source."""
+    image_uses = [
+        row for row in plan.get("existing_media_uses") or []
+        if isinstance(row, dict)
+        and row.get("media_type") == "image"
+        and not is_analysis_only_media_use(row)
+    ]
+    return next(
+        (row for row in image_uses if bool(row.get("identity_anchor", False))),
+        None,
+    ) or next(
+        (
+            row for row in image_uses
+            if _IDENTITY_REFERENCE_RE.search(
+                " ".join(
+                    [str(row.get("instruction", ""))]
+                    + [str(value) for value in row.get("subject_keywords") or []]
+                )
+            )
+        ),
+        None,
+    )
+
+
+def _authored_identity_picture_ids(requirement: str) -> list[str]:
+    """Find @P references that the user explicitly binds to face identity."""
+    text = str(requirement or "")
+    found: list[str] = []
+    for match in re.finditer(r"@P([1-9]\d*)\b", text, re.I):
+        start = max(0, match.start() - 140)
+        end = min(len(text), match.end() + 140)
+        if _IDENTITY_WORD_RE.search(text[start:end]):
+            media_id = f"P{int(match.group(1))}"
+            if media_id not in found:
+                found.append(media_id)
+    return found
+
+
+def _request_recreates_existing_anchor(request: dict, media_id: str) -> bool:
+    """Return True for an independently generated pose of an existing identity.
+
+    A T2I model cannot guarantee the exact face from a textual ``face matching
+    @P1`` instruction.  Passing that independently synthesized face to H3 makes
+    it compete with the real P1, so these redundant action-state Pictures are
+    omitted and the Shot prose supplies the pose instead.
+    """
+    text = " ".join(
+        [str(request.get("prompt", ""))]
+        + [str(value) for value in request.get("subject_keywords") or []]
+    )
+    ordinal_match = re.search(r"(\d+)$", media_id)
+    picture_tag = (
+        rf"|<Picture\s+{ordinal_match.group(1)}>"
+        if ordinal_match else ""
+    )
+    token = re.compile(
+        rf"(?:@?{re.escape(media_id)}\b{picture_tag})",
+        re.I,
+    )
+    for match in token.finditer(text):
+        start = max(0, match.start() - 140)
+        end = min(len(text), match.end() + 140)
+        if _IDENTITY_WORD_RE.search(text[start:end]):
+            return True
+    return False
+
+
+def _strip_generated_anchor_augmentation(prompt: str) -> str:
+    """Remove identity/support text appended by an earlier normalization pass."""
+    text = str(prompt or "")
+    lower = text.casefold()
+    markers = (
+        "the authoritative recurring face identity is the user-supplied",
+        "supporting environment or action-state reference only",
+        "distinct secondary character reference only",
+        "distinct secondary character identity",
+    )
+    positions = [lower.find(marker) for marker in markers if lower.find(marker) >= 0]
+    if positions:
+        text = text[:min(positions)]
+    return text.rstrip(" .")
+
+
+def _direct_request_text(request: dict) -> str:
+    """Return only the requested still, excluding appended story-wide prose."""
+
+    prompt = _strip_generated_anchor_augmentation(str(request.get("prompt", "")))
+    prompt = re.split(r"\bStory identity ledger\s*:", prompt, maxsplit=1, flags=re.I)[0]
+    return " ".join(
+        [str(request.get("requirement_id", ""))]
+        + [str(value) for value in request.get("subject_keywords") or []]
+        + [prompt]
+    )
+
+
+def _request_visible_person_count(request: dict) -> int:
+    text = _direct_request_text(request).lower()
+    # Speaker/subject identifiers are authoritative in Director Design.  The
+    # generated auto-image prose often says ``S1 ... S2 ...`` without also
+    # spelling out "two people"; treating that as an environment plate used
+    # to append a contradictory no-people guard to a two-fighter frame.
+    role_ids = set(re.findall(r"(?<![a-z0-9_])s([1-9]\d*)(?![a-z0-9_])", text, re.I))
+    if len(role_ids) >= 2:
+        return len(role_ids)
+    if re.search(
+        r"\b(?:exactly\s+)?(?:two|2)\s+(?:(?:male|female)\s+)?"
+        r"(?:people|persons|figures|characters|actors|fighters|warriors|martial artists|"
+        r"visible identity subjects)\b",
+        text,
+    ):
+        return 2
+    if re.search(
+        r"(?:正好|恰好|仅有|只有)?\s*(?:两|兩|2)\s*(?:名|位|个|個)?"
+        r"(?:人物|角色|人|格斗者|格鬥者|战士|戰士|武者)",
+        text,
+        re.I,
+    ):
+        return 2
+    if re.search(
+        r"\b(?:one|single|1|exactly\s+one)\s+"
+        r"(?:woman|man|girl|boy|person|figure|character|actor|general|assassin|fighter|warrior)\b",
+        text,
+    ):
+        return 1
+    named_roles = set()
+    if re.search(r"\b(?:woman|female|girl|heroine)\b|女人|女性|女孩", text, re.I):
+        named_roles.add("female")
+    if re.search(r"\b(?:man|male|boy|hero)\b|男人|男性|男孩", text, re.I):
+        named_roles.add("male")
+    if not named_roles and re.search(
+        r"\b(?:general|assassin|fighter|warrior|soldier|guard|officer|protagonist)\b|"
+        r"将军|將軍|刺客|战士|戰士|士兵|守卫|守衛|主角",
+        text,
+        re.I,
+    ):
+        named_roles.add("person")
+    return len(named_roles)
+
+
+_SUBJECT_COUNT_GUARD_PATTERNS = (
+    re.compile(
+        r"\s*EXACT SUBJECT COUNT LOCK:\s*exactly one visible identity subject\."
+        r"(?:\s*Use a clean single-person composition with no background people, crowd, staff,"
+        r" silhouettes, human reflections, portraits, mannequins, duplicated bodies or face-like figures\.)?",
+        re.I,
+    ),
+    re.compile(
+        r"\s*EXACT SUBJECT COUNT LOCK:\s*exactly two unique visible people and no one else\."
+        r"(?:\s*Never duplicate either person; no crowd, staff, silhouettes, human reflections,"
+        r" portraits, mannequins, split-screen copies or background figures\.)?",
+        re.I,
+    ),
+    re.compile(
+        r"\s*EXACT SUBJECT COUNT LOCK:\s*exactly one visible person and no one else\."
+        r"(?:\s*No crowd, staff, silhouettes, human reflections, portraits, mannequins or duplicated bodies\.)?",
+        re.I,
+    ),
+    re.compile(
+        r"\s*ENVIRONMENT-ONLY COUNT LOCK:\s*no visible people, human silhouettes, reflections,"
+        r" portraits, mannequins or face-like figures\.",
+        re.I,
+    ),
+)
+
+
+def _strip_subject_count_guards(value: object) -> str:
+    """Remove stale deterministic guards before calculating the new count.
+
+    Normalization is intentionally repeatable (Plan, Apply and project reload
+    all run it).  A guard from an earlier, less complete request must therefore
+    be replaced rather than allowed to coexist with the corrected contract.
+    """
+
+    text = str(value or "")
+    for pattern in _SUBJECT_COUNT_GUARD_PATTERNS:
+        text = pattern.sub("", text)
+    return " ".join(text.split()).strip(" .")
+
+
+def _request_is_distinct_character(request: dict, anchor: dict) -> bool:
+    """Distinguish another actor from another pose of the anchor.
+
+    Auto reference repair commonly emits several frozen states containing the
+    *same woman*.  Treating every person-bearing still after the first as a new
+    actor destroys identity continuity.  A different gender or an explicit
+    secondary/different-person declaration is authoritative; otherwise the
+    reference remains support for the established recurring identity.
+    """
+    if bool(request.get("distinct_character_identity", False)):
+        return True
+    text = _direct_request_text(request).lower()
+    if re.search(
+        r"\b(?:different|separate|secondary|another|other|second)\s+"
+        r"(?:woman|man|girl|boy|person|character|actor)\b|"
+        r"不同(?:的)?(?:女人|男人|人物|角色)|另一(?:个|個)(?:女人|男人|人物|角色)",
+        text,
+        re.I,
+    ):
+        return True
+    if re.search(r"\bthe\s+same\s+(?:woman|man|girl|boy|person|character)\b|同一(?:人物|角色|女人|男人)", text, re.I):
+        return False
+    anchor_text = _direct_request_text(anchor).lower()
+    request_female = bool(re.search(r"\b(?:woman|female|girl|heroine)\b|女人|女性|女孩", text))
+    request_male = bool(re.search(r"\b(?:man|male|boy|hero)\b|男人|男性|男孩", text))
+    anchor_female = bool(re.search(r"\b(?:woman|female|girl|heroine)\b|女人|女性|女孩", anchor_text))
+    anchor_male = bool(re.search(r"\b(?:man|male|boy|hero)\b|男人|男性|男孩", anchor_text))
+    return bool(
+        (request_female and anchor_male and not anchor_female)
+        or (request_male and anchor_female and not anchor_male)
+    )
+
+
+def _append_subject_count_guard(request: dict, *, identity: bool = False) -> None:
+    """Make T2I reference people deterministic and safe for later H3 reuse."""
+
+    # Count from guard-free authored prose and always replace an old guard.
+    # This closes the invalid ``two people`` + ``one/no people`` combination
+    # that caused duplicate/missing fighters in generated comic keyframes.
+    request["prompt"] = _strip_subject_count_guards(request.get("prompt", ""))
+    prompt = str(request.get("prompt", "")).strip()
+    count = _request_visible_person_count(request)
+    if identity and count < 2:
+        guard = (
+            " EXACT SUBJECT COUNT LOCK: exactly one visible identity subject. Use a clean "
+            "single-person composition with no background people, crowd, staff, silhouettes, "
+            "human reflections, portraits, mannequins, duplicated bodies or face-like figures."
+        )
+    elif count == 2:
+        guard = (
+            " EXACT SUBJECT COUNT LOCK: exactly two unique visible people and no one else. "
+            "Never duplicate either person; no crowd, staff, silhouettes, human reflections, "
+            "portraits, mannequins, split-screen copies or background figures."
+        )
+    elif count == 1:
+        guard = (
+            " EXACT SUBJECT COUNT LOCK: exactly one visible person and no one else. No crowd, "
+            "staff, silhouettes, human reflections, portraits, mannequins or duplicated bodies."
+        )
+    else:
+        guard = (
+            " ENVIRONMENT-ONLY COUNT LOCK: no visible people, human silhouettes, reflections, "
+            "portraits, mannequins or face-like figures."
+        )
+    request["prompt"] = prompt.rstrip(" .") + "." + guard
+
+
+def _scope_generated_environment_reference(plan: dict, request: dict) -> None:
+    """Prevent a project-wide environment still from contaminating every Segment."""
+
+    if str(request.get("reuse_policy", "")) != "whole_design":
+        return
+    if _request_visible_person_count(request):
+        return
+    shots = [row for row in plan.get("shots") or [] if isinstance(row, dict)]
+    if not shots:
+        return
+    keywords = {
+        token
+        for token in re.findall(r"[a-z0-9]{3,}", _direct_request_text(request).lower())
+        if token not in {
+            "reference", "image", "scene", "shot", "cinematic", "wide", "close",
+            "lighting", "background", "supporting", "environment", "action", "state",
+        }
+    }
+    def score(shot: dict) -> tuple[int, float]:
+        text = " ".join(
+            str(shot.get(key, ""))
+            for key in (
+                "preset", "subject_action", "environment_response",
+                "continuity_state", "additional_direction",
+            )
+        ).lower()
+        return (
+            sum(1 for token in keywords if token in text),
+            -float(shot.get("start_seconds", 0.0) or 0.0),
+        )
+    best = max(shots, key=score)
+    if score(best)[0] <= 0:
+        best = shots[0]
+    request["reuse_policy"] = "time_scoped"
+    request["start_seconds"] = float(best.get("start_seconds", 0.0) or 0.0)
+    request["end_seconds"] = float(
+        best.get("end_seconds", request.get("end_seconds", 0.5)) or 0.5
+    )
+    warnings = [str(value) for value in plan.get("design_warnings") or []]
+    warnings.append(
+        f"Scoped generated environment reference {request.get('requirement_id', '?')} to "
+        f"{request['start_seconds']:.2f}-{request['end_seconds']:.2f}s; environment stills "
+        "may not remain globally active and leak earlier locations into later Segments."
+    )
+    plan["design_warnings"] = warnings
+
+
+def stabilize_generated_identity_references(
+    plan: dict,
+    special_skill_key: object = "",
+) -> dict:
+    """Make one generated image authoritative for a recurring human identity.
+
+    Independent T2I calls cannot genuinely copy one another.  Letting every
+    action-state image define a prominent face therefore causes actor changes.
+    One face-bearing request is promoted to a whole-design identity anchor;
+    later reference requests become environment/pose support and may not
+    introduce a competing face.
+    """
+    if str(special_skill_key or "").strip().casefold() == BEAT_SYNCED_ENTRANCE_SPECIAL_SKILL:
+        # P1 intentionally owns two disjoint beats while P2 and P3 own one
+        # entrance each. A whole-design promotion would leak one identity into
+        # the other entrances and into the P4 ending.
+        return plan
+    requests = [
+        row for row in plan.get("media_requests") or []
+        if isinstance(row, dict) and row.get("media_type") == "image"
+    ]
+    # A two-fighter comic action plate is not a single face portrait.  Keep it
+    # Shot-local and never append the one-person identity-anchor contract.
+    if str(special_skill_key or "").strip().casefold() == "hong-kong-comic-fighter":
+        two_person_requests = [
+            row for row in requests if _request_visible_person_count(row) >= 2
+        ]
+        for request in two_person_requests:
+            request["prompt"] = _strip_generated_anchor_augmentation(
+                str(request.get("prompt", ""))
+            )
+            if request["prompt"].startswith(_GENERATED_IDENTITY_PREFIX):
+                request["prompt"] = request["prompt"][len(_GENERATED_IDENTITY_PREFIX):]
+            request["prompt"] = re.sub(
+                r"\s*EXACT SUBJECT COUNT LOCK:\s*exactly one visible identity subject\..*$",
+                "",
+                request["prompt"],
+                flags=re.I | re.S,
+            ).rstrip(" .")
+            for key in (
+                "identity_anchor", "identity_anchor_requirement_id",
+                "identity_anchor_media_id", "character_continuity_contract",
+            ):
+                request.pop(key, None)
+            request["reuse_policy"] = "time_scoped"
+            _append_subject_count_guard(request)
+        # Comic conversion has a different authority model from ordinary
+        # reference generation: original pages are analysis/source plates and
+        # generated photoreal stills may never cause P1 (or another page) to be
+        # promoted into a direct whole-design H3 identity anchor. Generated
+        # single-person identity portraits are allowed, but they must remain
+        # source-plate-derived in the dedicated comic normalization pass.
+        for request in requests:
+            if request in two_person_requests:
+                continue
+            visible_count = _request_visible_person_count(request)
+            is_identity = bool(re.search(
+                r"(?i)identity|portrait|face|character|人物|角色|肖像|身份",
+                " ".join((
+                    str(request.get("requirement_id", "")),
+                    str(request.get("prompt", "")),
+                )),
+            ))
+            request["reuse_policy"] = (
+                "whole_design" if visible_count == 1 and is_identity else "time_scoped"
+            )
+            if request["reuse_policy"] == "whole_design":
+                request["identity_anchor"] = True
+            else:
+                request.pop("identity_anchor", None)
+            _append_subject_count_guard(request)
+        warnings = [str(value) for value in plan.get("design_warnings") or []]
+        notice = (
+            "Hong Kong comic generated references preserve source-page authority: "
+            "two-fighter action states remain time-scoped and original comic Pictures "
+            "are never promoted to direct H3 identity anchors."
+        )
+        if notice not in warnings:
+            warnings.append(notice)
+        plan["design_warnings"] = warnings
+        return plan
+    existing_anchor = _existing_identity_anchor(plan)
+    if existing_anchor is not None:
+        duration = float(plan.get("duration_seconds", 0.0) or 0.0)
+        existing_anchor["reuse_policy"] = "whole_design"
+        existing_anchor["start_seconds"] = 0.0
+        existing_anchor["end_seconds"] = duration
+        existing_anchor["identity_anchor"] = True
+        media_id = str(existing_anchor.get("media_id") or "P1")
+        requirement_id = str(
+            existing_anchor.get("requirement_id") or f"identity_{media_id.lower()}"
+        )
+        anchor_label = f"@{media_id}"
+        _attach_character_continuity_contract(
+            plan,
+            existing_anchor,
+            anchor_label=anchor_label,
+            prompt_field="instruction",
+        )
+        omitted_request_ids: list[str] = []
+        kept_image_requests: list[dict] = []
+        for request in requests:
+            request.pop("identity_anchor", None)
+            prompt = _strip_generated_anchor_augmentation(
+                str(request.get("prompt", ""))
+            )
+            if prompt.startswith(_GENERATED_IDENTITY_PREFIX):
+                prompt = prompt[len(_GENERATED_IDENTITY_PREFIX):]
+            request["prompt"] = prompt
+            if _request_recreates_existing_anchor(request, media_id):
+                omitted_request_ids.append(str(request.get("requirement_id") or "generated_pose"))
+                continue
+            kept_image_requests.append(request)
+            if _request_visible_person_count(request) > 0:
+                request.pop("identity_anchor_requirement_id", None)
+                request.pop("identity_anchor_media_id", None)
+                distinct = (
+                    " DISTINCT SECONDARY CHARACTER REFERENCE ONLY. This Picture may define the "
+                    f"face of a separate story character, but its face belongs only to that character "
+                    f"and must never replace or blend with the user-supplied {anchor_label} identity."
+                )
+                if distinct.strip() not in request["prompt"]:
+                    request["prompt"] = request["prompt"].rstrip(" .") + "." + distinct
+                _append_subject_count_guard(request)
+                continue
+            request["identity_anchor_requirement_id"] = requirement_id
+            request["identity_anchor_media_id"] = media_id
+            authority = (
+                f" The authoritative recurring face identity is the user-supplied {anchor_label}; "
+                f"this generated Picture must never replace, reinterpret or compete with {anchor_label}. "
+                "If the recurring character is visible, keep the face fully out of frame, turned "
+                "away, motion-obscured or otherwise unreadable; never synthesize a substitute "
+                "front-facing face. H3 must derive the recognizable face exclusively from the "
+                f"user-supplied {anchor_label}."
+            )
+            if authority.strip() not in request["prompt"]:
+                request["prompt"] = request["prompt"].rstrip(" .") + "." + authority
+            if _SUPPORT_CONTINUITY_DIRECTION.strip() not in request["prompt"]:
+                request["prompt"] += _SUPPORT_CONTINUITY_DIRECTION
+            if "SUPPORTING ENVIRONMENT OR ACTION-STATE REFERENCE ONLY" not in request["prompt"]:
+                request["prompt"] += (
+                    " SUPPORTING ENVIRONMENT OR ACTION-STATE REFERENCE ONLY. Do not define a "
+                    "different prominent human face and do not introduce another actor; prefer rear, "
+                    "profile, wide or partially obscured staging whenever a face is not essential."
+                )
+            _scope_generated_environment_reference(plan, request)
+            _append_subject_count_guard(request)
+        kept_object_ids = {id(row) for row in kept_image_requests}
+        omitted_objects = {id(row) for row in requests if id(row) not in kept_object_ids}
+        plan["media_requests"] = [
+            row for row in plan.get("media_requests") or []
+            if id(row) not in omitted_objects
+        ]
+        warnings = [str(value) for value in plan.get("design_warnings") or []]
+        warnings = [
+            value for value in warnings
+            if not value.startswith("Promoted ")
+            or "generated Pictures cannot redefine" not in value
+        ]
+        notice = (
+            f"Locked user-supplied {media_id} as the whole-design primary face identity anchor; "
+            "generated Pictures are support references and cannot redefine a competing face."
+        )
+        if notice not in warnings:
+            warnings.append(notice)
+        if omitted_request_ids:
+            warnings.append(
+                "Omitted independently generated action-state Picture request(s) "
+                + ", ".join(omitted_request_ids)
+                + f" because they attempted to recreate {media_id}; the real {media_id} remains the "
+                "only face source and Shot prose supplies those poses."
+            )
+        plan["design_warnings"] = warnings
+        return plan
+    if not requests:
+        return plan
+    # A planner can incorrectly label a landscape/prop still as an identity
+    # anchor. Identity metadata is valid only when the requested frozen frame
+    # positively contains a person; negative wording such as ``no people`` is
+    # not evidence of a character.
+    for request in requests:
+        if bool(request.get("identity_anchor", False)) and not _request_visible_person_count(request):
+            request.pop("identity_anchor", None)
+            request.pop("identity_anchor_requirement_id", None)
+            request.pop("identity_anchor_media_id", None)
+            request.pop("character_continuity_contract", None)
+            request["prompt"] = _strip_generated_anchor_augmentation(
+                str(request.get("prompt", ""))
+            )
+            if request["prompt"].startswith(_GENERATED_IDENTITY_PREFIX):
+                request["prompt"] = request["prompt"][len(_GENERATED_IDENTITY_PREFIX):]
+            request["prompt"] = re.split(
+                r"\s+(?:EXACT SUBJECT COUNT LOCK:|CHARACTER CONTINUITY CONTRACT for )",
+                request["prompt"],
+                maxsplit=1,
+                flags=re.I,
+            )[0].rstrip(" .")
+    explicit_anchor = next(
+        (
+            row for row in requests
+            if bool(row.get("identity_anchor", False))
+            and _request_visible_person_count(row) > 0
+        ),
+        None,
+    )
+    # Normalization may run more than once (Plan, Apply, project reload).  Strip
+    # an earlier promotion from every non-authoritative request first so an
+    # environment still can never retain an identity-anchor prefix.
+    for request in requests:
+        if request is explicit_anchor:
+            continue
+        request["prompt"] = _strip_generated_anchor_augmentation(
+            str(request.get("prompt", ""))
+        )
+        request.pop("identity_anchor", None)
+    anchor = explicit_anchor or next(
+        (
+            row for row in requests
+            if _request_visible_person_count(row) > 0
+        ),
+        None,
+    )
+    if anchor is None:
+        for request in requests:
+            _scope_generated_environment_reference(plan, request)
+            _append_subject_count_guard(request)
+        return plan
+    duration = float(plan.get("duration_seconds", 0.0) or 0.0)
+    anchor["reuse_policy"] = "whole_design"
+    anchor["start_seconds"] = 0.0
+    anchor["end_seconds"] = duration
+    anchor["identity_anchor"] = True
+    anchor_id = str(anchor.get("requirement_id", "primary_identity"))
+    anchor["prompt"] = _strip_generated_anchor_augmentation(
+        str(anchor.get("prompt", ""))
+    )
+    if "PRIMARY RECURRING CHARACTER IDENTITY ANCHOR" not in anchor["prompt"]:
+        anchor["prompt"] = _GENERATED_IDENTITY_PREFIX + anchor["prompt"]
+    _append_subject_count_guard(anchor, identity=True)
+    _attach_character_continuity_contract(
+        plan,
+        anchor,
+        anchor_label=f"generated reference {anchor_id}",
+        prompt_field="prompt",
+    )
+    ledger = " ".join(str(plan.get("creative_brief", "")).split())[:700]
+    for request in requests:
+        if request is anchor:
+            continue
+        person_count = _request_visible_person_count(request)
+        if person_count and _request_is_distinct_character(request, anchor):
+            # A second actor is a separate identity source, not pose support
+            # for the primary character.  Binding it to the primary anchor
+            # causes face blending and duplicated dialogue partners.
+            request.pop("identity_anchor_requirement_id", None)
+            request.pop("identity_anchor_media_id", None)
+            request["distinct_character_identity"] = True
+            distinct = (
+                " DISTINCT SECONDARY CHARACTER IDENTITY. This Picture defines only this separate "
+                "story character. Never blend, replace or duplicate the primary character with it."
+            )
+            if "DISTINCT SECONDARY CHARACTER IDENTITY" not in str(request.get("prompt", "")):
+                request["prompt"] = str(request.get("prompt", "")).rstrip(" .") + "." + distinct
+            _append_subject_count_guard(request)
+            continue
+        request["identity_anchor_requirement_id"] = anchor_id
+        if "SUPPORTING ENVIRONMENT OR ACTION-STATE REFERENCE ONLY" not in str(
+            request.get("prompt", "")
+        ):
+            request["prompt"] = (
+                str(request.get("prompt", "")).rstrip(" .")
+                + ". SUPPORTING ENVIRONMENT OR ACTION-STATE REFERENCE ONLY. Do not define a "
+                "different prominent human face and do not introduce another actor. If the recurring "
+                "character is visible, keep the same age, facial structure, hair, wardrobe and prop "
+                "ownership established by the primary identity anchor; prefer rear, profile, wide or "
+                "partially obscured staging when exact face consistency cannot be guaranteed."
+                + (f" Story identity ledger: {ledger}." if ledger else "")
+                + _SUPPORT_CONTINUITY_DIRECTION
+            )
+        elif _SUPPORT_CONTINUITY_DIRECTION.strip() not in str(request.get("prompt", "")):
+            request["prompt"] = str(request.get("prompt", "")).rstrip() + _SUPPORT_CONTINUITY_DIRECTION
+        _scope_generated_environment_reference(plan, request)
+        _append_subject_count_guard(request)
+    warnings = [str(value) for value in plan.get("design_warnings") or []]
+    notice = (
+        f"Promoted {anchor_id} to the whole-design primary character identity anchor; "
+        "later generated Pictures cannot redefine a competing face."
+    )
+    if notice not in warnings:
+        warnings.append(notice)
+    plan["design_warnings"] = warnings
+    return plan
+
+
+_DIALOGUE_LANGUAGE_ALIASES = {
+    "arabic": "Arabic",
+    "chinese": "Chinese",
+    "mandarin": "Chinese",
+    "mandarin chinese": "Chinese",
+    "english": "English",
+    "french": "French",
+    "german": "German",
+    "italian": "Italian",
+    "japanese": "Japanese",
+    "korean": "Korean",
+    "portuguese": "Portuguese",
+    "russian": "Russian",
+    "spanish": "Spanish",
+}
+
+
+def canonical_dialogue_language(value: object) -> str:
+    """Return an official H3 language label, ``auto``, or an empty value."""
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    if text.lower().startswith("auto"):
+        return "auto"
+    return _DIALOGUE_LANGUAGE_ALIASES.get(text.lower(), "")
+
+
+_EXPLICIT_DIALOGUE_LANGUAGE_PATTERNS = {
+    "Arabic": re.compile(r"\bArabic\b|\u963f\u62c9\u4f2f\u8bed|\u963f\u62c9\u4f2f\u8a9e", re.I),
+    "Chinese": re.compile(
+        r"\b(?:Chinese|Mandarin(?:\s+Chinese)?)\b|\u666e\u901a\u8bdd|\u666e\u901a\u8a71|"
+        r"\u56fd\u8bed|\u570b\u8a9e|\u4e2d\u6587|\u534e\u8bed|\u83ef\u8a9e",
+        re.I,
+    ),
+    "English": re.compile(r"\bEnglish\b|\u82f1\u8bed|\u82f1\u8a9e", re.I),
+    "French": re.compile(r"\bFrench\b|\u6cd5\u8bed|\u6cd5\u8a9e", re.I),
+    "German": re.compile(r"\bGerman\b|\u5fb7\u8bed|\u5fb7\u8a9e", re.I),
+    "Italian": re.compile(r"\bItalian\b|\u610f\u5927\u5229\u8bed|\u610f\u5927\u5229\u8a9e", re.I),
+    "Japanese": re.compile(r"\bJapanese\b|\u65e5\u8bed|\u65e5\u8a9e|\u65e5\u672c\u8a9e", re.I),
+    "Korean": re.compile(r"\bKorean\b|\u97e9\u8bed|\u97d3\u8a9e|\u671d\u9c9c\u8bed|\u671d\u9bae\u8a9e", re.I),
+    "Portuguese": re.compile(r"\bPortuguese\b|\u8461\u8404\u7259\u8bed|\u8461\u8404\u7259\u8a9e", re.I),
+    "Russian": re.compile(r"\bRussian\b|\u4fc4\u8bed|\u4fc4\u8a9e", re.I),
+    "Spanish": re.compile(r"\bSpanish\b|\u897f\u73ed\u7259\u8bed|\u897f\u73ed\u7259\u8a9e", re.I),
+}
+
+
+def infer_design_dialogue_language(requirement: str, preferred: object = "auto") -> str:
+    """Resolve Design's language selector without delegating the default to the LM."""
+    selected = canonical_dialogue_language(preferred)
+    if selected and selected != "auto":
+        return selected
+    text = str(requirement or "")
+    explicit: list[tuple[int, str]] = []
+    for language, pattern in _EXPLICIT_DIALOGUE_LANGUAGE_PATTERNS.items():
+        explicit.extend((match.end(), language) for match in pattern.finditer(text))
+    if explicit:
+        return max(explicit, key=lambda item: item[0])[1]
+    if re.search(r"[\u3040-\u30ff]", text):
+        return "Japanese"
+    if re.search(r"[\uac00-\ud7af]", text):
+        return "Korean"
+    if re.search(r"[\u0600-\u06ff]", text):
+        return "Arabic"
+    if re.search(r"[\u0400-\u04ff]", text):
+        return "Russian"
+    if re.search(r"[\u3400-\u9fff]", text):
+        return "Chinese"
+    return "English"
+
+
+def _dialogue_text_matches_language(text: str, language: str) -> bool:
+    """Catch obvious script mismatches; Latin-language nuance remains an LM task."""
+    value = str(text or "").strip()
+    if not value:
+        return True
+    if language == "Chinese":
+        return bool(re.search(r"[\u3400-\u9fff]", value)) and not bool(
+            re.search(r"[\u3040-\u30ff\uac00-\ud7af]", value)
+        )
+    if language == "Japanese":
+        return bool(re.search(r"[\u3040-\u30ff]", value))
+    if language == "Korean":
+        return bool(re.search(r"[\uac00-\ud7af]", value))
+    if language == "Arabic":
+        return bool(re.search(r"[\u0600-\u06ff]", value))
+    if language == "Russian":
+        return bool(re.search(r"[\u0400-\u04ff]", value))
+    if language == "English":
+        return bool(re.search(r"[A-Za-z]", value)) and not bool(
+            re.search(r"[\u0400-\u04ff\u0600-\u06ff\u3040-\u30ff\u3400-\u9fff\uac00-\ud7af]", value)
+        )
+    return True
+
+
+def enforce_design_dialogue_language(
+    plan: dict,
+    language: object,
+    *,
+    authored_requirement: str = "",
+) -> dict:
+    """Reject silently wrong generated dialogue and normalize H3 language labels."""
+    selected = canonical_dialogue_language(language)
+    if not selected or selected == "auto":
+        selected = infer_design_dialogue_language(authored_requirement, "auto")
+    result = deepcopy(plan)
+    authored_contents = {
+        str(item.get("content", "")).strip()
+        for item in extract_explicit_timed_text_layers(
+            authored_requirement,
+            float(result.get("duration_seconds", 0.0) or 0.0) or None,
+        )
+    }
+    for index, layer in enumerate(result.get("text_layers") or [], 1):
+        if not isinstance(layer, dict) or str(layer.get("role", "")).lower() not in {
+            "dialogue", "voice_over", "lyrics",
+        }:
+            continue
+        content = str(layer.get("content", "")).strip()
+        current = canonical_dialogue_language(layer.get("language"))
+        is_exact_authored = content in authored_contents
+        if is_exact_authored:
+            if current:
+                layer["language"] = current
+            elif _dialogue_text_matches_language(content, selected):
+                layer["language"] = selected
+            else:
+                layer["language"] = infer_design_dialogue_language(content, "auto")
+            continue
+        if current and current != selected:
+            raise DesignDialogueLanguageContractError(
+                f"Dialogue language contract mismatch in text layer {index}: Design selected "
+                f"{selected}, but the AI returned {current}. Regenerate the dialogue in {selected}."
+            )
+        if not _dialogue_text_matches_language(content, selected):
+            raise DesignDialogueLanguageContractError(
+                f"Dialogue language contract mismatch in text layer {index}: Design selected "
+                f"{selected}, but the generated words do not use the expected script. "
+                f"Regenerate the words in {selected}; do not merely relabel English text."
+            )
+        layer["language"] = selected
+    result["_dialogue_language"] = selected
+    return result
+
+
+_REQUESTED_SPEECH_ROLE_PATTERNS = {
+    "dialogue": re.compile(
+        r"\b(?:dialogue|conversation|spoken\s+lines?)\b|"
+        r"\u5bf9\u767d|\u5c0d\u767d|\u5bf9\u8bdd|\u5c0d\u8a71",
+        re.I,
+    ),
+    "voice_over": re.compile(
+        r"\b(?:voice[ -]?over|narration|narrator)\b|"
+        r"\u65c1\u767d|\u753b\u5916\u97f3|\u756b\u5916\u97f3",
+        re.I,
+    ),
+    "lyrics": re.compile(
+        r"\blyrics?\b|\u6b4c\u8bcd|\u6b4c\u8a5e",
+        re.I,
+    ),
+}
+
+_SHOT_EMBEDDED_SPEECH_RE = re.compile(
+    r"\b(?:the\s+)?(?:narrator|voice[ -]?over|s[12]|woman|man|character)\s+"
+    r"(?:says?|speaks?|continues?|asks?|replies?|whispers?|shouts?)\s*[:\u2014-]|"
+    r"\u65c1\u767d\s*(?:\u8bf4|\u8aaa|\u7ee7\u7eed|\u7e7c\u7e8c)?\s*[:\uff1a]",
+    re.I,
+)
+
+
+def requested_speech_roles(requirement: str) -> set[str]:
+    """Return speech roles that the user explicitly asked Design to author."""
+    text = str(requirement or "")
+    return {
+        role for role, pattern in _REQUESTED_SPEECH_ROLE_PATTERNS.items()
+        if pattern.search(text)
+    }
+
+
+SPEECH_TIMELINE_REMINDER_PREFIX = "[TIMELINE REMINDER]"
+SPEECH_TIMELINE_MARKER_PREFIX = "⚠ ADD EDITABLE "
+
+
+def missing_requested_speech_roles(requirement: str, plan: dict) -> set[str]:
+    """Return requested spoken roles that have no editable authored layer."""
+    requested = requested_speech_roles(requirement)
+    present = {
+        str(item.get("role", "")).strip().lower()
+        for item in plan.get("text_layers") or []
+        if isinstance(item, dict)
+        and str(item.get("content", "")).strip()
+        and bool(item.get("explicit_user_requested", False))
+    }
+    return requested.difference(present)
+
+
+def reconcile_requested_speech_layer_contract(requirement: str, plan: dict) -> dict:
+    """Make missing AI-authored speech non-blocking without silently losing it.
+
+    Exact time-coded user wording remains protected by
+    :func:`validate_explicit_timed_text_contract`.  This fallback is only for a
+    broader request such as "add suitable dialogue" where the LM returned no
+    editable words.  The workspace can still be applied, while a red Timeline
+    marker makes the omission impossible to overlook.  The marker is UI-only
+    and the Studio compiler excludes it from H3 technical instructions.
+    """
+    result = deepcopy(plan)
+    missing = sorted(missing_requested_speech_roles(requirement, result))
+    marker_rows = [
+        item for item in result.get("markers") or []
+        if isinstance(item, dict)
+        and not str(item.get("preset", "")).startswith(SPEECH_TIMELINE_MARKER_PREFIX)
+    ]
+    warnings = [
+        str(item) for item in result.get("design_warnings") or []
+        if not str(item).startswith(SPEECH_TIMELINE_REMINDER_PREFIX)
+    ]
+    if not missing:
+        result.pop("_missing_speech_roles", None)
+        result["markers"] = marker_rows
+        result["design_warnings"] = warnings
+        return result
+
+    # If the user supplied exact timed words, losing them is still fatal.  The
+    # deterministic protection pass should normally have restored them first.
+    exact_roles = {
+        str(item.get("role", ""))
+        for item in extract_explicit_timed_text_layers(
+            requirement,
+            float(result.get("duration_seconds", 0.0) or 0.0) or None,
+        )
+    }
+    exact_missing = sorted(set(missing).intersection(exact_roles))
+    if exact_missing:
+        raise DesignSpeechLayerContractError(
+            "Exact user-authored "
+            + ", ".join(role.replace("_", "-") for role in exact_missing)
+            + " could not be restored as editable Text Layers. Apply remains blocked to "
+              "prevent loss or rewriting of the supplied words."
+        )
+
+    role_names = [role.replace("_", "-").upper() for role in missing]
+    readable_roles = " / ".join(role_names)
+    direction = (
+        f"Design requested {readable_roles}, but the AI supplied no editable words. "
+        "Use the Type Tool to add or confirm the spoken line before Preview/Run. "
+        "Workspace Apply is allowed; this UI reminder is never sent to H3."
+    )
+    marker_rows.append({
+        "time_seconds": 0.0,
+        "preset": SPEECH_TIMELINE_MARKER_PREFIX + readable_roles,
+        "direction": direction,
+    })
+    warning = f"{SPEECH_TIMELINE_REMINDER_PREFIX} {direction}"
+    warnings.append(warning)
+    result["markers"] = marker_rows
+    result["design_warnings"] = warnings
+    result["_missing_speech_roles"] = missing
+    return result
+
+
+def validate_requested_speech_layer_contract(requirement: str, plan: dict) -> set[str]:
+    """Require editable Dialogue/Voice-over/Lyrics tracks whenever speech was requested.
+
+    This closes the failure mode where an LM writes ``The narrator says ...`` inside a
+    Shot direction.  Shot prose cannot be edited as dialogue and H3 is free to omit,
+    paraphrase or translate it, so such a plan must be regenerated rather than applied.
+    """
+    requested = requested_speech_roles(requirement)
+    if not requested:
+        return set()
+    missing = sorted(missing_requested_speech_roles(requirement, plan))
+    if missing:
+        embedded: list[str] = []
+        for shot in plan.get("shots") or []:
+            if not isinstance(shot, dict):
+                continue
+            prose = " ".join(
+                str(shot.get(key, ""))
+                for key in ("subject_action", "additional_direction", "optional_flourish")
+            )
+            if _SHOT_EMBEDDED_SPEECH_RE.search(prose):
+                embedded.append(str(shot.get("id") or "Shot"))
+        detail = (
+            " Speech was incorrectly embedded in Shot prose at " + ", ".join(embedded) + "."
+            if embedded else ""
+        )
+        raise DesignSpeechLayerContractError(
+            "The Design Requirement explicitly requests "
+            + ", ".join(role.replace("_", "-") for role in missing)
+            + ", but the AI returned no editable Text Layer for that role."
+            + detail
+            + " Regenerate with every spoken line in text_layers, "
+              "explicit_user_requested=true, and keep spoken words out of Shot prompts."
+        )
+    return requested
+
+
+_VISIBLE_TEXT_REQUEST_RE = re.compile(
+    r"\b(?:on[ -]?screen\s+text|title\s+card|show\s+(?:the\s+)?title|subtitles?|captions?)\b|"
+    r"\u5c4f\u5e55\u6587\u5b57|\u87a2\u5e55\u6587\u5b57|\u753b\u9762\u6587\u5b57|\u756b\u9762\u6587\u5b57|"
+    r"\u663e\u793a\u6807\u9898|\u986f\u793a\u6a19\u984c|\u5b57\u5e55|"
+    r"招式文字|招式名|招式名称|招式名稱|招式标题|招式標題|"
+    r"\b(?:move|technique)\s+(?:name|title)\b",
+    re.I,
+)
+
+_AI_VISIBLE_TEXT_SHOT_RE = re.compile(
+    r"\b(?:theme\s+text|hashtags?|subtitles?|captions?|on[ -]?screen\s+text|"
+    r"overlay\s+text)\b|\u5b57\u5e55|\u4e3b\u9898\u6587\u5b57|\u4e3b\u984c\u6587\u5b57|"
+    r"\u8bdd\u9898\u6807\u7b7e|\u8a71\u984c\u6a19\u7c64",
+    re.I,
+)
+
+
+def _remove_ai_visible_text_directions(value: object) -> str:
+    clauses = re.split(r"(?<=[.!?;\u3002\uff01\uff1f\uff1b])\s*", str(value or "").strip())
+    return " ".join(
+        clause.strip() for clause in clauses
+        if clause.strip() and not _AI_VISIBLE_TEXT_SHOT_RE.search(clause)
+    ).strip()
+
+
+def enforce_design_subtitle_policy(
+    plan: dict,
+    enabled: bool,
+    *,
+    authored_requirement: str = "",
+) -> dict:
+    """Apply the Design subtitle switch deterministically.
+
+    With subtitles off, AI-invented captions/theme hashtags are removed. Explicitly
+    authored title/on-screen-text instructions remain valid. With subtitles on, every
+    speech Text Layer receives a synchronized editable On-screen Text layer.
+    """
+    result = deepcopy(plan)
+    explicit_visible = [
+        item for item in extract_explicit_timed_text_layers(
+            authored_requirement,
+            float(result.get("duration_seconds", 0.0) or 0.0) or None,
+        )
+        if item.get("role") == "on_screen_text"
+    ]
+    exact_visible = {
+        (
+            str(item.get("content", "")).strip(),
+            round(float(item.get("start_seconds", 0.0)), 3),
+            round(float(item.get("end_seconds", 0.0)), 3),
+        )
+        for item in explicit_visible
+    }
+    retained: list[dict] = []
+    for layer in result.get("text_layers") or []:
+        if not isinstance(layer, dict):
+            continue
+        if str(layer.get("role", "")).strip().lower() != "on_screen_text":
+            retained.append(deepcopy(layer))
+            continue
+        identity = (
+            str(layer.get("content", "")).strip(),
+            round(float(layer.get("start_seconds", 0.0)), 3),
+            round(float(layer.get("end_seconds", 0.0)), 3),
+        )
+        if (
+            enabled
+            or identity in exact_visible
+            or (
+                bool(layer.get("explicit_user_requested", False))
+                and str(layer.get("timeline_visible_text_kind", "")).strip().casefold()
+                == "comic_technique_title"
+            )
+            or (
+                not str(authored_requirement or "").strip()
+                and bool(layer.get("explicit_user_requested", False))
+            )
+        ):
+            retained.append(deepcopy(layer))
+
+    if enabled:
+        existing = {
+            (
+                str(item.get("content", "")).strip(),
+                round(float(item.get("start_seconds", 0.0)), 3),
+                round(float(item.get("end_seconds", 0.0)), 3),
+            )
+            for item in retained
+            if str(item.get("role", "")).strip().lower() == "on_screen_text"
+        }
+        for speech in result.get("text_layers") or []:
+            if not isinstance(speech, dict) or str(speech.get("role", "")).lower() not in {
+                "dialogue", "voice_over", "lyrics",
+            }:
+                continue
+            identity = (
+                str(speech.get("content", "")).strip(),
+                round(float(speech.get("start_seconds", 0.0)), 3),
+                round(float(speech.get("end_seconds", 0.0)), 3),
+            )
+            if not identity[0] or identity in existing:
+                continue
+            retained.append({
+                "start_seconds": float(speech.get("start_seconds", 0.0)),
+                "end_seconds": float(speech.get("end_seconds", 0.0)),
+                "track": "V4",
+                "content": identity[0],
+                "role": "on_screen_text",
+                "speaker": str(speech.get("speaker", "S1")),
+                "language": str(speech.get("language", "")),
+                "delivery": "Readable synchronized subtitle; preserve exact spoken words",
+                "lip_sync": False,
+                "explicit_user_requested": True,
+            })
+            existing.add(identity)
+
+    result["text_layers"] = retained
+    visible_requested = bool(_VISIBLE_TEXT_REQUEST_RE.search(str(authored_requirement or "")))
+    if (
+        not enabled
+        and str(authored_requirement or "").strip()
+        and not visible_requested
+    ):
+        result["theme_text"] = ""
+        result["theme_text_explicit_user_requested"] = False
+        for shot in result.get("shots") or []:
+            if not isinstance(shot, dict):
+                continue
+            for field in (
+                "subject_action", "continuity_state", "optional_flourish",
+                "additional_direction",
+            ):
+                original = str(shot.get(field, ""))
+                cleaned = _remove_ai_visible_text_directions(original)
+                if cleaned != original.strip():
+                    shot[field] = cleaned or (
+                        "None."
+                        if field == "optional_flourish"
+                        else "Preserve the established physical and camera continuity."
+                    )
+    subtitle_contract = (
+        "VISIBLE TEXT WHITELIST: render subtitles only from synchronized Timeline "
+        "on_screen_text layers, at their exact authored times and with their exact words. "
+        "Never invent, burn in or repeat any other subtitle, caption, lower-third or dialogue text."
+        if enabled else
+        "VISIBLE TEXT LOCK: do not render spoken Dialogue or Voice-over as visible words. "
+        "No subtitles, captions, lower-thirds or burned-in speech text are permitted unless an "
+        "explicit Timeline on_screen_text layer exists."
+    )
+    constraints = str(result.get("constraints", "")).strip()
+    constraints = re.sub(
+        r"(?:VISIBLE TEXT WHITELIST|VISIBLE TEXT LOCK):.*?(?=(?:CHARACTER CONTINUITY CONTRACT|$))",
+        "",
+        constraints,
+        flags=re.I | re.S,
+    ).strip(" .")
+    result["constraints"] = (
+        constraints + (". " if constraints else "") + subtitle_contract
+    )
+    result["_subtitles_enabled"] = bool(enabled)
+    return result
 
 
 _PICTURE_REFERENCE_RE = re.compile(r"<\s*picture\s+\d+\s*>", flags=re.I)
@@ -53,7 +2893,11 @@ _NON_STORY_BACKGROUND_RE = re.compile(
 )
 
 _ACTION_BEAT_SPLIT_RE = re.compile(
-    r"(?:[.!?;:\u3002\uff01\uff1f\uff1b\uff1a]+|"
+    # A decimal timestamp such as ``0.5-1.5s`` and a clock time such as
+    # ``00:01.500`` are metadata inside one beat, not sentence boundaries.
+    # Splitting their dots/colons used to fragment numbered action beats and
+    # demote half of a fight into optional flourish text.
+    r"(?:(?<!\d)\.(?!\d)|[!?;\u3002\uff01\uff1f\uff1b]+|(?<!\d)[:\uff1a](?!\d)|"
     r",\s*(?=(?:then|next|after(?:ward)?|immediately|simultaneously)\b)|"
     r"\b(?:and\s+then|then|next|afterwards?|simultaneously)\b|"
     r"\s*(?:\u7136\u540e|\u968f\u540e|\u7d27\u63a5\u7740|\u7acb\u5373|\u540c\u65f6|\u4e0e\u6b64\u540c\u65f6)\s*)",
@@ -102,11 +2946,14 @@ _LEADING_OUTGOING_RE = re.compile(
 )
 
 _TIMED_TEXT_RANGE_RE = re.compile(
+    r"(?<![A-Za-z0-9])"
     r"[\[【(（]?\s*"
     r"(?P<start>(?:\d{1,2}:){1,2}\d{1,2}(?:\.\d+)?|\d+(?:\.\d+)?)\s*(?:s|秒)?\s*"
     r"(?:-|–|—|~|～|至|到)\s*"
-    r"(?P<end>(?:\d{1,2}:){1,2}\d{1,2}(?:\.\d+)?|\d+(?:\.\d+)?)\s*(?:s|秒)?\s*"
-    r"[\]】)）]?",
+    r"(?P<end>(?:\d{1,2}:){1,2}\d{1,2}(?:\.\d+)?|\d+(?:\.\d+)?)(?![\d:.])\s*(?:s|秒)?\s*"
+    r"[\]】)）]?"
+    r"(?!\s*(?:°|度|[- ]?degrees?(?![A-Za-z])|px(?![A-Za-z])|pixels?(?![A-Za-z])|"
+    r"%|％|fps(?![A-Za-z])|frames?(?![A-Za-z])|帧|幀|倍|圈|个|個))",
     flags=re.I,
 )
 _TIMED_TEXT_LABEL_RE = re.compile(
@@ -120,6 +2967,10 @@ _TIMED_TEXT_LABEL_RE = re.compile(
     r")\s*[：:]\s*(?P<content>.*)$",
     flags=re.I,
 )
+_TIMED_NAMED_CHARACTER_RE = re.compile(
+    r"^\s*(?P<name>[A-Za-z\u3400-\u9fff][A-Za-z0-9\u3400-\u9fff·・\s]{0,28}?)"
+    r"(?:\([^)]{0,40}\)|（[^）]{0,40}）)?\s*[：:]\s*(?P<content>[‘’“\"『「].+)$"
+)
 _CJK_RE = re.compile(r"[\u3400-\u9fff]")
 
 
@@ -132,9 +2983,63 @@ def _parse_design_timecode(value: str) -> float:
     return parts[-3] * 3600.0 + parts[-2] * 60.0 + parts[-1]
 
 
+def _is_authored_time_range(text: str, match: re.Match) -> bool:
+    """Reject geometry/count ranges that merely resemble Timeline ranges.
+
+    The shared range grammar intentionally accepts compact authoring such as
+    ``[0-5]``.  Camera angles (``0-360 degrees``), dimensions (``6-10 px``),
+    percentages and frame/count ranges must never become video duration or
+    speech timing authority.
+    """
+
+    raw = match.group(0)
+    tail = text[match.end():match.end() + 24]
+    # The closing bracket in the grammar is optional. Regex backtracking must
+    # not let ``[0-360] degrees`` escape the suffix exclusion by stopping just
+    # before ``]``.
+    tail = re.sub(r"^[\]】)）]\s*", "", tail.lstrip()).lstrip()
+    if re.match(
+        r"^(?:°|度|[- ]?degrees?(?![A-Za-z])|px(?![A-Za-z])|"
+        r"pixels?(?![A-Za-z])|%|％|fps(?![A-Za-z])|frames?(?![A-Za-z])|"
+        r"帧|幀|倍|圈|个|個)",
+        tail,
+        flags=re.I,
+    ):
+        return False
+    start = str(match.group("start") or "")
+    end = str(match.group("end") or "")
+    if ":" in start or ":" in end:
+        return True
+    if re.search(r"(?:秒(?:钟|鐘)?|(?<![A-Za-z])s\b)", raw, flags=re.I):
+        return True
+    stripped = raw.strip()
+    if (
+        stripped
+        and stripped[0] in "[【(（"
+        and stripped[-1] in "]】)）"
+    ):
+        return True
+    before = text[max(0, match.start() - 18):match.start()]
+    after = text[match.end():match.end() + 18]
+    return bool(re.search(
+        r"(?:时间|時間|时段|時段|时间轴|時間軸|镜头|鏡頭|画面|畫面|对白|對白|"
+        r"旁白|字幕|shot|scene|dialogue|timeline|timecode)",
+        before + " " + after,
+        flags=re.I,
+    ))
+
+
+def _authored_time_range_matches(text: str) -> list[re.Match]:
+    return [
+        match for match in _TIMED_TEXT_RANGE_RE.finditer(text)
+        if _is_authored_time_range(text, match)
+    ]
+
+
 _EXPLICIT_VIDEO_DURATION_PATTERNS = (
     re.compile(
-        r"(?:时长|時長|片长|片長|总长|總長|总时长|總時長|"
+        r"(?:准确|準確|精确|精確|精准|精準|exact(?:ly)?|"
+        r"时长|時長|片长|片長|总长|總長|总时长|總時長|"
         r"创作|創作|制作|製作|生成|我要|我想要|需要|duration|length)"
         r"[^\n。！？.!?]{0,28}?"
         r"(?P<value>\d+(?:\.\d+)?)\s*"
@@ -151,14 +3056,19 @@ _EXPLICIT_VIDEO_DURATION_PATTERNS = (
 
 
 def infer_explicit_design_duration(requirement: str) -> float | None:
-    """Return an explicit user duration, preferring the latest authored timecode.
+    """Return the explicit target duration using confidence-ranked evidence.
 
     Workspace Timeline duration is deliberately excluded: it is editing context, not
-    authority to shorten a newly requested Design.
+    authority to shorten a newly requested Design. A direct duration declaration
+    outranks illustrative Segment ranges and all later Timeline cues.
     """
     text = str(requirement or "")
-    candidates: list[float] = []
+    # Patterns are ordered from an authored request/label to a weaker
+    # ``12-second video`` construction. Stop at the first pattern family that
+    # produced evidence: documentation later in a Skill may legitimately say
+    # ``35 seconds uses P3-P9`` and must not replace the requested 12 seconds.
     for pattern in _EXPLICIT_VIDEO_DURATION_PATTERNS:
+        candidates: list[float] = []
         for match in pattern.finditer(text):
             value = float(match.group("value"))
             unit = match.group("unit").lower()
@@ -166,7 +3076,12 @@ def infer_explicit_design_duration(requirement: str) -> float | None:
                 value *= 60.0
             if value > 0.0:
                 candidates.append(value)
-    for match in _TIMED_TEXT_RANGE_RE.finditer(text):
+        if candidates:
+            duration = min(MAX_DESIGN_DURATION_SECONDS, candidates[0])
+            return round(round(duration * 2.0) / 2.0, 6)
+
+    candidates = []
+    for match in _authored_time_range_matches(text):
         end = _parse_design_timecode(match.group("end"))
         if end > 0.0:
             candidates.append(end)
@@ -230,11 +3145,13 @@ def extract_explicit_timed_text_layers(
     active_range: tuple[float, float] | None = None
     active_context: list[str] = []
     layers: list[dict] = []
+    named_speakers: dict[str, str] = {}
     for line_number, raw_line in enumerate(lines):
         line = raw_line.strip()
         if not line:
             continue
-        range_match = _TIMED_TEXT_RANGE_RE.search(line)
+        range_matches = _authored_time_range_matches(line)
+        range_match = range_matches[0] if range_matches else None
         if range_match:
             start = _parse_design_timecode(range_match.group("start"))
             end = _parse_design_timecode(range_match.group("end"))
@@ -244,24 +3161,58 @@ def extract_explicit_timed_text_layers(
                     end = min(max(start, end), float(duration_seconds))
                 active_range = (start, end) if end > start else None
                 active_context = [line]
-        label_line = _TIMED_TEXT_RANGE_RE.sub("", line).strip(" -–—[]【】()（）")
+        label_line = line
+        for timed_match in reversed(range_matches):
+            label_line = (
+                label_line[:timed_match.start()]
+                + label_line[timed_match.end():]
+            )
+        label_line = label_line.strip(" -–—[]【】()（）")
+        # Markdown emphasis is presentation only. Without this normalization,
+        # ``**旁白：**“...”`` either fails label matching or leaks asterisks
+        # into the exact authored speech content.
+        label_line = re.sub(r"\*\*", "", label_line).strip()
         label_match = _TIMED_TEXT_LABEL_RE.match(label_line)
-        if not label_match:
+        named_match = None if label_match else _TIMED_NAMED_CHARACTER_RE.match(label_line)
+        if not label_match and not named_match:
             if active_range:
                 active_context.append(line)
             continue
         if not active_range:
             # Untimed narrative labels are not enough to build a deterministic layer.
             continue
-        content = _strip_authored_text_quotes(label_match.group("content"))
+        content = _strip_authored_text_quotes(
+            label_match.group("content") if label_match else named_match.group("content")
+        )
         if not content and line_number + 1 < len(lines):
             candidate = _strip_authored_text_quotes(lines[line_number + 1])
-            if candidate and not _TIMED_TEXT_RANGE_RE.search(candidate):
+            if candidate and not _authored_time_range_matches(candidate):
                 content = candidate
         if not content or content.lower() in {"如下", "as follows"}:
             continue
-        label = label_match.group("label")
-        role = _timed_text_role(label)
+        if label_match:
+            label = label_match.group("label")
+            role = _timed_text_role(label)
+            speaker = (label_match.group("speaker") or "S1").upper()
+            speaker_explicit = bool(label_match.group("speaker"))
+        else:
+            label = named_match.group("name").strip()
+            role = (
+                "voice_over"
+                if re.search(r"回声|回聲|心声|心聲|内心|內心|echo|inner", label, flags=re.I)
+                else "dialogue"
+            )
+            canonical_name = next(
+                (
+                    known for known in named_speakers
+                    if known in label or label in known
+                ),
+                re.sub(r"年轻|年輕|的?回声|的?回聲|心声|心聲|内心|內心|young|echo|inner", "", label, flags=re.I).strip(),
+            ) or label
+            if canonical_name not in named_speakers:
+                named_speakers[canonical_name] = "S1" if not named_speakers else "S2"
+            speaker = named_speakers[canonical_name]
+            speaker_explicit = True
         language = (
             "Mandarin Chinese"
             if re.search(r"普通话|普通話|国语|國語|Mandarin", label, flags=re.I)
@@ -279,15 +3230,17 @@ def extract_explicit_timed_text_layers(
             }[role],
             "content": content,
             "role": role,
-            "speaker": (label_match.group("speaker") or "S1").upper(),
+            "speaker": speaker,
             # Kept only through the pre-normalization protection pass.  An
             # omitted speaker means the planner may assign S1/S2 from the
             # speaking character's gender; an explicit S1/S2 remains binding.
-            "_speaker_explicit": bool(label_match.group("speaker")),
+            "_speaker_explicit": speaker_explicit,
             "language": language,
             "delivery": _timed_text_delivery(" ".join(active_context), role),
             "lip_sync": role == "dialogue",
+            "overlap_policy": "auto",
             "explicit_user_requested": True,
+            "authored_timing_locked": True,
         }
         identity = (role, round(start, 3), round(end, 3), content)
         if not any(
@@ -340,6 +3293,9 @@ def authored_text_layers_with_plan_assignments(
             value = str(best.get(key, "")).strip()
             if value:
                 authored[key] = value
+        authored["overlap_policy"] = normalize_speech_overlap_policy(
+            best.get("overlap_policy", authored.get("overlap_policy", "auto"))
+        )
         if authored["role"] == "dialogue":
             authored["lip_sync"] = bool(best.get("lip_sync", True))
     return required
@@ -358,6 +3314,30 @@ def protect_explicit_timed_text_layers(plan: dict, requirement: str) -> dict:
     )
     if not required:
         return result
+    # A prior deterministic speech-budget pass may have lengthened the exact
+    # authored line without changing a single word. Preserve that safe timing
+    # when this protection pass runs again during Validate and Apply.
+    for authored in required:
+        adjusted = next(
+            (
+                item for item in result.get("text_layers") or []
+                if isinstance(item, dict)
+                and bool(item.get("speech_timing_auto_adjusted", False))
+                and str(item.get("role", "")) == authored["role"]
+                and str(item.get("content", "")).strip() == authored["content"]
+                and abs(
+                    float(item.get("authored_start_seconds", item.get("start_seconds", -1.0)))
+                    - authored["start_seconds"]
+                ) <= 0.01
+                and abs(
+                    float(item.get("authored_end_seconds", item.get("end_seconds", -1.0)))
+                    - authored["end_seconds"]
+                ) <= 0.01
+            ),
+            None,
+        )
+        if adjusted is not None:
+            authored.update(deepcopy(adjusted))
     retained: list[dict] = []
     for existing in result.get("text_layers") or []:
         if not isinstance(existing, dict):
@@ -394,28 +3374,45 @@ def validate_explicit_timed_text_contract(requirement: str, plan: dict) -> list[
     if not required:
         return []
     actual = [item for item in plan.get("text_layers") or [] if isinstance(item, dict)]
-    missing = [
-        item for item in required
-        if not any(
-            str(candidate.get("role", "")) == item["role"]
-            and str(candidate.get("content", "")).strip() == item["content"]
-            and abs(float(candidate.get("start_seconds", -1.0)) - item["start_seconds"]) <= 0.01
-            and abs(float(candidate.get("end_seconds", -1.0)) - item["end_seconds"]) <= 0.01
-            for candidate in actual
+    matched: list[dict] = []
+    missing: list[dict] = []
+    for item in required:
+        candidate = next(
+            (
+                row for row in actual
+                if str(row.get("role", "")) == item["role"]
+                and str(row.get("content", "")).strip() == item["content"]
+                and (
+                    (
+                        abs(float(row.get("start_seconds", -1.0)) - item["start_seconds"]) <= 0.01
+                        and abs(float(row.get("end_seconds", -1.0)) - item["end_seconds"]) <= 0.01
+                    )
+                    or (
+                        bool(row.get("speech_timing_auto_adjusted", False))
+                        and abs(float(row.get("authored_start_seconds", -1.0)) - item["start_seconds"]) <= 0.01
+                        and abs(float(row.get("authored_end_seconds", -1.0)) - item["end_seconds"]) <= 0.01
+                    )
+                )
+            ),
+            None,
         )
-    ]
+        if candidate is None:
+            missing.append(item)
+        else:
+            matched.append(deepcopy(candidate))
     if missing:
         raise ValueError(
             "The Design requirement contains explicit timed Dialogue/Voice-over/Lyrics/On-screen "
             f"Text, but {len(missing)} exact layer(s) are missing. Apply/Run is blocked to prevent "
             "silent video generation. Regenerate or restore the authored text layers."
         )
-    return required
+    return matched
 
 
 _AUTO_SOUND_MIX_MARKER = "Production mix contract:"
 _AUTO_MUSIC_MIX_MARKER = "Music mix contract:"
 _SPATIAL_ACOUSTICS_MARKER = "Spatial acoustics contract:"
+DESIGN_MUSIC_MODES = ("off", "auto", "timeline")
 
 
 def _audio_design_evidence(plan: dict) -> str:
@@ -479,7 +3476,16 @@ def spatial_acoustics_profile(evidence: object) -> tuple[str, str]:
     text = " ".join(str(evidence or "").lower().split())
 
     def has(*words: str) -> bool:
-        return any(word in text for word in words)
+        for word in words:
+            token = str(word or "").lower()
+            if not token:
+                continue
+            if token.isascii() and token.isalpha() and len(token) <= 4:
+                if re.search(rf"(?<![a-z0-9]){re.escape(token)}(?![a-z0-9])", text):
+                    return True
+            elif token in text:
+                return True
+        return False
 
     if has("small reflective room", "bathroom", "washroom", "tile", "tiled", "浴室", "洗手间", "瓷砖"):
         return (
@@ -645,6 +3651,8 @@ def automatic_background_music(plan: dict) -> str:
     base = _without_generated_mix_contract(
         plan.get("non_diegetic_music", ""), _AUTO_MUSIC_MIX_MARKER
     )
+    if base.strip().lower() in {"n/a", "na", "none", "no music", "no score"}:
+        base = ""
     if not base:
         if any(word in evidence for word in ("fight", "battle", "chase", "assassin", "wuxia", "武侠", "武俠", "刺杀", "刺殺", "追捕")):
             base = "Tense cinematic action score with restrained percussion, low strings and short accents that follow major physical beats"
@@ -666,6 +3674,42 @@ def automatic_background_music(plan: dict) -> str:
         "maximum loudness, and use no vocals unless authored Lyrics explicitly require them."
     )
     return base.rstrip(". ") + "." + contract
+
+
+def normalize_design_music_mode(value: object) -> str:
+    """Return the persistent Design/H3 music policy, defaulting to AUTO."""
+    normalized = str(value or "auto").strip().lower()
+    return normalized if normalized in DESIGN_MUSIC_MODES else "auto"
+
+
+def enforce_design_music_mode(plan: dict, mode: object) -> dict:
+    """Apply the selected music policy without changing visual or speech data."""
+    result = deepcopy(plan)
+    resolved = normalize_design_music_mode(mode)
+    # AUTO is the UI default, not permission to contradict an explicit
+    # timeline/Skill instruction.  Preserve an authored MUSIC OFF declaration
+    # unless the user deliberately changes the three-state control afterward.
+    authored_music_evidence = " ".join((
+        str(result.get("non_diegetic_music", "")),
+        str(result.get("constraints", "")),
+    ))
+    if resolved == "auto" and re.search(
+        r"(?i)\bMUSIC\s*(?:POLICY\s*:\s*)?OFF\b|"
+        r"无(?:非叙事|背景)?音乐|無(?:非敘事|背景)?音樂|禁止(?:背景)?音乐|禁止(?:背景)?音樂",
+        authored_music_evidence,
+    ):
+        resolved = "off"
+    if resolved == "auto":
+        result["non_diegetic_music"] = automatic_background_music(result)
+    else:
+        result["non_diegetic_music"] = "N/A"
+    if resolved == "off":
+        result["markers"] = [
+            row for row in result.get("markers") or []
+            if "music" not in str(row.get("preset", "")).lower()
+        ]
+    result["_music_mode"] = resolved
+    return result
 
 
 DESIGN_JSON_SCHEMA = {
@@ -691,6 +3735,12 @@ DESIGN_JSON_SCHEMA = {
         "overall_soundscape": {"type": "string"},
         "non_diegetic_music": {"type": "string"},
         "constraints": {"type": "string"},
+        "environment_physics_schema_version": {"type": "integer"},
+        "environment_transition_time_seconds": {"type": "number"},
+        "combat_action_schema_version": {"type": "integer"},
+        "combat_baseline_duration_seconds": {"type": "number"},
+        "combat_fact_ledger_schema_version": {"type": "integer"},
+        "combat_fact_ledger": {"type": "object"},
         "shots": {
             "type": "array",
             "minItems": 1,
@@ -718,6 +3768,49 @@ DESIGN_JSON_SCHEMA = {
                     "continuity_state": {"type": "string"},
                     "optional_flourish": {"type": "string"},
                     "additional_direction": {"type": "string"},
+                    "environment_interaction": {"type": "string"},
+                    "incoming_environment_state": {"type": "string"},
+                    "outgoing_environment_state": {"type": "string"},
+                    "crowd_reaction": {"type": "string"},
+                    "location_transition": {"type": "string"},
+                    "environment_state_status": {"type": "string"},
+                    "combat_action_chain": {"type": "string"},
+                    "incoming_combat_state": {"type": "string"},
+                    "outgoing_combat_state": {"type": "string"},
+                    "next_action_trigger": {"type": "string"},
+                    "combat_continuity_status": {"type": "string"},
+                    "combat_continuity_notes": {"type": "string"},
+                    "combat_action_schema_version": {"type": "integer"},
+                    "combat_fact_context": {"type": "string"},
+                    "combat_story_duty_index": {"type": "integer"},
+                    "combat_story_duty": {"type": "string"},
+                    "combat_story_duty_instruction": {"type": "string"},
+                    "combat_action_beats": {"type": "array"},
+                    "combat_action_carrier": {"type": "string"},
+                    "combat_force_vector": {"type": "object"},
+                    "incoming_combat_state_vector": {"type": "object"},
+                    "outgoing_combat_state_vector": {"type": "object"},
+                    "camera_position_sector": {"type": "string"},
+                    "camera_motion_relation": {"type": "string"},
+                    "camera_action_trigger": {"type": "string"},
+                    "dynamic_camera_direction": {"type": "string"},
+                    "contact_material": {"type": "string"},
+                    "environment_force_vector": {"type": "object"},
+                    "causal_validation_status": {"type": "string"},
+                    "causal_validation_issues": {"type": "array"},
+                    "causal_validation_inherited_fields": {"type": "array"},
+                    "final_action_resolution": {"type": "string"},
+                    "final_camera_resolution": {"type": "string"},
+                    "final_action_stable": {"type": "boolean"},
+                    "combat_action_chain_user_edited": {"type": "boolean"},
+                    "incoming_combat_state_user_edited": {"type": "boolean"},
+                    "outgoing_combat_state_user_edited": {"type": "boolean"},
+                    "next_action_trigger_user_edited": {"type": "boolean"},
+                    "environment_interaction_user_edited": {"type": "boolean"},
+                    "incoming_environment_state_user_edited": {"type": "boolean"},
+                    "outgoing_environment_state_user_edited": {"type": "boolean"},
+                    "crowd_reaction_user_edited": {"type": "boolean"},
+                    "location_transition_user_edited": {"type": "boolean"},
                 },
             },
         },
@@ -744,7 +3837,12 @@ DESIGN_JSON_SCHEMA = {
                     "language": {"type": "string"},
                     "delivery": {"type": "string"},
                     "lip_sync": {"type": "boolean"},
+                    "overlap_policy": {
+                        "type": "string",
+                        "enum": ["auto", "overlap", "sequential"],
+                    },
                     "explicit_user_requested": {"type": "boolean"},
+                    "timeline_visible_text_kind": {"type": "string"},
                 },
             },
         },
@@ -790,7 +3888,12 @@ DESIGN_JSON_SCHEMA = {
                     "media_type": {"type": "string", "enum": ["image", "video", "audio"]},
                     "usage": {
                         "type": "string",
-                        "enum": ["h3_reference", "timeline_visual"],
+                        "enum": [
+                            "h3_reference",
+                            "timeline_visual",
+                            "analysis_only",
+                            "route_control_analysis_only",
+                        ],
                     },
                     "reuse_policy": {
                         "type": "string",
@@ -860,6 +3963,113 @@ def _interval(item: dict, duration: float) -> tuple[float, float]:
     return start, end
 
 
+def _repair_overlapping_camera_shots(
+    shots: list[dict],
+    duration: float,
+    warnings: list[str],
+) -> None:
+    """Move ambiguous adjacent camera cuts onto one shared 0.5s boundary.
+
+    Design models occasionally return ranges such as S5 20.0-26.0 and
+    S6 25.5-31.0 even though the Director Shot lane is sequential. Rejecting
+    the whole plan makes an otherwise usable Design impossible to Apply. A
+    camera cut has no overlap semantics, so split the disputed interval at the
+    nearest half-second midpoint while keeping at least one grid cell in both
+    Shots. Media and authored text layers are deliberately untouched: those
+    are allowed to overlap on their own Timeline tracks.
+    """
+    index = 1
+    while index < len(shots):
+        previous = shots[index - 1]
+        current = shots[index]
+        previous_end = float(previous["end_seconds"])
+        current_start = float(current["start_seconds"])
+        if current_start >= previous_end - 1e-6:
+            index += 1
+            continue
+
+        previous_start = float(previous["start_seconds"])
+        current_end = float(current["end_seconds"])
+        minimum_boundary = round(previous_start + 0.5, 2)
+        maximum_boundary = round(current_end - 0.5, 2)
+        if minimum_boundary > maximum_boundary + 1e-6:
+            merged_fields = (
+                "subject_action", "environment_response", "continuity_state",
+                "optional_flourish", "additional_direction",
+            )
+            for field_name in merged_fields:
+                first = str(previous.get(field_name, "")).strip()
+                second = str(current.get(field_name, "")).strip()
+                if second and second not in first:
+                    previous[field_name] = ". ".join(
+                        item.rstrip(" .") for item in (first, second) if item
+                    ) + "."
+            previous["start_seconds"] = min(previous_start, float(current["start_seconds"]))
+            previous["end_seconds"] = max(previous_end, current_end)
+            shots.pop(index)
+            warnings.append(
+                f"Auto-merged overlapping camera Shots S{index}/S{index + 1}: their "
+                "combined range was too short to preserve two 0.50s camera cells. "
+                "Core actions and continuity were retained in one executable Shot; "
+                "overlapping media/text tracks were preserved."
+            )
+            continue
+
+        boundary = snap_half_second(
+            (previous_end + current_start) / 2.0,
+            duration,
+        )
+        boundary = min(max(boundary, minimum_boundary), maximum_boundary)
+        boundary = round(boundary, 2)
+        previous["end_seconds"] = boundary
+        current["start_seconds"] = boundary
+        warnings.append(
+            f"Auto-repaired overlapping camera Shots S{index}/S{index + 1}: "
+            f"S{index} ended at {previous_end:.2f}s and S{index + 1} started at "
+            f"{current_start:.2f}s; both now share the {boundary:.2f}s cut boundary. "
+            "Only the Shot lane was repaired; overlapping media/text tracks were preserved."
+        )
+        index += 1
+
+
+def _retime_design_payload(source: dict, target_duration: float) -> str:
+    """Scale a model's complete timing plan onto an explicit user duration."""
+
+    original_duration = max(
+        0.5,
+        snap_half_second(
+            source.get("duration_seconds", target_duration),
+            MAX_DESIGN_DURATION_SECONDS,
+        ),
+    )
+    if abs(original_duration - target_duration) <= 0.01:
+        source["duration_seconds"] = target_duration
+        return ""
+    ratio = target_duration / original_duration
+    for family in ("shots", "text_layers", "existing_media_uses", "media_requests"):
+        for row in source.get(family) or []:
+            if not isinstance(row, dict):
+                continue
+            for key in ("start_seconds", "end_seconds"):
+                if key in row:
+                    row[key] = snap_half_second(
+                        float(row.get(key, 0.0) or 0.0) * ratio,
+                        target_duration,
+                    )
+    for family in ("transitions", "markers"):
+        for row in source.get(family) or []:
+            if isinstance(row, dict) and "time_seconds" in row:
+                row["time_seconds"] = snap_half_second(
+                    float(row.get("time_seconds", 0.0) or 0.0) * ratio,
+                    target_duration,
+                )
+    source["duration_seconds"] = target_duration
+    return (
+        f"Auto-retimed the complete Design from {original_duration:.2f}s to the "
+        f"explicit {target_duration:.2f}s contract on the 0.5s Timeline grid."
+    )
+
+
 def _validate_t2i_media_prompt(
     prompt: str,
     *,
@@ -913,7 +4123,12 @@ def extract_design_json(value: object) -> dict:
     try:
         payload = json.loads(text)
     except json.JSONDecodeError as exc:
-        raise ValueError(f"AI response is not valid JSON: line {exc.lineno}, column {exc.colno}") from exc
+        raise DesignJSONDecodeError(
+            f"AI response is not valid JSON: line {exc.lineno}, column {exc.colno}",
+            line=exc.lineno,
+            column=exc.colno,
+            position=exc.pos,
+        ) from exc
     if not isinstance(payload, dict):
         raise ValueError("AI design JSON must be an object")
     return payload
@@ -998,9 +4213,10 @@ def repair_design_media_plan(
 
     Empty Picture slots are generation capacity, not reusable Media Pool
     assets.  Some local models nevertheless emit them in
-    ``existing_media_uses``.  Convert those rows into Z-Image requests and add
-    enough time-scoped references to cover the Shot plan at roughly one useful
-    state per five seconds, bounded by Shot count and physical API capacity.
+    ``existing_media_uses``.  Convert those rows into Z-Image requests.  Only
+    synthesize generic coverage when the design has no loaded visual reference
+    at all; a populated virtual Media Pool is authoritative and must not be
+    padded to a fixed one-image-per-five-seconds quota.
     """
 
     source = deepcopy(extract_design_json(payload))
@@ -1011,22 +4227,43 @@ def repair_design_media_plan(
         ),
     )
     inventory = _media_inventory(existing_media)
+    analysis_only_media_ids = {
+        _normalized_media_id(row.get("media_id", ""))
+        for row in source.get("existing_media_uses") or []
+        if isinstance(row, dict) and is_analysis_only_media_use(row)
+    }
     loaded_image_count = sum(
-        bool(row.get("loaded", False)) and row.get("media_type") == "image"
-        for row in inventory.values()
+        bool(row.get("loaded", False))
+        and row.get("media_type") == "image"
+        and media_id not in analysis_only_media_ids
+        for media_id, row in inventory.items()
     )
     free_image_slots = max(
         0, int(capacities.get("image", 0)) - loaded_image_count
     )
+    warnings: list[str] = []
     requests = [
         dict(row) for row in source.get("media_requests") or []
         if isinstance(row, dict)
     ]
     shots = [dict(row) for row in source.get("shots") or [] if isinstance(row, dict)]
+    request_ids_seen: set[str] = set()
     for request_index, request in enumerate(requests):
         requirement_id = _normalized_requirement_id(
             request.get("requirement_id"), f"request_{request_index + 1}"
         )
+        original_requirement_id = requirement_id
+        suffix = 2
+        while requirement_id in request_ids_seen:
+            requirement_id = f"{original_requirement_id}_{suffix}"
+            suffix += 1
+        if requirement_id != original_requirement_id:
+            warnings.append(
+                f"Renamed duplicate media requirement_id {original_requirement_id!r} "
+                f"to {requirement_id!r}."
+            )
+        request["requirement_id"] = requirement_id
+        request_ids_seen.add(requirement_id)
         internal_auto = re.fullmatch(r"auto_image_s(\d+)(?:_\d+)?", requirement_id)
         if (
             internal_auto
@@ -1040,12 +4277,45 @@ def repair_design_media_plan(
                 requirement_id=requirement_id,
                 preferred_media_id=str(request.get("preferred_media_id", "")).strip(),
             )
+            continue
+        if str(request.get("media_type", "")).strip().lower() == "image":
+            start, end = _interval(request, duration)
+            try:
+                _validate_t2i_media_prompt(
+                    str(request.get("prompt", "")).strip(),
+                    request_number=request_index + 1,
+                    start_seconds=start,
+                    end_seconds=end,
+                    duration_seconds=duration,
+                )
+            except ValueError as exc:
+                shot = max(
+                    shots or [{"start_seconds": start, "end_seconds": end}],
+                    key=lambda row: max(
+                        0.0,
+                        min(end, _interval(row, duration)[1])
+                        - max(start, _interval(row, duration)[0]),
+                    ),
+                )
+                rebuilt = _auto_image_request(
+                    source,
+                    shot,
+                    duration,
+                    requirement_id=requirement_id,
+                    preferred_media_id=str(request.get("preferred_media_id", "")).strip(),
+                    instruction=" ".join(_string_list(request.get("subject_keywords") or [])),
+                )
+                rebuilt["start_seconds"], rebuilt["end_seconds"] = start, end
+                requests[request_index] = rebuilt
+                warnings.append(
+                    f"Rebuilt unsafe Z-Image request {requirement_id!r} as a standalone "
+                    f"in-world frozen frame: {exc}"
+                )
     request_ids = {
         _normalized_requirement_id(row.get("requirement_id"), f"request_{index}")
         for index, row in enumerate(requests, 1)
     }
     valid_uses: list[dict] = []
-    warnings: list[str] = []
     has_authored_speech = any(
         isinstance(row, dict)
         and str(row.get("role", "")).strip().lower()
@@ -1123,20 +4393,52 @@ def repair_design_media_plan(
             "into a Z-Image generation request."
         )
 
+    unique_uses: list[dict] = []
+    use_ids_seen: set[str] = set()
+    for use_number, raw in enumerate(valid_uses, 1):
+        row = dict(raw)
+        requirement_id = _normalized_requirement_id(
+            row.get("requirement_id"), f"reuse_{use_number}"
+        )
+        original_requirement_id = requirement_id
+        suffix = 2
+        while requirement_id in use_ids_seen:
+            requirement_id = f"{original_requirement_id}_{suffix}"
+            suffix += 1
+        if requirement_id != original_requirement_id:
+            warnings.append(
+                f"Renamed duplicate existing-media requirement_id "
+                f"{original_requirement_id!r} to {requirement_id!r}."
+            )
+        row["requirement_id"] = requirement_id
+        use_ids_seen.add(requirement_id)
+        unique_uses.append(row)
+    valid_uses = unique_uses
     source["existing_media_uses"] = valid_uses
 
     valid_picture_ids = {
         _normalized_media_id(row.get("media_id", ""))
         for row in valid_uses
         if _media_type_for_id(_normalized_media_id(row.get("media_id", ""))) == "image"
+        and not is_analysis_only_media_use(row)
     }
     image_requests = [row for row in requests if row.get("media_type") == "image"]
     shot_count = len(shots)
-    desired_total = min(
-        int(capacities.get("image", 0)),
-        shot_count,
-        max(1, math.ceil(duration / 5.0)),
-    ) if shot_count else 0
+    # A duration-derived target is a last-resort bootstrap for an empty visual
+    # plan, not a production quota.  Long projects commonly carry a compact
+    # chronological keyframe set whose references are deliberately reused
+    # across several Shots.  Counting duration/5 here used to create dozens of
+    # unwanted auto_image requests even when every supplied P reference was
+    # valid and time-scoped.
+    desired_total = (
+        min(
+            int(capacities.get("image", 0)),
+            shot_count,
+            max(1, math.ceil(duration / 5.0)),
+        )
+        if shot_count and not valid_picture_ids
+        else len(valid_picture_ids) + len(image_requests)
+    )
     usable_total = len(valid_picture_ids) + len(image_requests)
     remaining_capacity = max(0, free_image_slots - len(image_requests))
     needed = min(max(0, desired_total - usable_total), remaining_capacity)
@@ -1145,6 +4447,7 @@ def repair_design_media_plan(
     coverage_rows = [
         row for row in (*valid_uses, *image_requests)
         if str(row.get("media_type", "")) == "image"
+        and not is_analysis_only_media_use(row)
     ]
     for row in coverage_rows:
         row_start, row_end = _interval(row, duration)
@@ -1235,6 +4538,115 @@ def _media_inventory(items: list[dict] | None) -> dict[str, dict]:
     return inventory
 
 
+def collect_design_preflight_blockers(
+    payload: object,
+    capacities: dict[str, int],
+    *,
+    existing_media: list[dict] | None = None,
+    authored_requirement: str = "",
+    selected_media_ids: list[str] | None = None,
+) -> list[str]:
+    """Collect independent unrecoverable Design defects in one pass.
+
+    This deliberately excludes defects repaired by ``normalize_design_plan``
+    (duration, brief/style defaults, duplicate requirement IDs, unsafe T2I
+    prompts and camera overlap).  The UI can therefore show every real media /
+    structure Hard Block at once instead of revealing one modal per retry.
+    """
+
+    try:
+        source = extract_design_json(payload)
+    except ValueError as exc:
+        return [str(exc)]
+    blockers: list[str] = []
+    shots = [row for row in source.get("shots") or [] if isinstance(row, dict)]
+    if not shots:
+        blockers.append("Design JSON must contain at least one executable Shot.")
+
+    inventory = _media_inventory(existing_media)
+    inventory_was_supplied = existing_media is not None
+    selection_was_supplied = selected_media_ids is not None
+    selected = {
+        _normalized_media_id(value) for value in selected_media_ids or []
+        if _normalized_media_id(value)
+    }
+    explicit_ids = {
+        _normalized_media_id(f"{match.group(1)}{match.group(2)}")
+        for match in re.finditer(
+            r"(?<![A-Za-z0-9_])@([PVA])(\d+)\b",
+            str(authored_requirement or ""),
+            flags=re.I,
+        )
+    }
+    has_authored_speech = bool(
+        extract_explicit_timed_text_layers(authored_requirement)
+        or re.search(
+            r"dialogue|voice[- ]?over|narration|对白|對白|旁白|台词|台詞|普通话|普通話",
+            str(authored_requirement or ""),
+            flags=re.I,
+        )
+    )
+
+    for use_number, raw in enumerate(source.get("existing_media_uses") or [], 1):
+        if not isinstance(raw, dict):
+            continue
+        media_id = _normalized_media_id(raw.get("media_id", ""))
+        if not media_id:
+            blockers.append(
+                f"Existing media use {use_number} has an invalid media_id; use P1, V1 or A1."
+            )
+            continue
+        inferred_type = _media_type_for_id(media_id)
+        declared_type = str(raw.get("media_type") or inferred_type).strip().lower()
+        if declared_type != inferred_type:
+            blockers.append(
+                f"Existing media {media_id} is {inferred_type}, not {declared_type}."
+            )
+            continue
+        ordinal = int(media_id[1:])
+        if ordinal > int(capacities.get(inferred_type, 0)):
+            blockers.append(
+                f"Existing media {media_id} is outside the API's "
+                f"{capacities.get(inferred_type, 0)} {inferred_type} slots."
+            )
+            continue
+        if inventory_was_supplied:
+            inventory_row = inventory.get(media_id)
+            if inventory_row is None:
+                blockers.append(
+                    f"Existing media {media_id} is not present in the Media Pool inventory."
+                )
+                continue
+            inventory_type = str(inventory_row.get("media_type", "")).strip().lower()
+            if inventory_type and inventory_type != inferred_type:
+                blockers.append(
+                    f"Media Pool {media_id} is {inventory_type}, not {inferred_type}."
+                )
+                continue
+            if not inventory_row.get("loaded", False):
+                authored_audio_placeholder = (
+                    inferred_type == "audio" and has_authored_speech
+                )
+                recoverable_picture_slot = inferred_type == "image"
+                if not authored_audio_placeholder and not recoverable_picture_slot:
+                    blockers.append(
+                        f"Existing media {media_id} is empty and cannot be reused."
+                    )
+
+    for media_id in sorted(explicit_ids):
+        row = inventory.get(media_id)
+        if not row or not row.get("loaded", False):
+            blockers.append(
+                f"Explicit reference @{media_id} has no loaded Media Pool file."
+            )
+        elif selection_was_supplied and media_id not in selected:
+            blockers.append(
+                f"Explicit reference @{media_id} is not enabled for this Design."
+            )
+
+    return list(dict.fromkeys(blockers))
+
+
 def _string_list(value: object) -> list[str]:
     if isinstance(value, str):
         value = [item.strip() for item in value.split(",")]
@@ -1252,6 +4664,890 @@ def _canonicalize_design_media_mentions(text: object, media_ids: list[str]) -> s
             f"@{media_id}",
             result,
             flags=re.I,
+        )
+    return result
+
+
+def _replace_analysis_only_media_mentions(text: object, media_ids: list[str]) -> str:
+    """Remove control-image labels from prose that will be compiled for H3.
+
+    Analysis-only images may guide planning, but naming their stable ID inside
+    a Shot can cause later reference-token parsing to reactivate that source.
+    Replace the ID with its already extracted abstract instruction instead.
+    """
+
+    result = str(text or "")
+    for media_id in sorted(set(media_ids), key=len, reverse=True):
+        match = re.fullmatch(r"([PVA])(\d+)", media_id, flags=re.I)
+        if not match:
+            continue
+        family = {"P": "Picture", "V": "Video", "A": "Audio"}[match.group(1).upper()]
+        ordinal = match.group(2)
+        for pattern in (
+            rf"(?<![A-Za-z0-9_])@?{re.escape(media_id)}\b",
+            rf"<\s*{family}\s+{ordinal}\s*>",
+        ):
+            result = re.sub(
+                pattern,
+                "the pre-analysed non-visual control instructions",
+                result,
+                flags=re.I,
+            )
+    return " ".join(result.split())
+
+
+def _remove_control_artifact_priming(text: object) -> str:
+    """Keep control-image artifact vocabulary out of a single H3 prompt field."""
+
+    result = str(text or "")
+    result = re.sub(
+        r"\b(?:red\s+(?:route\s+)?line|red\s+route|red\s+waypoint|route\s+graphics?|"
+        r"route\s+path\s+overlays?|flight\s+path\s+lines?|map\s+(?:line|overlay)s?|"
+        r"visible\s+(?:control\s+path|route\s+guide))\b",
+        "the planned camera trajectory",
+        result,
+        flags=re.I,
+    )
+    result = re.sub(
+        r"\b(?:red\s+arrows?|waypoint\s+markers?|navigation\s+markers?|HUD|UI\s+overlays?|"
+        r"graphic\s+overlays?|red\s+scribbles?|red\s+strokes?)\b",
+        "editing-only data",
+        result,
+        flags=re.I,
+    )
+    return " ".join(result.split())
+
+
+DRONE_STILL_CLEAN_FRAME_CONTRACT = (
+    "Clean photographic scene with unobstructed architecture, natural sky and physically "
+    "plausible lighting. Preserve the source image's scene, colour palette and exposure."
+)
+DRONE_STILL_NEGATIVE_PROMPT = (
+    "visible flight path, orbit ring, circular light trail, glowing ellipse, light ribbon, "
+    "trajectory line, energy ring, HUD overlay, graphic circle, neon loop around buildings, "
+    "duplicated landmark, duplicate building, cloned architecture, repeated primary subject, "
+    "second copy of the same landmark"
+)
+DRONE_FIREWORKS_STILL_CONTRACT = (
+    "Fireworks are separate radial particle bursts located behind and above the skyline, with "
+    "individual sparks, natural smoke and physically plausible reflections. Keep architectural "
+    "silhouettes clearly readable."
+)
+DRONE_FIREWORKS_STILL_NEGATIVE_PROMPT = (
+    "continuous firework ring around buildings, fireworks forming a flight path, fireworks "
+    "wrapped around towers, solid neon fireworks, duplicated landmark, fused towers"
+)
+DRONE_CAMERA_ONLY_POV_CONTRACT = (
+    "PURE CAMERA-ONLY POV: show only the P1-established world and authored effects across "
+    "the full frame. The moving camera and its carrier remain completely outside the image "
+    "boundaries during launch, banking, pitching, diving and rolling. Never cut to an exterior, "
+    "chase, follow, over-the-vehicle or observer view. No visible camera hardware, vehicle body, "
+    "nose, arms, rotors, propellers, landing gear, controller, carrier shadow or reflection. "
+    "If P1 already contains a distant aircraft, preserve it only as unchanged background scenery; "
+    "it never becomes the foreground camera carrier."
+)
+DRONE_SPECIAL_SKILL_KEYS = frozenset({
+    "drone-fly-on-city",
+    "drone-fly-on-city-fireworks",
+})
+_DRONE_STILL_MOTION_PRIMING_RE = re.compile(
+    r"(?:360\s*(?:°|degrees?|[- ]degree)?|full\s+(?:circle|rotation)|"
+    r"orbit(?:al|ing)?|yaw(?:ing)?|waypoints?|"
+    r"flight\s+path|camera\s+path|trajectory|route[- ]following|route\s+path|"
+    r"(?:circle|circular)\s+(?:path|route|motion|track|arc|loop|ring)|"
+    r"light\s+(?:trail|ribbon)|glowing\s+ellipse|energy\s+ring|neon\s+loop|"
+    r"环绕|環繞|轨迹|軌跡|路线|路線|圆环|圓環|光带|光帶|航点|航點|HUD)",
+    flags=re.I,
+)
+
+
+def is_drone_special_skill(value: object) -> bool:
+    return str(value or "").strip().casefold() in DRONE_SPECIAL_SKILL_KEYS
+
+
+def _drone_camera_only_text(value: object) -> str:
+    """Make the camera viewpoint the actor without depicting its carrier."""
+
+    result = str(value or "")
+    substitutions = (
+        (r"\b(?:the\s+)?(?:FPV\s+)?drone['’]s\s+(?:own\s+)?position\b", "the camera path position"),
+        (r"\b(?:the\s+)?(?:FPV\s+)?drone['’]s\s+forward\s+tangent\b", "the forward flight tangent"),
+        (r"\b(?:the\s+)?drone\s+nose\b", "the forward camera optical axis"),
+        (r"\b(?:the\s+)?(?:FPV\s+)?drone\b", "the onboard camera viewpoint"),
+        (r"\bthe\s+aircraft\b", "the onboard camera viewpoint"),
+        (r"\bairframe\b", "camera mount"),
+        (r"\brotor\s+vibration\b", "takeoff vibration"),
+    )
+    for pattern, replacement in substitutions:
+        result = re.sub(pattern, replacement, result, flags=re.I)
+    result = re.sub(
+        r"\bcamera\s+viewpoint\s+viewpoint\b", "camera viewpoint", result, flags=re.I
+    )
+    result = " ".join(result.split())
+    source = str(value or "").lstrip()
+    if result and source[:1].isupper():
+        result = result[:1].upper() + result[1:]
+    return result
+
+
+def validate_drone_image_request_budget(
+    plan: dict,
+    special_skill_key: str,
+) -> None:
+    """Stop a malformed drone Plan before it can launch mass Z-Image work.
+
+    The Virtual Media Pool is intentionally unlimited, but one route-controlled
+    drone Design owns exactly one P1-derived still per five-second interval.
+    This execution-side invariant is independent of LM output and protects the
+    machine even if duration parsing or a future model response regresses.
+    """
+
+    if not is_drone_special_skill(special_skill_key):
+        return
+    duration = max(
+        0.5,
+        min(
+            MAX_DESIGN_DURATION_SECONDS,
+            float(plan.get("duration_seconds", 0.0) or 0.0),
+        ),
+    )
+    expected_count = max(1, int(math.ceil(duration / 5.0)))
+    uses = [
+        row for row in plan.get("existing_media_uses") or []
+        if isinstance(row, dict)
+    ]
+    use_ids = {
+        str(row.get("media_id", "")).strip().upper(): str(
+            row.get("usage", "")
+        ).strip().lower()
+        for row in uses
+    }
+    missing = [media_id for media_id in ("P1", "P2") if media_id not in use_ids]
+    if missing:
+        raise ValueError(
+            "Drone reference generation requires loaded "
+            + " and ".join("@" + media_id for media_id in missing)
+            + "; no Z-Image requests were started."
+        )
+    if use_ids.get("P1") != "h3_reference" or use_ids.get("P2") != "analysis_only":
+        raise ValueError(
+            "Drone reference mapping is invalid: @P1 must be h3_reference and "
+            "@P2 must be analysis_only; no Z-Image requests were started."
+        )
+    images = [
+        row for row in plan.get("media_requests") or []
+        if isinstance(row, dict) and str(row.get("media_type", "")).lower() == "image"
+    ]
+    valid_chain = bool(
+        len(images) == expected_count
+        and all(str(row.get("derived_from_media_id", "")).upper() == "P1" for row in images)
+        and len({str(row.get("requirement_id", "")) for row in images}) == len(images)
+    )
+    expected_ranges = [
+        (float(index * 5), min(duration, float((index + 1) * 5)))
+        for index in range(expected_count)
+    ]
+    actual_ranges = [
+        (
+            float(row.get("start_seconds", 0.0) or 0.0),
+            float(row.get("end_seconds", 0.0) or 0.0),
+        )
+        for row in images
+    ]
+    if not valid_chain or actual_ranges != expected_ranges:
+        raise ValueError(
+            "Drone image-generation budget rejected a malformed Plan: "
+            f"{duration:.2f}s permits exactly {expected_count} P1-derived Picture "
+            f"request(s), but the Plan supplied {len(images)}. No Z-Image requests "
+            "were started."
+        )
+
+
+def bind_design_source_plate_paths(
+    materials: list[dict],
+    existing_media: list[dict] | None,
+) -> list[dict]:
+    """Attach a verified local plate path without asking the LM to invent one."""
+
+    local_by_id = {
+        str(row.get("media_id", "")).strip().upper(): str(
+            row.get("local_path", "") or ""
+        ).strip()
+        for row in existing_media or []
+        if isinstance(row, dict)
+    }
+    for material in materials:
+        if not isinstance(material, dict):
+            continue
+        media_id = str(material.get("source_plate_media_id", "")).strip().upper()
+        if not media_id:
+            continue
+        source = local_by_id.get(media_id, "")
+        if source and Path(source).is_file():
+            material["source_plate_local_path"] = str(Path(source).resolve())
+        else:
+            material.pop("source_plate_local_path", None)
+    return materials
+
+
+def sanitize_drone_still_image_request(
+    request: dict,
+    *,
+    fireworks: bool = False,
+) -> dict:
+    """Keep drone camera motion from becoming pixels in a generated still.
+
+    A T2I reference is one frozen environment state.  Sentences describing a
+    360-degree orbit, yaw path or trajectory often become literal rings around
+    buildings, even when the route-control Picture itself is correctly marked
+    analysis-only.  Remove those motion-bearing sentences from the still prompt,
+    preserve environment sentences, and add an explicit clean-frame contract.
+    The detailed artifact list remains in the dedicated negative prompt and is
+    never copied into the later H3 video prompt.
+    """
+
+    result = dict(request)
+    original = " ".join(str(result.get("prompt", "") or "").split())
+    sentences = [
+        part.strip()
+        for part in re.split(r"(?<=[.!?])\s+|(?<=[。！？；;])\s*", original)
+        if part.strip()
+    ]
+    kept = [part for part in sentences if not _DRONE_STILL_MOTION_PRIMING_RE.search(part)]
+    if kept:
+        prompt = " ".join(kept)
+    else:
+        prompt = (
+            "Photoreal frozen aerial city reference frame with coherent architecture, roads, "
+            "skyline, weather, natural lighting, colour grade and a stable level horizon."
+        )
+    if DRONE_STILL_CLEAN_FRAME_CONTRACT not in prompt:
+        prompt = prompt.rstrip(" .") + ". " + DRONE_STILL_CLEAN_FRAME_CONTRACT
+    if fireworks and DRONE_FIREWORKS_STILL_CONTRACT not in prompt:
+        prompt = prompt.rstrip(" .") + ". " + DRONE_FIREWORKS_STILL_CONTRACT
+    result["prompt"] = prompt
+
+    clean_keywords: list[str] = []
+    for value in _string_list(result.get("subject_keywords") or []):
+        if _DRONE_STILL_MOTION_PRIMING_RE.search(value):
+            continue
+        clean_keywords.append(value)
+    result["subject_keywords"] = clean_keywords
+
+    existing_negative = str(result.get("negative_prompt", "") or "").strip(" ,")
+    negative_parts = [part for part in (existing_negative, DRONE_STILL_NEGATIVE_PROMPT) if part]
+    if fireworks:
+        negative_parts.append(DRONE_FIREWORKS_STILL_NEGATIVE_PROMPT)
+    result["negative_prompt"] = ", ".join(dict.fromkeys(negative_parts))
+    return result
+
+
+_DARK_RESCUE_POV_LOCK = (
+    "Strict first-person POV from S2's eye line. The camera is physically inside "
+    "S2's body and never leaves S2's point of view."
+)
+_DARK_RESCUE_POV_FORBIDDEN_RE = re.compile(
+    r"\b(?:third[- ]person(?:\s+(?:view|shot|camera))?|external\s+camera|"
+    r"over[- ]the[- ]shoulder(?:\s+shot)?|hero\s+shot|drone\s+shot|"
+    r"crane\s+shot|orbit(?:ing)?\s+shot|security[- ]camera\s+view|"
+    r"wide[- ]observer\s+view|camera\s+outside\s+S2(?:'s)?\s+body)\b",
+    flags=re.I,
+)
+
+
+def _dark_rescue_pov_sanitize(value: object) -> str:
+    """Remove camera language that can pull a rescue Shot outside S2's body."""
+
+    text = str(value or "").strip()
+    text = _DARK_RESCUE_POV_FORBIDDEN_RE.sub(
+        "body-mounted S2 eye-line composition", text
+    )
+    text = re.sub(
+        r"\b(?:the\s+)?camera\s+(?:follows|tracks)\s+S2\b",
+        "S2 moves and the eye-line view moves with S2's body",
+        text,
+        flags=re.I,
+    )
+    return " ".join(text.split())
+
+
+def enforce_dark_rescue_first_person(plan: dict) -> dict:
+    """Turn the dark-rescue camera contract into visible, executable POV evidence.
+
+    Language models often retain the words ``first-person`` globally while still
+    returning external establishing shots.  H3 receives Shot fields separately,
+    so every generated Shot and image request needs both an absolute eye-line lock
+    and positive objects that prove the viewpoint in-frame.
+    """
+
+    anchors = (
+        "the lower edge of S2's wet or dusty glove and flashlight beam",
+        "S2's gloved forearm and one role-correct rescue tool in extreme foreground",
+        "the edge of S2's helmet and a gloved hand at the lower frame boundary",
+    )
+    proof_tail = (
+        "S2's face, full body, back, observer silhouette and reflection remain off-screen. "
+        "All parallax is body-motivated: perspective, head turns, footstep bob, crouching "
+        "height and contact recoil are generated only by S2's physically plausible movement."
+    )
+    for index, shot in enumerate(plan.get("shots") or []):
+        if not isinstance(shot, dict):
+            continue
+        anchor = anchors[index % len(anchors)]
+        original_framing = _dark_rescue_pov_sanitize(shot.get("framing"))
+        if not original_framing.casefold().startswith(
+            "strict first-person pov from s2's eye line"
+        ):
+            shot["framing"] = (
+                f"Strict first-person POV from S2's eye line; {anchor} visibly anchors "
+                "near-field depth"
+                + (f"; {original_framing}" if original_framing else "")
+            )
+        else:
+            shot["framing"] = original_framing
+        original_angle = _dark_rescue_pov_sanitize(shot.get("camera_angle"))
+        shot["camera_angle"] = (
+            original_angle
+            if original_angle.casefold().startswith("s2 body-mounted natural human eye line")
+            else "S2 body-mounted natural human eye line"
+            + (f"; {original_angle}" if original_angle else "")
+        )
+        original_movement = _dark_rescue_pov_sanitize(shot.get("camera_movement"))
+        shot["camera_movement"] = (
+            original_movement
+            if original_movement.casefold().startswith(
+                "body-motivated first-person movement caused only by s2"
+            )
+            else "Body-motivated first-person movement caused only by S2"
+            + (f"; {original_movement}" if original_movement else "")
+        )
+        action = _dark_rescue_pov_sanitize(
+            shot.get("h3_executable_action") or shot.get("subject_action")
+        )
+        executable = (
+            action
+            if action.casefold().startswith("s2's first-person pov")
+            else f"S2's first-person POV visibly includes {anchor}. "
+            + (action or "Continue the current rescue action from S2's eye line.")
+        )
+        shot["subject_action"] = executable
+        shot["h3_executable_action"] = executable
+        budget = shot.get("action_budget")
+        if isinstance(budget, dict):
+            original = _dark_rescue_pov_sanitize(
+                budget.get("original_subject_action") or action
+            )
+            budget["original_subject_action"] = (
+                original
+                if original.casefold().startswith("s2's first-person pov")
+                else (
+                    "S2's first-person POV visibly includes " + anchor + ". " + original
+                ).strip()
+            )
+        detail = _dark_rescue_pov_sanitize(shot.get("additional_direction"))
+        if detail.casefold().startswith(_DARK_RESCUE_POV_LOCK.casefold()):
+            shot["additional_direction"] = detail
+        else:
+            shot["additional_direction"] = " ".join(
+                part for part in (
+                    _DARK_RESCUE_POV_LOCK,
+                    f"POV proof in this Shot: {anchor} remains optically near the lens.",
+                    proof_tail,
+                    detail,
+                ) if part
+            )
+        continuity = _dark_rescue_pov_sanitize(shot.get("continuity_state"))
+        pov_continuity = (
+            f"Preserve first-person eye height and the screen-side continuity of {anchor}; "
+            "the next Shot inherits S2's head direction, hand/tool state and body momentum."
+        )
+        shot["continuity_state"] = (
+            continuity
+            if "preserve first-person eye height" in continuity.casefold()
+            else " ".join(part for part in (continuity, pov_continuity) if part)
+        )
+
+    for request in plan.get("media_requests") or []:
+        if not isinstance(request, dict) or request.get("media_type") != "image":
+            continue
+        prompt = _dark_rescue_pov_sanitize(request.get("prompt"))
+        prefix = (
+            "A strict first-person POV reference image from S2's physical eye line, "
+            "with one wet or dusty gloved hand, flashlight, helmet rim, uniform sleeve "
+            "or role-correct rescue tool visible in extreme foreground as perspective proof. "
+            "S2's face, full body, back, reflection and observer view are absent."
+        )
+        if not prompt.casefold().startswith("a strict first-person pov reference image"):
+            request["prompt"] = f"{prefix} {prompt}".strip()
+        else:
+            request["prompt"] = prompt
+
+    for use in plan.get("existing_media_uses") or []:
+        if not isinstance(use, dict) or use.get("media_type") != "image":
+            continue
+        instruction = _dark_rescue_pov_sanitize(use.get("instruction"))
+        camera_contract = (
+            "Use this image only for its assigned identity, place, prop or damage state; "
+            "do not inherit an external camera angle. Render the active Shot from S2's "
+            "strict first-person physical eye line."
+        )
+        use["instruction"] = (
+            instruction
+            if "do not inherit an external camera angle" in instruction.casefold()
+            else " ".join(part for part in (instruction, camera_contract) if part)
+        )
+
+    constraint = (
+        _DARK_RESCUE_POV_LOCK
+        + " Every Shot must visibly prove the viewpoint with a near-lens glove, forearm, "
+          "flashlight/tool or helmet rim and body-motivated parallax; never render S2 as an "
+          "externally visible subject."
+    )
+    current = _dark_rescue_pov_sanitize(plan.get("constraints"))
+    if _DARK_RESCUE_POV_LOCK.casefold() not in current.casefold():
+        plan["constraints"] = " ".join(part for part in (current, constraint) if part)
+    else:
+        plan["constraints"] = current
+    warnings = plan.setdefault("design_warnings", [])
+    note = (
+        "dark-rescue-h3 enforced physical first-person POV evidence in every Shot and "
+        "generated image reference."
+    )
+    if note not in warnings:
+        warnings.append(note)
+    return plan
+
+
+def enforce_drone_scene_keyframe_chain(
+    plan: dict,
+    existing_media: list[dict] | None,
+    selected_media_ids: list[str] | None = None,
+    special_skill_key: str = "drone-fly-on-city",
+    authored_requirement: str = "",
+) -> dict:
+    """Enforce P1 visual truth, P2 motion truth and a P1-derived stage chain.
+
+    P1 remains present in every Segment.  P2 is analysed locally and never
+    becomes a Loader.  P3 is the opening P1-derived scene anchor; P4 onward are
+    five-second P1-derived scene-state references.  Camera motion is compiled
+    separately for H3 as three ordered phases: near-ground launch, one complete
+    P1-subject orbit, then verified P2 route travel or a safe FPV fallback.
+    """
+
+    result = plan
+    duration = float(result.get("duration_seconds", 0.0) or 0.0)
+    if duration < 1.5:
+        return result
+    inventory = {
+        str(row.get("media_id", "")).strip().upper(): row
+        for row in existing_media or [] if isinstance(row, dict)
+    }
+    p1_inventory = inventory.get("P1", {})
+    p2_inventory = inventory.get("P2", {})
+    uses = [row for row in result.get("existing_media_uses") or [] if isinstance(row, dict)]
+
+    def find_use(media_id: str) -> dict | None:
+        return next(
+            (row for row in uses if str(row.get("media_id", "")).strip().upper() == media_id),
+            None,
+        )
+
+    p1_use = find_use("P1")
+    if p1_use is None and bool(p1_inventory.get("loaded", False)):
+        p1_use = {
+            "requirement_id": "scene_master_p1",
+            "media_id": "P1", "media_type": "image", "usage": "h3_reference",
+            "reuse_policy": "whole_design", "start_seconds": 0.0,
+            "end_seconds": duration, "track": "V1", "subject_keywords": [],
+            "instruction": "Use @P1 as the sole visual scene master for the full video.",
+        }
+        uses.append(p1_use)
+    p2_use = find_use("P2")
+    if p2_use is None and bool(p2_inventory.get("loaded", False)):
+        p2_use = {
+            "requirement_id": "route_control_p2",
+            "media_id": "P2", "media_type": "image", "usage": "analysis_only",
+            "reuse_policy": "whole_design", "start_seconds": 0.0,
+            "end_seconds": duration, "track": "V2",
+            "subject_keywords": ["off-screen camera-path control"],
+            "instruction": "Use @P2 only to derive abstract camera motion; never render or upload it.",
+        }
+        uses.append(p2_use)
+    if p1_use is None:
+        return result
+
+    # Only P1 and P2 from the user's pool participate directly.  Later Pictures
+    # are derived references created below, never competing visual scene masters.
+    result["existing_media_uses"] = [
+        row for row in uses
+        if str(row.get("media_id", "")).strip().upper() in {"P1", "P2"}
+        or row.get("media_type") != "image"
+    ]
+    p1_use.update({
+        "media_type": "image", "usage": "h3_reference",
+        "reuse_policy": "whole_design", "start_seconds": 0.0,
+        "end_seconds": duration, "track": "V1",
+    })
+    p1_use.pop("identity_anchor", None)
+    p1_evidence = str(
+        p1_inventory.get("semantic_enrichment")
+        or p1_inventory.get("caption")
+        or p1_inventory.get("analysis_summary")
+        or p1_inventory.get("raw_analysis_summary")
+        or p1_use.get("instruction")
+        or result.get("creative_brief", "")
+    ).strip()
+    p1_evidence = _remove_control_artifact_priming(
+        _replace_analysis_only_media_mentions(p1_evidence, ["P2"])
+    )[:2200].strip() or "the exact loaded P1 scene, architecture, weather, lighting and lens"
+    p1_use["instruction"] = (
+        "P1 SCENE MASTER LOCK. Begin the generated flight from a physically plausible near-ground "
+        "takeoff point within the P1-established world, preserving the primary subject and all "
+        "visible scene evidence. Keep P1 as the sole visual truth in every Segment: preserve "
+        "its actual place, architecture, object count, geometry, road layout, weather, time, "
+        "lighting, colour, exposure, atmosphere, horizon and lens character. Never substitute a "
+        "city, landmark or building named only in a Skill example. P1 evidence: " + p1_evidence
+    )
+    if p2_use is not None:
+        p2_use.update({
+            "media_type": "image", "usage": "analysis_only",
+            "reuse_policy": "whole_design", "start_seconds": 0.0,
+            "end_seconds": duration, "track": "V2",
+        })
+        p2_use["instruction"] = (
+            "P2 ROUTE CONTROL ONLY. Extract the red stroke's start, bends, direction and endpoint. "
+            "P2 supplies no pixels, place, landmark, colour, style, composition or scene content to "
+            "H3 or Z-Image and must never enter an upload or Loader."
+        )
+
+    route = analyse_red_route(str(p2_inventory.get("local_path", "")), waypoint_count=9)
+    result["_drone_route_analysis"] = route
+    moving_end = duration
+    route_verified = bool(route.get("direction_verified"))
+
+    # Both Drone Skills use one deterministic three-phase mission. The first
+    # two seconds establish a real near-ground launch; the middle phase owns the
+    # complete landmark orbit; only after that orbit is complete does P2 own the
+    # remaining travel to its endpoint. This avoids the previous contradictory
+    # instruction to orbit and follow a route at the same time.
+    takeoff_end = min(
+        moving_end,
+        max(0.5, min(2.0, round(moving_end * 0.2 * 2.0) / 2.0)),
+    )
+    # A full physical lap needs materially more screen time than an optical
+    # spin. Reserve at least three seconds for the later route when possible,
+    # and give the orbit up to eight seconds. A 12-second mission therefore
+    # uses 0-2s launch, 2-9s orbit, 9-12s route instead of squeezing the lap
+    # into the former 3.5-second interval.
+    available_after_takeoff = max(0.5, moving_end - takeoff_end)
+    route_reserve = min(3.0, max(0.5, available_after_takeoff * 0.3))
+    orbit_duration = min(8.0, max(0.5, available_after_takeoff - route_reserve))
+    orbit_end = round((takeoff_end + orbit_duration) * 2.0) / 2.0
+    orbit_end = min(max(takeoff_end, moving_end - 0.5), orbit_end)
+    if orbit_end <= takeoff_end:
+        orbit_end = min(moving_end, takeoff_end + 0.5)
+    result["_drone_motion_schedule"] = {
+        "mode": "ground_launch_then_360_orbit_then_route",
+        "phase_completion_gate": "route_must_not_begin_before_full_orbit_completion",
+        "takeoff_start_seconds": 0.0,
+        "takeoff_end_seconds": takeoff_end,
+        "orbit_start_seconds": takeoff_end,
+        "orbit_end_seconds": orbit_end,
+        "route_start_seconds": orbit_end,
+        "route_end_seconds": moving_end,
+        "route_mode": "verified_p2" if route_verified else "fpv_scene_fallback",
+    }
+
+    fallback_beats = (
+        (0.00, 0.28, "accelerate at very low altitude and skim above the established ground plane"),
+        (0.28, 0.55, "bank hard left, pitch the nose up and enter one broad climbing arc"),
+        (0.55, 0.78, "pass a brief inverted crest, dive, then counter-roll hard right around visible obstacles"),
+        (0.78, 1.00, "complete one tight figure-eight crossover, level the airframe and sprint through a safe narrow opening or toward the distant horizon"),
+    )
+
+    def fallback_fpv_span(start_fraction: float, end_fraction: float) -> str:
+        clauses = [
+            text for beat_start, beat_end, text in fallback_beats
+            if beat_end > start_fraction and beat_start < end_fraction
+        ]
+        return "; then ".join(clauses) + "."
+
+    def phase_intersects(
+        start: float,
+        end: float,
+        phase_start: float,
+        phase_end: float,
+    ) -> bool:
+        return min(end, phase_end) - max(start, phase_start) > 1e-6
+
+    orbit_checkpoints = (
+        (0.0, "the front starting side"),
+        (90.0, "the subject's right side"),
+        (180.0, "the rear side"),
+        (270.0, "the subject's left side"),
+        (360.0, "back near the front starting side"),
+    )
+
+    def orbit_span_language(start_degrees: float, end_degrees: float) -> str:
+        """Describe an orbital translation as positions, never an optical spin."""
+
+        reached = [
+            label for degrees, label in orbit_checkpoints
+            if start_degrees < degrees <= end_degrees + 1e-6
+        ]
+        if not reached:
+            nearest = min(
+                orbit_checkpoints,
+                key=lambda row: abs(row[0] - end_degrees),
+            )[1]
+            reached = [f"toward {nearest}"]
+        return ", then ".join(reached)
+
+    shots = [row for row in result.get("shots") or [] if isinstance(row, dict)]
+    for index, shot in enumerate(shots):
+        shot_start = max(
+            0.0, min(moving_end, float(shot.get("start_seconds", 0.0)))
+        )
+        shot_end = max(
+            shot_start, min(moving_end, float(shot.get("end_seconds", 0.0)))
+        )
+        motion_parts: list[str] = []
+        if phase_intersects(shot_start, shot_end, 0.0, takeoff_end):
+            motion_parts.append(
+                "GROUND-LAUNCH PHASE: begin at a physically safe near-ground takeoff point inside "
+                "the P1-established scene, surge forward just above the ground with visible speed, "
+                "then pitch the nose up into clear air without changing the scene identity"
+            )
+        if phase_intersects(shot_start, shot_end, takeoff_end, orbit_end):
+            phase_start = max(shot_start, takeoff_end)
+            phase_end = min(shot_end, orbit_end)
+            orbit_duration = max(0.5, orbit_end - takeoff_end)
+            start_degrees = round(
+                360.0 * (phase_start - takeoff_end) / orbit_duration, 1
+            )
+            end_degrees = round(
+                360.0 * (phase_end - takeoff_end) / orbit_duration, 1
+            )
+            motion_parts.append(
+                "LANDMARK-ORBIT PHASE: the onboard camera viewpoint physically travels through part of one complete, smooth, "
+                "wide clockwise lap around P1's primary scene subject at a constant safe radius. "
+                f"Advance the lap from {start_degrees:g} to {end_degrees:g} degrees, physically "
+                f"translating past {orbit_span_language(start_degrees, end_degrees)}. Keep the rigidly "
+                "mounted FPV camera optical axis aligned with the instantaneous forward flight tangent "
+                "of the flight path; it must never independently yaw, pan or gimbal-lock toward the "
+                "primary subject. Let the subject naturally travel along the inside edge of the frame, "
+                "move behind the camera when geometry requires it, and reappear as the aircraft advances, "
+                "while surrounding buildings and the background change continuously through strong "
+                "natural parallax. Use only moderate coordinated banking and keep the horizon readable. "
+                "This is a real flight path around the subject, not an in-place camera rotation, "
+                "continuous look-at shot, panoramic yaw, barrel roll, optical spin or rotating background. "
+                "Do not invert or roll "
+                "the aircraft during this orbit. Complete the full front-to-right-to-rear-to-left-to-front "
+                "lap before entering the route phase. The route phase is locked and must not begin until "
+                "the aircraft has visibly returned near the orbit's front starting side"
+            )
+        if phase_intersects(shot_start, shot_end, orbit_end, moving_end):
+            phase_start = max(shot_start, orbit_end)
+            phase_end = min(shot_end, moving_end)
+            route_duration = max(0.5, moving_end - orbit_end)
+            route_start = max(
+                0.0, min(1.0, (phase_start - orbit_end) / route_duration)
+            )
+            route_end = max(
+                route_start, min(1.0, (phase_end - orbit_end) / route_duration)
+            )
+            if route_verified:
+                motion_parts.append(
+                    "ROUTE-EXIT PHASE: after completing the orbit, follow the verified authored "
+                    "path from its marked start through every ordered bend to its marked endpoint. "
+                    + route_span_language(route, route_start, route_end)
+                    + " Maintain visible forward displacement; the final generated camera position "
+                      "must reach the authored route endpoint."
+                )
+            else:
+                motion_parts.append(
+                    "FPV FALLBACK PHASE: route direction could not be verified, so do not invent "
+                    "route coordinates. Continue a collision-safe flight around P1's primary scene: "
+                    + fallback_fpv_span(route_start, route_end)
+                )
+        shot["camera_movement"] = (
+            "P1 scene-anchored three-phase first-person FPV camera motion. "
+            + "; then ".join(motion_parts)
+            + " Preserve one physically continuous flight with no cut, teleport, geometry warp or frame tear."
+        )
+        continuity = str(shot.get("continuity_state") or "")
+        continuity = re.sub(r"Carry P1 geometry.*?(?:\.|$)", "", continuity).strip()
+        shot["continuity_state"] = (
+            continuity.rstrip(" .") + (". " if continuity else "")
+            + "Carry P1 geometry, FPV roll angle, heading, altitude, velocity and inertia continuously into the next Shot."
+        )
+        direction = str(shot.get("additional_direction") or "")
+        direction = re.sub(r"P1 remains the visual source[; ]+.*?(?:\.|$)", "", direction).strip()
+        direction = re.sub(
+            r"Fully immersive first-person FPV.*?(?:frame tearing|mechanical god-view camera)\.?",
+            "",
+            direction,
+            flags=re.I,
+        ).strip()
+        shot["additional_direction"] = (
+            direction.rstrip(" .") + (". " if direction else "")
+            + "Fully immersive first-person FPV with a rigidly mounted action camera, mild GoPro-like "
+              "ultra-wide fisheye, speed-driven motion blur, forceful inertia and banking. During the "
+              "LANDMARK-ORBIT PHASE, allow moderate coordinated banking only: no inversion, barrel "
+              "roll, camera spin, independent gimbal pan, subject-centred look-at or yaw-only panorama. "
+              "The camera stays rigidly forward along the flight tangent. Aggressive dives and up to "
+              "180-degree rolls are "
+              "allowed only after the orbit is complete and the ROUTE-EXIT or FPV FALLBACK PHASE has "
+              "begun. Keep every permitted roll spatially continuous, architecture and trees "
+              "geometrically stable, and motion smooth without frame tearing; never use a slow, "
+              "mechanical god-view camera. P1 remains the visual source; follow the timed physical "
+              "camera directions."
+        )
+
+        # The planning model often writes the flying vehicle as subject (for
+        # example, "the drone lifts off"). H3 can interpret that literally as
+        # an exterior chase shot. Compile camera motion instead, then enforce
+        # an unobstructed optical POV in every independently rendered Segment.
+        for field_name in (
+            "framing", "camera_angle", "camera_movement", "subject_action",
+            "environment_response", "continuity_state", "optional_flourish",
+            "additional_direction", "h3_executable_action",
+            "h3_optional_flourish", "authored_subject_action",
+            "authored_environment_response",
+        ):
+            if field_name in shot:
+                shot[field_name] = _drone_camera_only_text(shot.get(field_name, ""))
+        budget = shot.get("action_budget")
+        if isinstance(budget, dict):
+            for field_name in (
+                "original_subject_action", "original_environment_response",
+                "original_optional_flourish",
+            ):
+                if field_name in budget:
+                    budget[field_name] = _drone_camera_only_text(
+                        budget.get(field_name, "")
+                    )
+        if DRONE_CAMERA_ONLY_POV_CONTRACT not in shot["additional_direction"]:
+            shot["additional_direction"] = (
+                shot["additional_direction"].rstrip(" .")
+                + (". " if shot["additional_direction"].strip() else "")
+                + DRONE_CAMERA_ONLY_POV_CONTRACT
+            )
+
+    fireworks = str(special_skill_key).strip().casefold() == "drone-fly-on-city-fireworks"
+    moving_end = duration
+    # P3 owns 0-5 seconds; P4 onward advances at exact five-second intervals.
+    # Do not cap the chain at P9: longer videos continue P10, P11, ... so no
+    # Segment tail is left without a current scene-state reference.
+    stage_count = max(1, int(math.ceil(moving_end / 5.0)))
+
+    non_image_requests = [
+        row for row in result.get("media_requests") or []
+        if isinstance(row, dict) and row.get("media_type") != "image"
+    ]
+    generated_ids: list[str] = []
+    occupied_picture_ids = {
+        media_id for media_id, row in inventory.items()
+        if media_id.startswith("P") and bool(row.get("loaded", False))
+    }
+    next_picture_number = 3
+    while len(generated_ids) < stage_count:
+        candidate = f"P{next_picture_number}"
+        next_picture_number += 1
+        if candidate in occupied_picture_ids:
+            continue
+        generated_ids.append(candidate)
+        occupied_picture_ids.add(candidate)
+    boundaries = [min(moving_end, float(index * 5)) for index in range(stage_count)]
+    boundaries.append(moving_end)
+    for index in range(stage_count):
+        preferred = generated_ids[index]
+        firework_state = ""
+        if fireworks:
+            intensity = "sparse early" if index < stage_count // 3 else "layered mid-sequence" if index < stage_count * 2 // 3 else "strong late-sequence"
+            firework_state = (
+                f" Add {intensity} discrete gold, white and deep-red firework particles behind "
+                "and above the existing skyline, with thin smoke and physically plausible warm "
+                "reflections; never alter or cover architecture."
+            )
+        anchor_label = (
+            "GROUND-TAKEOFF P1 SCENE ANCHOR"
+            if index == 0 else "P1 FIVE-SECOND SCENE STATE"
+        )
+        request = {
+            "requirement_id": f"p1_derived_camera_stage_{index + 1:02d}",
+            "media_type": "image", "usage": "h3_reference",
+            "reuse_policy": "time_scoped", "start_seconds": boundaries[index],
+            "end_seconds": boundaries[index + 1], "track": "V2",
+            "subject_keywords": [
+                "P1-derived environment continuity", f"scene state {index + 1} of {stage_count}",
+                "same primary building and scene identity", "frozen aerial photograph",
+            ],
+            "prompt": (
+                f"SCENE KEYFRAME CHAIN ANCHOR. EXCLUSIVE P1-DERIVED SCENE-STATE REPLACEMENT. "
+                f"{anchor_label} {index + 1}/{stage_count}. Use the supplied P1 pixels as the visual "
+                "source. Preserve P1's primary subject building, landmark identity and count, "
+                "architecture, composition, surrounding scene, street and road geometry, sky, "
+                "weather, time of day, colour palette, colour temperature, lighting direction, "
+                "exposure, atmosphere and lens character. Do not substitute any city, landmark, "
+                "building, sky or weather from an example or template. Render exactly one instance "
+                "of P1's primary subject or landmark group. Preserve the source-visible subject count "
+                "and grouping exactly; never add a second instance, duplicate building, cloned landmark "
+                "or repeated copy elsewhere in the frame. "
+                "This Picture is a later state of the same single P1 scene instance, not an additional "
+                "object beside P1. This is one frozen photographic scene-state reference. "
+                + (
+                    "Frame a physically plausible near-ground FPV takeoff position inside the "
+                    "P1-established scene without inventing a new location. "
+                    if index == 0 else ""
+                )
+                +
+                "P1 BLIP/AI scene evidence: "
+                + p1_evidence + firework_state
+            ),
+            "derived_from_media_id": "P1", "route_control_media_id": "P2",
+            "source_plate_media_id": "P1", "source_plate_mode": "p1_img2img",
+            "source_image_denoise": 0.15 if index == 0 else 0.25,
+            "scene_anchor_role": "p3_ground_takeoff_anchor" if index == 0 else "five_second_scene_state",
+            "exclusive_scene_source_media_id": "P1",
+            "single_scene_instance": True,
+            "reference_interval_seconds": 5.0,
+            "route_stage_index": index + 1, "route_stage_count": stage_count,
+        }
+        request["preferred_media_id"] = preferred
+        non_image_requests.append(request)
+
+    # No automatic terminal image: H3 owns the generated ending.
+    result["media_requests"] = non_image_requests
+
+    warnings = result.setdefault("design_warnings", [])
+    route_status = (
+        f"P2 path and green-start/blue-end direction verified: {len(route.get('waypoints') or [])} ordered points; "
+        "ground launch and full 360-degree orbit run first, then the verified route reaches its endpoint"
+        if route_verified else
+        "ROUTE NEEDS REVIEW: " + str(route.get("reason") or route.get("direction_basis"))
+        + "; mandatory ground launch and 360-degree orbit retained, followed by collision-safe FPV scene fallback; no route endpoint invented"
+    )
+    warning = (
+        f"Drone P1/P2 chain: P1 stays loaded for every Segment; {route_status}; "
+        f"{generated_ids[0]} is the near-ground P1 takeoff anchor and "
+        f"{', '.join(generated_ids[1:]) or 'no later Pictures'} "
+        "advance at five-second intervals; all generated Pictures use actual P1 pixels through low-denoise img2img "
+        "(not pixel-exact/new-view reconstruction); no automatic tail image or output freeze is added. "
+        "The flight always uses ground launch, translated 360-degree P1 orbit, then verified P2 route or FPV fallback."
+    )
+    if warning not in warnings:
+        warnings.append(warning)
+    for field_name in (
+        "title", "creative_brief", "global_visual_style", "overall_soundscape",
+        "non_diegetic_music", "constraints",
+    ):
+        result[field_name] = _drone_camera_only_text(result.get(field_name, ""))
+    if DRONE_CAMERA_ONLY_POV_CONTRACT not in result["constraints"]:
+        result["constraints"] = (
+            result["constraints"].rstrip(" .")
+            + (". " if result["constraints"].strip() else "")
+            + DRONE_CAMERA_ONLY_POV_CONTRACT
         )
     return result
 
@@ -1539,31 +5835,51 @@ def normalize_design_plan(
     strict_t2i_prompts: bool = False,
     repair_media_plan: bool = False,
     authored_requirement: str = "",
+    special_skill_key: str = "",
+    selected_media_ids: list[str] | None = None,
 ) -> dict:
     media_repair_warnings: list[str] = []
-    prepared_payload = extract_design_json(payload)
+    prepared_payload = deepcopy(extract_design_json(payload))
     authored_duration = infer_explicit_design_duration(authored_requirement)
     if authored_duration is not None:
         returned_duration = snap_half_second(
             prepared_payload.get("duration_seconds", 5.0),
             MAX_DESIGN_DURATION_SECONDS,
         )
-        if abs(returned_duration - authored_duration) > 0.01:
-            raise DesignDurationContractError(
-                "Duration contract mismatch: the user explicitly requested "
-                f"{authored_duration:.2f}s, but Design JSON returned "
-                f"{returned_duration:.2f}s. Do not condense, summarize, stretch or "
-                "inherit the current workspace Timeline duration; regenerate every Shot, "
-                "text layer, cue and media range for the exact requested duration."
-            )
+        speech_base_duration = float(
+            prepared_payload.get("_speech_timing_base_duration", 0.0) or 0.0
+        )
+        speech_adjusted_duration = bool(
+            returned_duration >= authored_duration
+            and abs(speech_base_duration - authored_duration) <= 0.01
+        )
+        if (
+            abs(returned_duration - authored_duration) > 0.01
+            and not speech_adjusted_duration
+        ):
+            if repair_media_plan:
+                repair_note = _retime_design_payload(
+                    prepared_payload, authored_duration
+                )
+                if repair_note:
+                    media_repair_warnings.append(repair_note)
+            else:
+                raise DesignDurationContractError(
+                    "Duration contract mismatch: the user explicitly requested "
+                    f"{authored_duration:.2f}s, but Design JSON returned "
+                    f"{returned_duration:.2f}s. Do not condense, summarize, stretch or "
+                    "inherit the current workspace Timeline duration; regenerate every Shot, "
+                    "text layer, cue and media range for the exact requested duration."
+                )
     if authored_requirement.strip():
         prepared_payload = protect_explicit_timed_text_layers(
             prepared_payload, authored_requirement
         )
     if repair_media_plan:
-        source, media_repair_warnings = repair_design_media_plan(
+        source, repaired_media_warnings = repair_design_media_plan(
             prepared_payload, capacities, existing_media
         )
+        media_repair_warnings.extend(repaired_media_warnings)
     else:
         source = prepared_payload
     duration = snap_half_second(
@@ -1584,9 +5900,25 @@ def normalize_design_plan(
     if not plan["title"]:
         plan["title"] = "AI Director Design"
     if not plan["creative_brief"]:
-        raise ValueError("Design JSON is missing creative_brief")
+        if not repair_media_plan:
+            raise ValueError("Design JSON is missing creative_brief")
+        plan["creative_brief"] = (
+            str(authored_requirement).strip()
+            or plan["title"]
+            or "Execute the supplied Shot plan as one continuous story."
+        )
+        media_repair_warnings.append(
+            "Inserted a Creative Brief from the authored requirement/title."
+        )
     if not plan["global_visual_style"]:
-        raise ValueError("Design JSON is missing global_visual_style")
+        if not repair_media_plan:
+            raise ValueError("Design JSON is missing global_visual_style")
+        plan["global_visual_style"] = (
+            "Cinematic realism with physically coherent lighting, identity, geography and motion."
+        )
+        media_repair_warnings.append(
+            "Inserted a safe cinematic Visual Style because the model omitted it."
+        )
     plan["overall_soundscape"] = automatic_background_soundscape({
         **plan,
         "shots": source.get("shots") or [],
@@ -1635,10 +5967,61 @@ def normalize_design_plan(
             "continuity_state": str(raw.get("continuity_state", "")).strip(),
             "optional_flourish": str(raw.get("optional_flourish", "")).strip(),
             "additional_direction": str(raw.get("additional_direction", "")).strip(),
+            "environment_interaction": str(raw.get("environment_interaction", "")).strip(),
+            "incoming_environment_state": str(raw.get("incoming_environment_state", "")).strip(),
+            "outgoing_environment_state": str(raw.get("outgoing_environment_state", "")).strip(),
+            "crowd_reaction": str(raw.get("crowd_reaction", "")).strip(),
+            "location_transition": str(raw.get("location_transition", "")).strip(),
+            "environment_state_status": str(raw.get("environment_state_status", "")).strip(),
+            "combat_action_chain": str(raw.get("combat_action_chain", "")).strip(),
+            "incoming_combat_state": str(raw.get("incoming_combat_state", "")).strip(),
+            "outgoing_combat_state": str(raw.get("outgoing_combat_state", "")).strip(),
+            "next_action_trigger": str(raw.get("next_action_trigger", "")).strip(),
+            "event_causality_chain": str(raw.get("event_causality_chain", "")).strip(),
+            "physical_feedback_chain": str(raw.get("physical_feedback_chain", "")).strip(),
+            "causal_risk_original_action": str(raw.get("causal_risk_original_action", "")).strip(),
+            "causal_risk_repair_status": str(raw.get("causal_risk_repair_status", "")).strip(),
+            "causal_risk_repair_notes": str(raw.get("causal_risk_repair_notes", "")).strip(),
+            "combat_continuity_status": str(raw.get("combat_continuity_status", "")).strip(),
+            "combat_continuity_notes": str(raw.get("combat_continuity_notes", "")).strip(),
+            "combat_action_schema_version": int(raw.get("combat_action_schema_version", 0) or 0),
+            "combat_fact_context": str(raw.get("combat_fact_context", "")).strip(),
+            "combat_story_duty_index": int(raw.get("combat_story_duty_index", 0) or 0),
+            "combat_story_duty": str(raw.get("combat_story_duty", "")).strip(),
+            "combat_story_duty_instruction": str(raw.get("combat_story_duty_instruction", "")).strip(),
+            "combat_action_beats": list(raw.get("combat_action_beats") or []),
+            "combat_action_carrier": str(raw.get("combat_action_carrier", "")).strip(),
+            "combat_force_vector": dict(raw.get("combat_force_vector") or {}),
+            "incoming_combat_state_vector": dict(raw.get("incoming_combat_state_vector") or {}),
+            "outgoing_combat_state_vector": dict(raw.get("outgoing_combat_state_vector") or {}),
+            "camera_position_sector": str(raw.get("camera_position_sector", "")).strip(),
+            "camera_motion_relation": str(raw.get("camera_motion_relation", "")).strip(),
+            "camera_action_trigger": str(raw.get("camera_action_trigger", "")).strip(),
+            "dynamic_camera_direction": str(raw.get("dynamic_camera_direction", "")).strip(),
+            "contact_material": str(raw.get("contact_material", "")).strip(),
+            "environment_force_vector": dict(raw.get("environment_force_vector") or {}),
+            "causal_validation_status": str(raw.get("causal_validation_status", "")).strip(),
+            "causal_validation_issues": list(raw.get("causal_validation_issues") or []),
+            "causal_validation_inherited_fields": list(
+                raw.get("causal_validation_inherited_fields") or []
+            ),
+            "final_action_resolution": str(raw.get("final_action_resolution", "")).strip(),
+            "final_camera_resolution": str(raw.get("final_camera_resolution", "")).strip(),
+            "final_action_stable": bool(raw.get("final_action_stable", False)),
+            "combat_action_chain_user_edited": bool(raw.get("combat_action_chain_user_edited", False)),
+            "incoming_combat_state_user_edited": bool(raw.get("incoming_combat_state_user_edited", False)),
+            "outgoing_combat_state_user_edited": bool(raw.get("outgoing_combat_state_user_edited", False)),
+            "next_action_trigger_user_edited": bool(raw.get("next_action_trigger_user_edited", False)),
+            "environment_interaction_user_edited": bool(raw.get("environment_interaction_user_edited", False)),
+            "incoming_environment_state_user_edited": bool(raw.get("incoming_environment_state_user_edited", False)),
+            "outgoing_environment_state_user_edited": bool(raw.get("outgoing_environment_state_user_edited", False)),
+            "crowd_reaction_user_edited": bool(raw.get("crowd_reaction_user_edited", False)),
+            "location_transition_user_edited": bool(raw.get("location_transition_user_edited", False)),
         })
     if not shots:
         raise ValueError("Design JSON must contain at least one shot")
     plan["shots"] = sorted(shots, key=lambda item: (item["start_seconds"], item["end_seconds"]))
+    _repair_overlapping_camera_shots(plan["shots"], duration, design_warnings)
     for index, shot in enumerate(plan["shots"], 1):
         shot["id"] = f"S{index}"
         if not shot["subject_action"]:
@@ -1656,8 +6039,9 @@ def normalize_design_plan(
             previous = plan["shots"][index - 2]
             if shot["start_seconds"] < previous["end_seconds"] - 1e-6:
                 raise ValueError(
-                    f"Shot {previous['id']} overlaps S{index}. H3 camera Shots must be chronological "
-                    "and non-overlapping; use overlapping V tracks only for media layers."
+                    f"Shot {previous['id']} still overlaps S{index} after automatic boundary repair. "
+                    "H3 camera Shots must be chronological and non-overlapping; use overlapping "
+                    "V tracks only for media layers."
                 )
             if shot["start_seconds"] > previous["end_seconds"] + 1e-6:
                 design_warnings.append(
@@ -1688,19 +6072,41 @@ def normalize_design_plan(
         else:
             role_tracks = {"dialogue": "A4", "voice_over": "A5", "lyrics": "A6"}
             track = requested_track if requested_track.startswith("A") else role_tracks.get(role, "A4")
-        text_layers.append({
+        content = str(raw.get("content", "")).strip()
+        language = str(raw.get("language", "English")).strip() or "English"
+        if re.search(r"[\u3400-\u9fff]", content) and language.lower() in {
+            "english", "original language", "auto",
+        }:
+            language = "Mandarin Chinese"
+        normalized_layer = {
             "start_seconds": start,
             "end_seconds": end,
             "track": track,
-            "content": str(raw.get("content", "")).strip(),
+            "content": content,
             "role": role,
             "speaker": str(raw.get("speaker", "S1")) if str(raw.get("speaker", "S1")) in {"S1", "S2"} else "S1",
-            "language": str(raw.get("language", "English")).strip() or "English",
+            "language": language,
             "delivery": str(raw.get("delivery", "Natural")).strip() or "Natural",
             "lip_sync": role == "dialogue" and bool(raw.get("lip_sync", False)),
+            "overlap_policy": normalize_speech_overlap_policy(
+                raw.get("overlap_policy", "auto")
+            ),
             "explicit_user_requested": True,
-        })
+        }
+        for metadata_key in (
+            "authored_start_seconds", "authored_end_seconds",
+            "speech_timing_auto_adjusted", "speech_budget_was_overloaded",
+            "speech_budget", "authored_timing_locked", "timeline_visible_text_kind",
+        ):
+            if metadata_key in raw:
+                normalized_layer[metadata_key] = deepcopy(raw[metadata_key])
+        text_layers.append(normalized_layer)
     plan["text_layers"] = text_layers
+    enforce_hong_kong_comic_technique_text_layers(
+        plan,
+        special_skill_key,
+        authored_requirement,
+    )
 
     for family in ("transitions", "markers"):
         entries: list[dict] = []
@@ -1720,12 +6126,19 @@ def normalize_design_plan(
         any(word in item["preset"].lower() for word in ("final", "ending", "hold"))
         for item in plan["markers"]
     )
-    if not has_final_hold:
+    if not has_final_hold and not is_drone_special_skill(special_skill_key):
+        is_combat_skill = (
+            str(special_skill_key or "").strip().casefold() in COMBAT_ACTION_SPECIAL_SKILLS
+        )
         plan["markers"].append({
             "time_seconds": snap_half_second(max(0.0, duration - 1.0), duration),
-            "preset": "Final Hold",
+            "preset": "Final Combat Resolve" if is_combat_skill else "Final Hold",
             "direction": (
-                "Settle all camera motion and hold the final hero composition through the last frame."
+                "Complete the final authored technique at real-time speed, visibly dissipate momentum, "
+                "settle both fighters on readable support, and decelerate the FPV camera into one stable "
+                "three-quarter composition through the last frame; no new attack, zoom, spin or slow motion."
+                if is_combat_skill
+                else "Settle all camera motion and hold the final hero composition through the last frame."
             ),
         })
 
@@ -1748,7 +6161,7 @@ def normalize_design_plan(
                 f"Existing media {media_id} is {inferred_type}, not {media_type}."
             )
         ordinal = int(media_id[1:])
-        if ordinal > int(capacities.get(media_type, 0)):
+        if not inventory_was_supplied and ordinal > int(capacities.get(media_type, 0)):
             raise ValueError(
                 f"Existing media {media_id} is outside the API's {capacities.get(media_type, 0)} "
                 f"{media_type} slots."
@@ -1790,13 +6203,16 @@ def normalize_design_plan(
                 or inventory_row.get("analysis_summary")
                 or ""
             ).strip()
-        existing_media_uses.append({
+        raw_usage = str(raw.get("usage", "h3_reference")).strip().casefold()
+        normalized_use = {
             "requirement_id": requirement_id,
             "media_id": media_id,
             "media_type": media_type,
             "usage": (
-                str(raw.get("usage", "h3_reference"))
-                if str(raw.get("usage", "h3_reference")) in {"h3_reference", "timeline_visual"}
+                "analysis_only"
+                if raw_usage in ANALYSIS_ONLY_MEDIA_USAGES
+                else raw_usage
+                if raw_usage in {"h3_reference", "timeline_visual"}
                 else "h3_reference"
             ),
             "reuse_policy": reuse_policy,
@@ -1807,10 +6223,96 @@ def normalize_design_plan(
             ).strip() or ("A1" if media_type == "audio" else "V1"),
             "subject_keywords": keywords,
             "instruction": str(raw.get("instruction") or fallback_instruction).strip(),
-        })
+        }
+        if "identity_anchor" in raw:
+            normalized_use["identity_anchor"] = bool(raw.get("identity_anchor"))
+        existing_media_uses.append(normalized_use)
         reused_requirement_ids.add(requirement_id)
+
+    for media_id in _authored_identity_picture_ids(authored_requirement):
+        inventory_row = inventory.get(media_id)
+        if inventory_was_supplied and not bool(
+            inventory_row and inventory_row.get("loaded", False)
+        ):
+            # Existing validation will give the actionable missing/empty error
+            # when the model emitted the use.  Do not manufacture a valid row
+            # for an absent Picture here.
+            continue
+        identity_use = next(
+            (row for row in existing_media_uses if row.get("media_id") == media_id),
+            None,
+        )
+        if identity_use is None:
+            requirement_id = _normalized_requirement_id(
+                f"authored_identity_{media_id.lower()}",
+                f"authored_identity_{media_id.lower()}",
+            )
+            suffix = 2
+            while requirement_id in reused_requirement_ids:
+                requirement_id = f"authored_identity_{media_id.lower()}_{suffix}"
+                suffix += 1
+            fallback_instruction = ""
+            if inventory_row:
+                fallback_instruction = str(
+                    inventory_row.get("clip_prompt")
+                    or inventory_row.get("caption")
+                    or inventory_row.get("analysis_summary")
+                    or ""
+                ).strip()
+            identity_use = {
+                "requirement_id": requirement_id,
+                "media_id": media_id,
+                "media_type": "image",
+                "usage": "h3_reference",
+                "reuse_policy": "whole_design",
+                "start_seconds": 0.0,
+                "end_seconds": duration,
+                "track": "V1",
+                "subject_keywords": [],
+                "instruction": fallback_instruction,
+            }
+            existing_media_uses.append(identity_use)
+            reused_requirement_ids.add(requirement_id)
+        identity_use["identity_anchor"] = True
+        identity_use["reuse_policy"] = "whole_design"
+        identity_use["start_seconds"] = 0.0
+        identity_use["end_seconds"] = duration
+        identity_contract = (
+            f"Use @{media_id} as the authoritative whole-design face identity anchor. "
+            "Preserve the exact recognizable facial geometry, age, hair and identity in every appearance."
+        )
+        if identity_contract not in str(identity_use.get("instruction", "")):
+            identity_use["instruction"] = (
+                str(identity_use.get("instruction", "")).rstrip(" .")
+                + (". " if str(identity_use.get("instruction", "")).strip() else "")
+                + identity_contract
+            )
     plan["existing_media_uses"] = existing_media_uses
-    reused_media_ids = sorted({row["media_id"] for row in existing_media_uses})
+    enforce_street_fighter_character_bindings(
+        plan,
+        existing_media,
+        special_skill_key,
+    )
+    enforce_hong_kong_comic_source_mapping(
+        plan,
+        existing_media,
+        special_skill_key,
+    )
+    enforce_street_fighter_fpv_combat_direction(plan, special_skill_key)
+    enforce_hong_kong_comic_superhero_opening(plan, special_skill_key)
+    enforce_beat_synced_entrance_contract(
+        plan,
+        existing_media,
+        special_skill_key,
+    )
+    existing_media_uses = [
+        row for row in plan.get("existing_media_uses") or []
+        if isinstance(row, dict)
+    ]
+    reused_media_ids = sorted({
+        row["media_id"] for row in existing_media_uses
+        if not is_analysis_only_media_use(row)
+    })
     if reused_media_ids:
         for field_name in (
             "creative_brief", "global_visual_style", "overall_soundscape",
@@ -1841,6 +6343,54 @@ def normalize_design_plan(
                 row.get("instruction", ""), reused_media_ids
             )
 
+    analysis_only_ids = sorted({
+        row["media_id"] for row in existing_media_uses
+        if is_analysis_only_media_use(row)
+    })
+    if analysis_only_ids:
+        for field_name in (
+            "creative_brief", "global_visual_style", "overall_soundscape",
+            "non_diegetic_music", "constraints",
+        ):
+            plan[field_name] = _remove_control_artifact_priming(
+                _replace_analysis_only_media_mentions(
+                    plan.get(field_name, ""), analysis_only_ids
+                )
+            )
+        for row in plan.get("shots") or []:
+            for field_name in (
+                "framing", "camera_angle", "camera_movement", "subject_action",
+                "environment_response", "continuity_state", "optional_flourish",
+                "additional_direction",
+            ):
+                row[field_name] = _remove_control_artifact_priming(
+                    _replace_analysis_only_media_mentions(
+                        row.get(field_name, ""), analysis_only_ids
+                    )
+                )
+        for family in ("transitions", "markers"):
+            for row in plan.get(family) or []:
+                row["direction"] = _remove_control_artifact_priming(
+                    _replace_analysis_only_media_mentions(
+                        row.get("direction", ""), analysis_only_ids
+                    )
+                )
+        clean_frame_contract = (
+            "Keep the photoreal scene clean and unobstructed; all planning controls remain "
+            "non-visual and entirely off-screen."
+        )
+        if clean_frame_contract not in plan["constraints"]:
+            plan["constraints"] = (
+                plan["constraints"].rstrip(" .")
+                + (". " if plan["constraints"].strip() else "")
+                + clean_frame_contract
+            )
+        design_warnings.append(
+            "Analysis-only Media Pool control sources "
+            + ", ".join(analysis_only_ids)
+            + " were retained for planning but removed from all H3-renderable prose and reference slots."
+        )
+
     budgeted_shots: list[dict] = []
     for shot in plan["shots"]:
         budgeted = normalize_shot_action_budget(shot)
@@ -1855,16 +6405,6 @@ def normalize_design_plan(
 
     media_requests: list[dict] = []
     counts = {"image": 0, "video": 0, "audio": 0}
-    occupied_counts = {"image": 0, "video": 0, "audio": 0}
-    if inventory_was_supplied:
-        for row in inventory.values():
-            media_type = str(row.get("media_type", "")).strip().lower()
-            if row.get("loaded", False) and media_type in occupied_counts:
-                occupied_counts[media_type] += 1
-    available_counts = {
-        media_type: max(0, int(capacities.get(media_type, 0)) - occupied_counts[media_type])
-        for media_type in counts
-    }
     requested_requirement_ids: set[str] = set()
     for request_number, raw in enumerate(source.get("media_requests") or [], 1):
         if not isinstance(raw, dict):
@@ -1885,17 +6425,9 @@ def normalize_design_plan(
                 f"Media requirement_id {requirement_id!r} is requested more than once."
             )
         counts[media_type] += 1
-        slot_limit = available_counts[media_type]
-        if counts[media_type] > slot_limit:
-            if inventory_was_supplied:
-                raise ValueError(
-                    f"Design requests {counts[media_type]} new {media_type} assets, but the API has "
-                    f"only {slot_limit} free slots ({occupied_counts[media_type]} already loaded)."
-                )
-            raise ValueError(
-                f"Design requests {counts[media_type]} {media_type} assets, but the API has only "
-                f"{capacities.get(media_type, 0)} slots"
-            )
+        # The Media Pool is logical and unlimited.  Physical 9/3/3 H3 slots
+        # are allocated dynamically per Segment during compilation; total
+        # project request count must never be compared with physical capacity.
         start, end = _interval(raw, duration)
         reuse_policy = str(raw.get("reuse_policy", "")).strip().lower()
         if reuse_policy not in {"whole_design", "time_scoped"}:
@@ -1907,6 +6439,10 @@ def normalize_design_plan(
         if reuse_policy == "whole_design":
             start, end = 0.0, duration
         prompt = str(raw.get("prompt", "")).strip()
+        if analysis_only_ids:
+            prompt = _remove_control_artifact_priming(
+                _replace_analysis_only_media_mentions(prompt, analysis_only_ids)
+            )
         if media_type == "image" and strict_t2i_prompts:
             _validate_t2i_media_prompt(
                 prompt,
@@ -1916,6 +6452,13 @@ def normalize_design_plan(
                 duration_seconds=duration,
             )
         keywords = _string_list(raw.get("subject_keywords") or [])
+        if analysis_only_ids:
+            keywords = [
+                _remove_control_artifact_priming(
+                    _replace_analysis_only_media_mentions(value, analysis_only_ids)
+                )
+                for value in keywords
+            ]
         normalized_request = {
             "requirement_id": requirement_id,
             "media_type": media_type,
@@ -1931,22 +6474,229 @@ def normalize_design_plan(
             "subject_keywords": keywords,
             "prompt": prompt,
         }
+        if media_type == "image" and str(raw.get("negative_prompt", "")).strip():
+            normalized_request["negative_prompt"] = str(
+                raw.get("negative_prompt", "")
+            ).strip()
+        for metadata_key in (
+            "identity_anchor", "identity_anchor_requirement_id", "identity_anchor_media_id",
+            "distinct_character_identity",
+        ):
+            if metadata_key in raw:
+                normalized_request[metadata_key] = deepcopy(raw[metadata_key])
+        if media_type == "image":
+            source_plate_id = _normalized_media_id(raw.get("source_plate_media_id", ""))
+            source_mode = str(raw.get("source_plate_mode", "")).strip().lower()
+            if source_plate_id or source_mode:
+                source_row = inventory.get(source_plate_id)
+                if not (
+                    source_plate_id.startswith("P")
+                    and source_row
+                    and bool(source_row.get("loaded", False))
+                    and str(source_row.get("media_type", source_row.get("type", ""))).lower() == "image"
+                ):
+                    raise ValueError(
+                        f"Media request {requirement_id!r} requires a loaded source Picture; "
+                        f"{source_plate_id or '(missing ID)'} is unavailable."
+                    )
+                if source_mode not in {"p1_img2img", "source_img2img"}:
+                    raise ValueError(
+                        f"Media request {requirement_id!r} uses unsupported source_plate_mode "
+                        f"{source_mode!r}."
+                    )
+                normalized_request.update({
+                    "source_plate_media_id": source_plate_id,
+                    "source_plate_mode": source_mode,
+                    "derived_from_media_id": source_plate_id,
+                    "source_image_denoise": min(
+                        0.8,
+                        max(0.1, float(raw.get("source_image_denoise", 0.62))),
+                    ),
+                })
         preferred_media_id = _normalized_media_id(raw.get("preferred_media_id", ""))
         if media_type == "image" and preferred_media_id.startswith("P"):
-            preferred_ordinal = int(preferred_media_id[1:])
             preferred_row = inventory.get(preferred_media_id)
             if (
-                preferred_ordinal <= int(capacities.get("image", 0))
-                and not bool(preferred_row and preferred_row.get("loaded", False))
+                not bool(preferred_row and preferred_row.get("loaded", False))
             ):
                 normalized_request["preferred_media_id"] = preferred_media_id
         media_requests.append(normalized_request)
         requested_requirement_ids.add(requirement_id)
     plan["media_requests"] = media_requests
-    return plan
+    if str(special_skill_key or "").strip().casefold() == BEAT_SYNCED_ENTRANCE_SPECIAL_SKILL:
+        # P1-P4 are supplied identities/subjects and H3 creates the corridor.
+        # Reserve exactly one Z-Image request for the outdoor environment shared
+        # by the campus bridge and final P4 composite. If the user has already
+        # loaded P5, the deterministic existing-media mapping created above wins.
+        p5_row = inventory.get("P5", {})
+        if bool(p5_row.get("loaded", False)):
+            plan["media_requests"] = []
+        else:
+            beat_shots = [
+                row for row in plan.get("shots") or [] if isinstance(row, dict)
+            ]
+            campus_start = (
+                float(beat_shots[-2].get("start_seconds", 11.5))
+                if len(beat_shots) >= 2 else max(0.0, duration - 6.5)
+            )
+            style = _standalone_image_text(
+                plan.get("global_visual_style", "cinematic naturalism")
+            )
+            population_prompt = (
+                "Standalone cinematic 16:9 environment-population keyframe of a school exterior "
+                "at dismissal time. Eye-level view from immediately outside a school exit, showing "
+                "a coherent campus facade, doorway and adjacent architectural corner, paved forecourt, "
+                "pedestrian crossing, curb and believable bus-stop area. Populate the middle and deep "
+                "background with varied everyday school life: students with backpacks leaving school, "
+                "small groups talking, people waiting for a bus, one person checking the road, and "
+                "pedestrians naturally crossing. Keep clear foreground space for later principal subjects. "
+                "Use natural non-repeated poses, realistic scale, perspective, foot contact, daylight, "
+                "contact shadows and atmospheric depth. Background people remain secondary and distributed "
+                "across depth rather than forming a lineup. Visual treatment: "
+                + (style or "cinematic naturalism")
+                + ". One coherent location, one frozen instant, stable architecture, no dominant foreground "
+                  "hero, no duplicate person, no cloned face, no corridor interior, no montage, no text, "
+                  "logo, watermark, UI or graphic overlay."
+            )
+            plan["media_requests"] = [{
+                "requirement_id": "beat_p5_environment_population",
+                "media_type": "image",
+                "usage": "h3_reference",
+                "reuse_policy": "time_scoped",
+                "start_seconds": campus_start,
+                "end_seconds": duration,
+                "track": "V5",
+                "subject_keywords": [
+                    "school exterior", "campus population", "dismissal", "bus stop",
+                ],
+                "prompt": population_prompt,
+                "negative_prompt": (
+                    "dominant foreground hero, duplicate people, cloned faces, repeated body, frozen lineup, "
+                    "floating feet, wrong perspective, warped school architecture, empty campus, corridor "
+                    "interior, crowd blocking foreground, text, logo, watermark, UI"
+                ),
+                "preferred_media_id": "P5",
+            }]
+            warnings = [str(value) for value in plan.get("design_warnings") or []]
+            warnings.append(
+                "Reserved one time-scoped P5 Z-Image environment-population keyframe for the campus bridge "
+                "and final P4 composite; no P1-P4 replacement image was requested."
+            )
+            plan["design_warnings"] = list(dict.fromkeys(warnings))
+    if "_speech_timing_base_duration" in source:
+        plan["_speech_timing_base_duration"] = float(
+            source.get("_speech_timing_base_duration", duration)
+        )
+    if is_drone_special_skill(special_skill_key):
+        fireworks = str(special_skill_key).strip().casefold() == "drone-fly-on-city-fireworks"
+        enforce_drone_scene_keyframe_chain(
+            plan,
+            existing_media,
+            selected_media_ids=selected_media_ids,
+            special_skill_key=str(special_skill_key),
+            authored_requirement=authored_requirement,
+        )
+        plan["media_requests"] = [
+            sanitize_drone_still_image_request(row, fireworks=fireworks)
+            if isinstance(row, dict) and row.get("media_type") == "image"
+            else row
+            for row in plan.get("media_requests") or []
+        ]
+    if str(special_skill_key).strip().casefold() == "dark-rescue-h3":
+        enforce_dark_rescue_first_person(plan)
+    stabilize_generated_identity_references(plan, special_skill_key)
+    enforce_hong_kong_comic_generated_source_plates(
+        plan,
+        existing_media,
+        special_skill_key,
+    )
+    enforce_street_fighter_cast_market_and_spectators(
+        plan,
+        existing_media,
+        special_skill_key,
+    )
+    plan = auto_adjust_speech_shot_timing(plan)
+    plan = apply_combat_action_continuity(
+        plan,
+        special_skill_key=special_skill_key,
+        existing_media=existing_media,
+        authored_requirement=authored_requirement,
+    )
+    return apply_environmental_combat_physics(
+        plan,
+        special_skill_key=special_skill_key,
+        existing_media=existing_media,
+        authored_requirement=authored_requirement,
+    )
+
+
+def sanitize_design_model_context(context: dict) -> dict:
+    """Return Media Pool context that cannot turn filenames into scene facts.
+
+    Media filenames and workstation paths are transport metadata, not visual
+    evidence.  In particular, a Drone P2 route/control image is interpreted
+    locally; none of its filename, caption or semantic text may reach the
+    planning model and override the P1 scene master.
+    """
+
+    prompt_context = deepcopy(context)
+    bound_skills = prompt_context.get("bound_h3_skills") or {}
+    special_profile = bound_skills.get("special") or {}
+    special_key = str(special_profile.get("key", "")).strip().casefold()
+    if is_drone_special_skill(special_key):
+        # A new Drone Design is driven by the current requirement plus P1.
+        # Re-feeding prose from an older applied Drone plan can preserve an
+        # already polluted landmark even after the offending filename is gone.
+        prompt_context.pop("current_prompt_fields", None)
+        prompt_context.pop("existing_shots_and_cues", None)
+    for media in prompt_context.get("existing_media") or []:
+        if not isinstance(media, dict):
+            continue
+        # A downloaded/camera filename is never evidence.  This also prevents
+        # project-directory names from influencing titles and scene choices.
+        for key in (
+            "filename", "original_filename", "source_filename", "basename",
+            "local_path", "original_local_path", "source_plate_local_path",
+        ):
+            media.pop(key, None)
+
+        media_id = str(media.get("media_id", "")).strip().upper().lstrip("@")
+        analysis_only = is_analysis_only_media_use(media)
+        if is_drone_special_skill(special_key) and media_id == "P2":
+            analysis_only = True
+        if not analysis_only:
+            continue
+
+        # Keep only neutral inventory/availability facts. Route geometry is
+        # read locally after the model returns; showing semantic metadata here
+        # can contaminate the generated title, location and landmark names.
+        neutral = {
+            key: deepcopy(media[key])
+            for key in (
+                "media_id", "node_id", "media_type", "type", "loaded",
+                "locally_available", "timeline_placed", "timeline_track_id",
+                "start_seconds", "end_seconds", "source_duration_seconds",
+            )
+            if key in media
+        }
+        neutral.update({
+            "planning_role": "analysis_only",
+            "analysis_status": "isolated_control",
+            "analysis_summary": (
+                "Non-visual planning control. Its pixels and metadata contain no "
+                "scene, location, landmark, subject, colour or style evidence."
+            ),
+        })
+        media.clear()
+        media.update(neutral)
+    return prompt_context
 
 
 def build_design_system_prompt(context: dict) -> str:
+    # Paths and filenames are execution-only data. The sanitized copy keeps
+    # local materialization possible while preventing metadata from becoming
+    # authored visual facts in either a local or remote Design model.
+    prompt_context = sanitize_design_model_context(context)
     bound_skills = context.get("bound_h3_skills") or {}
     if bound_skills.get("binding_mode") == "standalone_special":
         skill_direction = (
@@ -1968,11 +6718,201 @@ def build_design_system_prompt(context: dict) -> str:
             "final timestamp. Never condense, summarize, stretch or replace this duration with "
             "current_duration_seconds from the workspace. The current Timeline duration is context only. "
         )
+    selected_dialogue_language = canonical_dialogue_language(
+        context.get("dialogue_language")
+    )
+    language_contract = (
+        "H3 has stable native dialogue support for exactly 11 languages: "
+        + ", ".join(H3_STABLE_DIALOGUE_LANGUAGES)
+        + ". "
+    )
+    if selected_dialogue_language and selected_dialogue_language != "auto":
+        language_contract += (
+            "DIALOGUE LANGUAGE CONTRACT: Design selected "
+            f"{selected_dialogue_language}. Write every newly authored Dialogue, Voice-over "
+            f"and Lyrics line naturally in {selected_dialogue_language}, and set every matching "
+            f"text_layers.language value to exactly '{selected_dialogue_language}'. Never default "
+            "to English and never place English words under a non-English language label. Exact "
+            "verbatim words supplied by the user remain authoritative and must not be translated. "
+        )
+    subtitles_enabled = bool(context.get("subtitles_enabled", False))
+    subtitle_contract = (
+        "SUBTITLE CONTRACT: subtitles are ON. Keep all speech in editable audio text_layers "
+        "and also create synchronized on_screen_text subtitle layers with the same exact words. "
+        "Do not burn subtitles into generated reference images. "
+        if subtitles_enabled else
+        "SUBTITLE CONTRACT: subtitles are OFF. Do not create subtitle/caption on_screen_text "
+        "layers, do not invent theme hashtags, and never ask generated reference images to show "
+        "spoken words. Explicit non-subtitle title or on-screen text requested by the user is the "
+        "only visible text exception. "
+    )
+    music_mode = normalize_design_music_mode(context.get("music_mode", "auto"))
+    if music_mode == "off":
+        music_contract = (
+            "MUSIC POLICY: OFF. Set non_diegetic_music to exactly 'N/A', do not create Music Cue "
+            "markers, and rely only on diegetic ambience, Foley and authored speech. "
+        )
+    elif music_mode == "timeline":
+        music_contract = (
+            "MUSIC POLICY: TIMELINE. Set non_diegetic_music to exactly 'N/A' and do not invent "
+            "automatic score or Music Cue markers. Music will be enabled later only where the user "
+            "authors a Timeline Music Cue. "
+        )
+    else:
+        music_contract = (
+            "MUSIC POLICY: AUTO. Analyse every scene's genre, emotion, pacing and transitions, then "
+            "write a useful time-aware non_diegetic_music direction with suitable instrumentation "
+            "and dramatic development. Keep it subordinate to speech and important diegetic sound, "
+            "let it rise naturally between spoken lines, and use no vocals unless authored Lyrics "
+            "explicitly require them. "
+        )
+    special_profile = bound_skills.get("special") or {}
+    selected_special_key = str(special_profile.get("key", "")).strip().casefold()
+    character_bindings = [
+        row for row in context.get("character_reference_bindings") or []
+        if isinstance(row, dict)
+        and str(row.get("speaker", "")) in {"S1", "S2"}
+        and re.fullmatch(r"P[1-9]\d*", str(row.get("media_id", "")).strip(), re.I)
+    ]
+    character_binding_contract = ""
+    if character_bindings:
+        assignments = "; ".join(
+            f"{row['speaker']} is exclusively @{str(row['media_id']).upper()} "
+            f"({row.get('evidence_source', 'media evidence')}: {row.get('description', '')})"
+            for row in character_bindings
+        )
+        character_binding_contract = (
+            "CHARACTER REFERENCE BINDING CONTRACT: " + assignments + ". Register every assigned "
+            "Picture in existing_media_uses as a whole-design h3_reference identity anchor. Cite the "
+            "correct @Picture in every Shot where that fighter appears. Never swap S1/S2, blend faces, "
+            "transfer wardrobe, create a substitute face or let a generated action-state image override "
+            "either loaded identity. "
+        )
+        if selected_special_key == STREET_FIGHTER_SPECIAL_SKILL:
+            character_binding_contract += (
+                "STREET FIGHTER CAST PRIORITY: S1 is P1 and S2 is P2 regardless of either "
+                "Picture's apparent gender. This P1/P2 ordering overrides the generic dialogue "
+                "speaker-gender convention. Use the uploaded Picture pixels, complete wardrobe "
+                "and appearance directly; BLIP/AI descriptions are metadata only. Do not generate "
+                "a substitute man/woman pair or person-bearing Z-Image action reference. "
+            )
+    if selected_special_key == STREET_FIGHTER_SPECIAL_SKILL:
+        ending_contract = (
+            "STREET FIGHTER ENDING CONTRACT: complete the last authored technique at real-time full "
+            "speed, show its recoil and displacement, then settle both fighters into one readable, "
+            "physically supported end state for the last 0.75-1.00 second. Add a Final Combat Resolve "
+            "marker, not a replay or new attack. The physical FPV camera may follow the final contact, "
+            "then must decelerate into a stable eye-level three-quarter composition with a level horizon. "
+            "No slow-motion contact, walk-away, pull-back, zoom-out, in-place spin or sudden cut. "
+        )
+        speaker_gender_contract = (
+            "STREET FIGHTER SPEAKER ID CONTRACT: preserve S1=P1 and S2=P2 regardless of apparent "
+            "gender. Infer voice characteristics from each uploaded Picture and authored character, "
+            "but never remap, replace or swap P1/P2 to satisfy a generic gender convention. "
+        )
+        environmental_combat_contract = (
+            "ENVIRONMENTAL COMBAT PHYSICS CONTRACT: for every Shot, plan one visible fighter "
+            "cause followed by no more than one primary and one secondary physical response. "
+            "Objects react only after contact; persistent displacement, dents, leaks, open gates, "
+            "wetness and debris carry into every later Shot. Crowd reaction begins shortly after "
+            "the impact, remains at the perimeter and never creates an extra fighter. For a 45-second "
+            "fight, active combat moves from the connected indoor seafood aisle through the visible "
+            "loading-gate threshold at about 30 seconds into the rainy Hong Kong alley. The transition "
+            "must be caused by attack, defence, clinch, throw or evasive momentum—never walking, an "
+            "establishing cut or teleportation. Do not repair damage, reset crowd positions, change "
+            "architecture or introduce outdoor elements before the threshold. The application will "
+            "derive editable environment_interaction, incoming_environment_state, "
+            "outgoing_environment_state, crowd_reaction and location_transition fields and compile "
+            "them into each real H3 Segment prompt. "
+        )
+    elif selected_special_key == HONG_KONG_COMIC_FIGHTER_SPECIAL_SKILL:
+        ending_contract = (
+            "HONG KONG COMIC FIGHTER ENDING CONTRACT: complete the final technique, recoil and "
+            "force propagation at real-time full speed, then settle both fighters into one readable "
+            "supported state for the last 0.75-1.00 second. Keep the source-derived location, terrain, "
+            "weather, damage and airborne aftermath continuous. Add a Final Combat Resolve marker; "
+            "no replay, walk-away, zoom-out, in-place spin or slow-motion contact. "
+        )
+        speaker_gender_contract = (
+            "HONG KONG COMIC CHARACTER CONTRACT: infer each fighter from the loaded comic Pictures "
+            "and explicit user role descriptions, not from P1/P2 numbering or a generic gender rule. "
+            "Keep names, face, hair, build, costume, ability ownership and screen identity stable. "
+            "Do not invent conversational dialogue. Preserve every explicitly authored narration and "
+            "fighter line verbatim in editable text_layers. When the requirement requests automatic comic "
+            "narration, create at most one short first-person or omniscient voice-over per 15-second act; "
+            "it may establish resolve or consequence but may not explain every punch. Short technique shouts "
+            "remain editable dialogue. Never hide speech inside Shot prompts or burn it into generated pictures. "
+        )
+        environmental_combat_contract = (
+            "REFERENCE-DERIVED WORLD COMBAT CONTRACT: first build a fact ledger from the current loaded "
+            "comic Pictures and explicit request for location, terrain, architecture, objects, weather, "
+            "light, colour and available materials. Preserve those facts as the only world plate. Do not "
+            "inject a Kowloon wet market, arena, street, spectators or any other Skill-default venue. "
+            "For every Shot show fighter load/action, exact contact or visible miss, defender response, "
+            "force vector, displacement, then one material response and one wider atmospheric response. "
+            "Every completed technique must communicate invincible world-class power. The load lifts nearby "
+            "source-visible rock, sand or loose matter and bends local light; contact creates one directional "
+            "compressed-air detonation and localized space-lensing; material then cracks or explodes along "
+            "the force vector; only afterward do violent wind, dust fronts, clouds, weather, illumination and "
+            "physically cast shadows escalate. If a solar technique is requested, stage one climax with a compact "
+            "white-gold corona around the attacking limb/contact, heat refraction, exposure adaptation, warm "
+            "reflections and long moving hard-edged shadows. Use photoreal superhero-scale effects, never a "
+            "cartoon aura, new sun, portal, graphic ring or unrelated background fireball. Effects begin only "
+            "after a visible cause and may not replace or geometrically redesign the source environment. "
+            "For every completed named technique, create exactly one short Chinese move title on an editable "
+            "V-track on_screen_text layer, explicit_user_requested=true, synchronized to contact/release. Never "
+            "draw technique lettering into a generated reference image, never overlap two titles, and never cover "
+            "a fighter's face. "
+            "Persist every environmental consequence into later Shots and compile the editable causal "
+            "fields into the actual H3 Segment prompt. "
+        )
+    elif is_drone_special_skill(selected_special_key):
+        ending_contract = (
+            "For drone-fly-on-city and drone-fly-on-city-fireworks, keep a natural generated ending: "
+            "do not add an automatic Final Hold, terminal picture, P1 return or fixed last-second freeze. "
+            "DRONE CAMERA VISIBILITY CONTRACT: author a pure unobstructed onboard optical POV, never "
+            "an exterior shot of the flying vehicle. Use the camera viewpoint—not the drone or aircraft—"
+            "as the grammatical subject of movement. The camera carrier stays outside every frame: no "
+            "body, nose, arms, rotors, propellers, landing gear, controller, shadow or reflection, and no "
+            "chase, follow, over-the-vehicle or observer angle. An aircraft already visible in P1 remains "
+            "distant background scenery and never becomes the foreground camera carrier. "
+        )
+        speaker_gender_contract = (
+            "For every dialogue text_layer, infer the gender of the speaking on-screen character from "
+            "the user's story, Shot action and reference-media evidence. Assign S1 to a female speaker "
+            "and S2 to a male speaker, keep the assignment consistent across every Shot, and never use "
+            "the narrator's gender when the visible character is speaking. If the user explicitly writes "
+            "S1 or S2, preserve that explicit assignment. Put the intended emotion and pace in delivery "
+            "without changing the authored words. "
+        )
+        environmental_combat_contract = ""
+    else:
+        ending_contract = (
+            "Include a Final Hold marker before the final frame; cue timestamps must be earlier than "
+            "duration_seconds. The Final Hold must resolve the last Shot's outgoing physical state "
+            "rather than introduce a new action. "
+        )
+        speaker_gender_contract = (
+            "For every dialogue text_layer, infer the gender of the speaking on-screen character from "
+            "the user's story, Shot action and reference-media evidence. Assign S1 to a female speaker "
+            "and S2 to a male speaker, keep the assignment consistent across every Shot, and never use "
+            "the narrator's gender when the visible character is speaking. If the user explicitly writes "
+            "S1 or S2, preserve that explicit assignment. Put the intended emotion and pace in delivery "
+            "without changing the authored words. "
+        )
+        environmental_combat_contract = ""
     return (
         "You are the AI Design Planner inside a MiniMax H3 Director Cut application. "
         "Convert the user's concept into one production-ready JSON object that exactly matches the supplied schema. "
         + skill_direction
         + duration_contract
+        + language_contract
+        + subtitle_contract
+        + music_contract
+        + character_binding_contract
+        + ending_contract
+        + speaker_gender_contract
+        + environmental_combat_contract
         + "the application will compile this JSON into the final H3 Ref2VA prompt. "
         "Use 0.5-second boundaries. Build chronological Shot Blocks with explicit framing, camera angle, camera movement, "
         "subject action, environmental response, continuity state, optional flourish and additional direction. "
@@ -1990,6 +6930,11 @@ def build_design_system_prompt(context: dict) -> str:
         "than the duration can render. Reserve the last 0.5 to 1.0 second before every native 15-second boundary for one "
         "simple outgoing state; do not introduce a new multi-beat technique there. Shots must be chronological and must not "
         "overlap; editorial V tracks may overlap for reference/compositing media, but simultaneous conflicting camera Shots may not. "
+        "The Shot lane must cover every frame from 0.00 through duration_seconds exactly once, with no gap and no overlap. "
+        "If speech timing lengthens the project, extend its owning Shot and ripple every later Shot, text layer, cue and media range; "
+        "never create a tail Segment that contains speech but no Shot. Do not compress several unrelated locations or editorial cuts "
+        "into one Shot: a private aircraft, hotel floor and cinema, for example, require separate chronological Shot Blocks even when "
+        "one voice-over sentence describes all three. "
         "Timeline tracks are editorial lanes, not the physical H3 reference-slot count. You may plan V4, V5 and higher "
         "visual lanes for overlapping action states, titles or compositing, and A4, A5 and higher audio lanes for dialogue, "
         "voice-over, lyrics, ambience or music stems; the Studio creates those tracks automatically. Keep on-screen text on "
@@ -2002,7 +6947,11 @@ def build_design_system_prompt(context: dict) -> str:
         "temporally relevant sources into physical H3 slots for each native Segment. Never exceed the supplied "
         "physical_segment_capacity (normally 9 images, 3 videos and 3 audios) within any one Segment, even though the whole "
         "project may use P10+, V4+ and A4+. Additional editorial tracks do not increase that per-Segment limit. "
-        "Before requesting any new material, audit the loaded existing_media inventory in the workspace context. The user may "
+        "Never treat P9, V3 or A3 as a project-wide stopping point. Continue assigning stable logical IDs P10+, V4+ and A4+ when "
+        "new story needs occur later in the Timeline; capacity is validated only among references whose time ranges overlap the same Segment. "
+        "Before requesting any new material, audit the loaded existing_media inventory in the workspace context. Media filenames "
+        "and local paths are deliberately absent because they are transport metadata, never scene evidence; do not infer a title, "
+        "location, landmark, person, object or style from a filename or project-folder name. The user may "
         "refer to its stable Media Pool IDs as @P1, @P2, @V1 or @A1; write the ID without @ in existing_media_uses.media_id. "
         "Inside creative_brief, Shot subject_action, environment_response, additional_direction, marker direction and every other "
         "authored instruction, always cite an existing Media Pool source with its stable @P/@V/@A ID, for example @P4. Never write "
@@ -2020,6 +6969,12 @@ def build_design_system_prompt(context: dict) -> str:
         "Media Pool asset may appear in multiple existing_media_uses rows when it returns in separate non-contiguous intervals; "
         "give every occurrence a unique requirement_id, exact range, track and instruction. Do not widen across an interval where "
         "the reference should be inactive. Repeated uses share one physical H3 reference slot. "
+        "When a loaded image is only a map, route drawing, mask, depth guide, annotation or other planning control, set its "
+        "existing_media_uses.usage to analysis_only (route_control_analysis_only is accepted as a compatibility alias). The "
+        "application exposes only a neutral planning role to Design and performs route/control analysis locally; it never places "
+        "the control on the Timeline, counts it against an H3 Segment reference slot, or uploads it to MiniMax H3. Its filename, "
+        "caption, OCR and semantic metadata provide zero scene evidence. Never cite that control asset ID or its visible graphics "
+        "in Shot prose; describe only the abstract motion or staging supplied by the application. "
         "media_requests must contain only genuinely missing assets after this reuse audit. Choose that missing count dynamically from "
         "the concept and the time-local Segment budget; never duplicate a requirement already fulfilled by @P1/@V1/@A1. "
         "For media_requests, use h3_reference when an asset supplies subject, product, wardrobe, environment or composition guidance; "
@@ -2031,6 +6986,24 @@ def build_design_system_prompt(context: dict) -> str:
         "a later segment from replaying an earlier action. Do not return zero image references when the plan has visual Shots and empty "
         "Picture capacity. As a coverage floor, provide approximately one useful image state per five seconds, never more than one per "
         "Shot, while counting genuinely reused Picture assets toward that floor and staying within the per-Segment physical capacity. "
+        "For a recurring human character, designate one clear face-bearing Picture as the whole-design identity anchor. A user-supplied "
+        "Media Pool Picture explicitly cited for face or identity consistency is always authoritative and must win over every generated "
+        "Picture. Later generated Pictures are environment, prop or action-state support and must not redefine a competing face. When the "
+        "authoritative face comes from existing media, keep faces fully out of frame, turned away, motion-obscured or otherwise unreadable "
+        "in independent T2I support requests; H3 must derive the recognizable face only from that existing Picture. "
+        "Before planning references, build an exact cast ledger. Every Shot and every person-bearing image request must state the exact "
+        "number and identity of visible people. A one-person identity reference must show exactly that one foreground person with no crowd, "
+        "staff, silhouette, reflection, portrait, mannequin, double or background figure. A two-person conversation must show exactly the "
+        "two named speakers and no duplicate or third person. Secondary characters require their own distinct identity reference and must "
+        "never inherit or blend with the primary character anchor. Environment and prop references must contain no visible people unless the "
+        "Shot explicitly needs them. Only recurring identity references may span the whole design; scope environment, location, montage and "
+        "action-state references to the exact Shots where they are needed so an earlier airport, hotel, computer or other scene cannot leak "
+        "into a later Segment. "
+        "For every identity-anchored character, keep face, age, skin tone, hairstyle, hair color, body proportions, complete top and lower-body "
+        "wardrobe, shoes and accessory ownership fixed by default. Expressions, poses, arm/leg angles, gait phase and physically caused hair or "
+        "cloth motion may vary freely. Wardrobe or hairstyle changes, injury, dirt, damage, shoe removal and accessory loss may occur only when "
+        "the story explicitly authors the trigger in a Shot; write the changed outgoing state and carry it into every later incoming continuity "
+        "state until another explicit story change. Never invent an unrequested appearance reset between Shots or Segments. "
         "Every image media_request sent to Z-Image/T2I must contain a complete standalone visual prompt. Never put an H3 <Picture N> "
         "token in a T2I prompt and never ask it to copy, match, continue from or depend on a previous, current/self, next/future, generated "
         "or output image; those H3 slots do not exist when reference images are generated. Restate all required identity, appearance, wardrobe, "
@@ -2047,12 +7020,18 @@ def build_design_system_prompt(context: dict) -> str:
         "ownership, counts, action state and in-world environment. If BLIP conflicts on any of those facts, reject that generated reference "
         "and replan the affected media_request with a corrected standalone prompt for regeneration; never alter the story or ownership ledger "
         "to agree with an incorrect BLIP observation, and never approve the conflicting image as an H3 reference. "
+        "When the user asks for Dialogue, Voice-over, narration or Lyrics, create editable text_layers for every spoken line, set "
+        "explicit_user_requested=true, and keep the spoken words exclusively in those text_layers. Never hide, quote or paraphrase spoken "
+        "words inside Shot subject_action, environment_response, continuity_state, optional_flourish or additional_direction. "
+        "Set text_layers.overlap_policy to auto by default, overlap only when simultaneous speech is narratively intentional, or sequential "
+        "when the later line must wait. Never merge two spoken lines into one text_layer merely because their times overlap; the Studio "
+        "routes colliding Dialogue, Voice-over and Lyrics clips onto independent audio tracks. "
+        "Budget spoken language before fixing Shot boundaries: use a natural conversational rate, give emotional or hesitant "
+        "delivery extra time, and lengthen the owning Shot instead of compressing exact dialogue. If a line cannot fit, shift "
+        "all later Shots, text layers, cues and media ranges together; never solve overload by speaking early, reordering, "
+        "omitting or paraphrasing authored words. "
         "Only create a text_layer or theme_text when the user explicitly requests visible text, dialogue, voice-over or lyrics, and set "
         "explicit_user_requested=true only in that case. Never turn the creative brief or scene description into on-screen text. "
-        "For every dialogue text_layer, infer the gender of the speaking on-screen character from the user's story, Shot action and "
-        "reference-media evidence. Assign S1 to a female speaker and S2 to a male speaker, keep the assignment consistent across every "
-        "Shot, and never use the narrator's gender when the visible character is speaking. If the user explicitly writes S1 or S2, "
-        "preserve that explicit assignment. Put the intended emotion and pace in delivery without changing the authored words. "
         "Always design a useful overall_soundscape with three audible layers: continuous diegetic location ambience, exact-frame "
         "contact-synchronized Foley/one-shot SFX, and foreground speech. On-screen Dialogue must sound like live production audio "
         "captured in the visible location, with natural breath, conversational micro-pauses, camera-distance perspective, subtle room "
@@ -2062,17 +7041,15 @@ def build_design_system_prompt(context: dict) -> str:
         "reflections for covered semi-outdoor spaces, and almost no reverb with reduced low-mid fullness for open exteriors. Never carry "
         "a previous room's tail across a location change. Keep "
         "dialogue in the foreground, duck ambience beneath speech without muting it, and never replace or echo authored dialogue. "
-        "Always design a useful non_diegetic_music cue as a separate audible score layer. Specify its dramatic role and instrumentation, "
-        "duck it under speech, let it rise in dialogue gaps and transitions, and never leave it blank or use vocals unless authored Lyrics "
-        "explicitly require them. "
-        "Always include a Final Hold marker before the final frame; cue timestamps must be earlier than duration_seconds. "
         "Never leave constraints blank. It must explicitly state that core actions and continuity states outrank optional "
-        "flourishes, and that optional detail is dropped before a Shot is delayed or replayed. The Final Hold must resolve "
-        "the last Shot's outgoing physical state rather than introduce a new action. "
+        "flourishes, and that optional detail is dropped before a Shot is delayed or replayed. "
         "Media requests are reference requirements, not final generated media. "
         "Keep exact product/subject continuity, realistic object interaction and H3-friendly concise directions. "
+        "OUTPUT SIZE CONTRACT: Return one compact but complete JSON object. Do not repeat the same prose across fields, "
+        "do not add indentation for readability, and keep directions concise while preserving every required Shot, "
+        "text layer, continuity state and media range. Close every string, array and object. "
         "Do not include markdown or commentary. Available workspace context: "
-        + json.dumps(context, ensure_ascii=False)
+        + json.dumps(prompt_context, ensure_ascii=False)
     )
 
 
@@ -2107,11 +7084,25 @@ def _slate(path: Path, request: dict, title: str) -> None:
 
 
 def materialize_design_media(
-    plan: dict, example_root: Path, ffmpeg: Path
+    plan: dict,
+    example_root: Path,
+    ffmpeg: Path,
+    *,
+    design_dir: Path | None = None,
+    media_dir: Path | None = None,
+    audio_dir: Path | None = None,
 ) -> tuple[Path, list[dict]]:
-    stamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
-    design_dir = example_root / f"{_slug(plan.get('title', ''), 'ai_design')}_{stamp}"
-    design_dir.mkdir(parents=True, exist_ok=False)
+    if design_dir is None:
+        stamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+        design_dir = example_root / f"{_slug(plan.get('title', ''), 'ai_design')}_{stamp}"
+        design_dir.mkdir(parents=True, exist_ok=False)
+    else:
+        design_dir = Path(design_dir)
+        design_dir.mkdir(parents=True, exist_ok=False)
+    media_output_dir = Path(media_dir) if media_dir is not None else design_dir
+    audio_output_dir = Path(audio_dir) if audio_dir is not None else media_output_dir
+    media_output_dir.mkdir(parents=True, exist_ok=True)
+    audio_output_dir.mkdir(parents=True, exist_ok=True)
     (design_dir / "design_plan.json").write_text(
         json.dumps(plan, ensure_ascii=False, indent=2), encoding="utf-8"
     )
@@ -2124,12 +7115,12 @@ def materialize_design_media(
         )
         media_type = request["media_type"]
         if media_type == "image":
-            output = design_dir / f"{stem}.png"
+            output = media_output_dir / f"{stem}.png"
             _slate(output, request, plan["title"])
             preview_path = output
         elif media_type == "video":
-            slate = design_dir / f"{stem}_source.png"
-            output = design_dir / f"{stem}.mp4"
+            slate = media_output_dir / f"{stem}_source.png"
+            output = media_output_dir / f"{stem}.mp4"
             _slate(slate, request, plan["title"])
             preview_path = slate
             duration = max(0.5, request["end_seconds"] - request["start_seconds"])
@@ -2146,7 +7137,7 @@ def materialize_design_media(
                 timeout=60,
             )
         else:
-            output = design_dir / f"{stem}.wav"
+            output = audio_output_dir / f"{stem}.wav"
             preview_path = None
             duration = max(0.5, request["end_seconds"] - request["start_seconds"])
             sample_rate = 24000

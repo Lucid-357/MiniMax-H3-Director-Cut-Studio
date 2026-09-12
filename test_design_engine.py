@@ -7,29 +7,68 @@ import wave
 
 from design_cleanup_service import cleanup, lm_origin, unload_lm_studio
 from design_ai_service import handle as handle_design_ai_job, select_available_model
+from drone_route_engine import analyse_red_route
 from design_engine import (
+    BEAT_SYNCED_ENTRANCE_SPECIAL_SKILL,
     DESIGN_JSON_SCHEMA,
+    DRONE_FIREWORKS_STILL_CONTRACT,
+    DRONE_FIREWORKS_STILL_NEGATIVE_PROMPT,
+    DRONE_CAMERA_ONLY_POV_CONTRACT,
+    DRONE_STILL_CLEAN_FRAME_CONTRACT,
+    DRONE_STILL_NEGATIVE_PROMPT,
+    H3_STABLE_DIALOGUE_LANGUAGES,
+    DesignDialogueLanguageContractError,
     DesignDurationContractError,
+    DesignJSONDecodeError,
+    DesignSpeechLayerContractError,
     automatic_background_music,
     automatic_background_soundscape,
     authored_text_layers_with_plan_assignments,
+    bind_design_source_plate_paths,
     build_design_system_prompt,
+    collect_design_preflight_blockers,
+    enforce_design_dialogue_language,
+    enforce_design_music_mode,
+    enforce_design_subtitle_policy,
+    enforce_hong_kong_comic_technique_text_layers,
+    enforce_hong_kong_comic_superhero_opening,
+    enforce_hong_kong_comic_generated_source_plates,
+    enforce_hong_kong_comic_source_mapping,
+    extract_design_json,
     extract_explicit_timed_text_layers,
+    infer_design_dialogue_language,
     infer_explicit_design_duration,
+    is_analysis_only_media_use,
     materialize_design_media,
+    normalize_design_music_mode,
     normalize_shot_action_budget,
     normalize_design_plan,
     protect_explicit_timed_text_layers,
+    reconcile_requested_speech_layer_contract,
+    sanitize_drone_still_image_request,
+    sanitize_design_model_context,
+    speech_timing_budget,
     spatial_acoustics_profile,
     spatial_acoustics_schedule,
+    stabilize_generated_identity_references,
     validate_explicit_timed_text_contract,
+    validate_drone_image_request_budget,
+    validate_requested_speech_layer_contract,
+    _append_subject_count_guard,
+    _street_fighter_realtime_action_text,
 )
-from design_media_service import generate as generate_design_media, image_workflow
+from design_media_service import (
+    generate as generate_design_media,
+    image_workflow,
+    render_immutable_source_plate,
+)
 from design_settings import DesignAISettings, load_design_settings, save_design_settings
 from runtime_paths import PROJECT_ROOT, load_runtime_paths
 from tts_service import (
     atempo_filters,
     normalize_tts_engine,
+    qwen3_tts_language,
+    qwen3_tts_speaker,
     synthesize_timeline,
     voxcpm_speaker_seed,
     voxcpm_voice_control,
@@ -104,6 +143,752 @@ def sample_design() -> dict:
 
 
 class DesignEngineTests(unittest.TestCase):
+    def test_loaded_picture_can_condition_a_general_source_img2img_request(self):
+        payload = sample_design()
+        payload["existing_media_uses"] = [{
+            "requirement_id": "comic_page_p2",
+            "media_id": "P2",
+            "media_type": "image",
+            "usage": "analysis_only",
+            "reuse_policy": "whole_design",
+            "start_seconds": 0.0,
+            "end_seconds": 12.0,
+            "track": "V2",
+            "instruction": "Composition source only.",
+        }]
+        payload["media_requests"] = [{
+            "requirement_id": "live_action_contact",
+            "media_type": "image",
+            "usage": "h3_reference",
+            "reuse_policy": "time_scoped",
+            "start_seconds": 3.5,
+            "end_seconds": 6.0,
+            "track": "V1",
+            "subject_keywords": ["two martial artists", "single fist contact"],
+            "prompt": "Exactly two adult martial artists make one fist contact on a rocky mountain, cinematic photoreal live action.",
+            "source_plate_media_id": "P2",
+            "source_plate_mode": "source_img2img",
+            "source_image_denoise": 0.65,
+            "preferred_media_id": "P4",
+        }]
+        inventory = [{
+            "media_id": "P2", "media_type": "image", "loaded": True,
+            "local_path": __file__,
+        }]
+        plan = normalize_design_plan(
+            payload,
+            {"image": 9, "video": 3, "audio": 3},
+            existing_media=inventory,
+        )
+        request = next(
+            row for row in plan["media_requests"]
+            if row["requirement_id"] == "live_action_contact"
+        )
+        self.assertEqual(request["source_plate_media_id"], "P2")
+        self.assertEqual(request["derived_from_media_id"], "P2")
+        self.assertEqual(request["source_plate_mode"], "source_img2img")
+        self.assertEqual(request["source_image_denoise"], 0.65)
+
+    def test_dense_generated_dialogue_extends_owning_shot_and_later_timeline(self):
+        payload = sample_design()
+        payload["text_layers"] = [{
+            "start_seconds": 0.5,
+            "end_seconds": 2.0,
+            "track": "A4",
+            "content": "我不是要你马上回答，但你必须把昨晚发生的每一个细节完整告诉我。",
+            "role": "dialogue",
+            "speaker": "S1",
+            "language": "Chinese",
+            "delivery": "Natural and emotionally controlled",
+            "lip_sync": True,
+            "explicit_user_requested": True,
+        }]
+        original_duration = payload["duration_seconds"]
+        original_first_end = payload["shots"][0]["end_seconds"]
+        original_second_start = payload["shots"][1]["start_seconds"]
+        plan = normalize_design_plan(
+            payload, {"image": 9, "video": 3, "audio": 3}
+        )
+        layer = plan["text_layers"][0]
+        self.assertTrue(layer["speech_timing_auto_adjusted"])
+        self.assertGreater(plan["duration_seconds"], original_duration)
+        self.assertGreater(plan["shots"][0]["end_seconds"], original_first_end)
+        self.assertGreater(plan["shots"][1]["start_seconds"], original_second_start)
+        self.assertFalse(layer["speech_budget"]["risk"])
+
+    def test_authored_timecode_stays_locked_and_reports_speech_risk(self):
+        payload = sample_design()
+        requirement = """帮我创作12秒视频
+[00:00-00:02]
+普通话对白：「我必须在两秒里面完整说明这个过长而且不应该被删改或换序的关键句子。」"""
+        payload["duration_seconds"] = 12.0
+        payload["shots"] = [{**payload["shots"][0], "start_seconds": 0.0, "end_seconds": 12.0}]
+        plan = normalize_design_plan(
+            payload,
+            {"image": 9, "video": 3, "audio": 3},
+            authored_requirement=requirement,
+        )
+        layer = plan["text_layers"][0]
+        self.assertEqual(plan["duration_seconds"], 12.0)
+        self.assertEqual((layer["start_seconds"], layer["end_seconds"]), (0.0, 2.0))
+        self.assertTrue(layer["speech_budget"]["risk"])
+        self.assertTrue(layer["speech_budget"]["authored_timing_locked"])
+        self.assertTrue(any("remains red" in row for row in plan["design_warnings"]))
+
+    def test_three_generated_character_images_use_one_identity_anchor(self):
+        payload = sample_design()
+        payload["duration_seconds"] = 15.0
+        payload["shots"] = [
+            {
+                **payload["shots"][0],
+                "start_seconds": index * 5.0,
+                "end_seconds": (index + 1) * 5.0,
+                "subject_action": f"The same woman completes phase {index + 1}.",
+            }
+            for index in range(3)
+        ]
+        payload["media_requests"] = []
+        payload["existing_media_uses"] = []
+        plan = normalize_design_plan(
+            payload,
+            {"image": 9, "video": 3, "audio": 3},
+            existing_media=[],
+            repair_media_plan=True,
+        )
+        images = [row for row in plan["media_requests"] if row["media_type"] == "image"]
+        self.assertEqual(len(images), 3)
+        anchors = [row for row in images if row.get("identity_anchor")]
+        self.assertEqual(len(anchors), 1)
+        self.assertEqual(anchors[0]["reuse_policy"], "whole_design")
+        self.assertEqual((anchors[0]["start_seconds"], anchors[0]["end_seconds"]), (0.0, 15.0))
+        self.assertIn("CHARACTER CONTINUITY CONTRACT", anchors[0]["prompt"])
+        self.assertIn("top/outerwear style, material and color", plan["constraints"])
+        self.assertEqual(
+            plan["character_continuity_contract"]["variable"][2],
+            "arm angle",
+        )
+        self.assertTrue(
+            all(
+                row is anchors[0]
+                or "SUPPORTING ENVIRONMENT OR ACTION-STATE REFERENCE ONLY" in row["prompt"]
+                for row in images
+            )
+        )
+
+    def test_user_picture_identity_anchor_overrides_generated_character_images(self):
+        plan = {
+            "duration_seconds": 12.0,
+            "creative_brief": "The same girl from @P1 runs a marathon.",
+            "design_warnings": [
+                "Promoted generated_pose to the whole-design primary character identity anchor; "
+                "later generated Pictures cannot redefine a competing face."
+            ],
+            "existing_media_uses": [{
+                "requirement_id": "girl_identity",
+                "media_id": "P1",
+                "media_type": "image",
+                "reuse_policy": "time_scoped",
+                "start_seconds": 0.0,
+                "end_seconds": 3.0,
+                "subject_keywords": ["young girl"],
+                "instruction": (
+                    "Use @P1 as the strict identity anchor. Preserve her exact facial features "
+                    "and face identity throughout every shot."
+                ),
+            }],
+            "media_requests": [
+                {
+                    "requirement_id": requirement_id,
+                    "media_type": "image",
+                    "identity_anchor": index == 0,
+                    "prompt": (
+                        "PRIMARY RECURRING CHARACTER IDENTITY ANCHOR. Show one clear, "
+                        "unobstructed, recognizable face with exact age range, facial structure, "
+                        "hair, skin tone, wardrobe and owned props suitable for reuse through the "
+                        f"full story. Generated frame {index + 1}."
+                    ),
+                }
+                for index, requirement_id in enumerate(
+                    ("generated_pose", "generated_finish", "generated_environment")
+                )
+            ],
+        }
+        stabilize_generated_identity_references(plan)
+        anchor = plan["existing_media_uses"][0]
+        self.assertTrue(anchor["identity_anchor"])
+        self.assertEqual(anchor["reuse_policy"], "whole_design")
+        self.assertEqual((anchor["start_seconds"], anchor["end_seconds"]), (0.0, 12.0))
+        self.assertIn("CHARACTER CONTINUITY CONTRACT", anchor["instruction"])
+        self.assertIn("never invent these changes", plan["constraints"])
+        self.assertFalse(any(row.get("identity_anchor") for row in plan["media_requests"]))
+        self.assertTrue(all(
+            row.get("identity_anchor_media_id") == "P1"
+            and "authoritative recurring face identity is the user-supplied @P1" in row["prompt"]
+            and not row["prompt"].startswith("PRIMARY RECURRING CHARACTER IDENTITY ANCHOR")
+            for row in plan["media_requests"]
+        ))
+        self.assertTrue(any("Locked user-supplied P1" in row for row in plan["design_warnings"]))
+
+    def test_generated_pose_that_recreates_p1_is_omitted_but_distinct_actor_remains(self):
+        plan = {
+            "duration_seconds": 12.0,
+            "creative_brief": "A woman and the same child from @P1 run together.",
+            "design_warnings": [],
+            "existing_media_uses": [{
+                "requirement_id": "girl_identity",
+                "media_id": "P1",
+                "media_type": "image",
+                "reuse_policy": "whole_design",
+                "start_seconds": 0.0,
+                "end_seconds": 12.0,
+                "subject_keywords": ["little girl", "identity"],
+                "instruction": "Use @P1 as the authoritative identity reference for the girl.",
+                "identity_anchor": True,
+            }],
+            "media_requests": [
+                {
+                    "requirement_id": "adult_runner",
+                    "media_type": "image",
+                    "subject_keywords": ["adult female runner"],
+                    "prompt": (
+                        "A separate adult female runner carries a red flag. "
+                        "The authoritative recurring face identity is the user-supplied @P1; "
+                        "this generated Picture must never replace @P1. "
+                        "SUPPORTING ENVIRONMENT OR ACTION-STATE REFERENCE ONLY."
+                    ),
+                },
+                {
+                    "requirement_id": "track_environment",
+                    "media_type": "image",
+                    "subject_keywords": ["track", "trees"],
+                    "prompt": "An empty marathon track under morning trees.",
+                },
+                {
+                    "requirement_id": "girl_pose",
+                    "media_type": "image",
+                    "subject_keywords": ["girl jogging"],
+                    "prompt": "The same girl, face matching @P1 identity, jogs toward camera.",
+                },
+            ],
+        }
+        stabilize_generated_identity_references(plan)
+        requests = {row["requirement_id"]: row for row in plan["media_requests"]}
+        self.assertEqual(set(requests), {"adult_runner", "track_environment"})
+        self.assertIn(
+            "DISTINCT SECONDARY CHARACTER REFERENCE ONLY",
+            requests["adult_runner"]["prompt"],
+        )
+        self.assertNotIn("identity_anchor_media_id", requests["adult_runner"])
+        self.assertIn(
+            "SUPPORTING ENVIRONMENT OR ACTION-STATE REFERENCE ONLY",
+            requests["track_environment"]["prompt"],
+        )
+        self.assertEqual(requests["track_environment"]["identity_anchor_media_id"], "P1")
+        self.assertTrue(any("girl_pose" in row for row in plan["design_warnings"]))
+
+    def test_generated_pose_with_bare_p1_dependency_is_also_omitted(self):
+        plan = {
+            "duration_seconds": 12.0,
+            "creative_brief": "The same child from @P1 runs with an adult.",
+            "design_warnings": [],
+            "existing_media_uses": [{
+                "media_id": "P1",
+                "media_type": "image",
+                "reuse_policy": "whole_design",
+                "start_seconds": 0.0,
+                "end_seconds": 12.0,
+                "instruction": "Use @P1 as the authoritative face identity anchor.",
+                "identity_anchor": True,
+            }],
+            "media_requests": [{
+                "requirement_id": "bare_p1_pose",
+                "media_type": "image",
+                "subject_keywords": ["girl running"],
+                "prompt": "A running girl matching P1 crosses the finish line.",
+            }],
+        }
+        stabilize_generated_identity_references(plan)
+        self.assertEqual(plan["media_requests"], [])
+        self.assertTrue(any("bare_p1_pose" in row for row in plan["design_warnings"]))
+
+    def test_hong_kong_comic_two_fighter_plate_is_never_single_identity_anchor(self):
+        plan = {
+            "duration_seconds": 12.0,
+            "creative_brief": "Two legendary fighters clash on a mountain.",
+            "design_warnings": [],
+            "existing_media_uses": [],
+            "media_requests": [{
+                "requirement_id": "two_fighter_clash",
+                "media_type": "image",
+                "reuse_policy": "whole_design",
+                "start_seconds": 0.0,
+                "end_seconds": 12.0,
+                "identity_anchor": True,
+                "prompt": (
+                    "PRIMARY RECURRING CHARACTER IDENTITY ANCHOR. Exactly two fighters clash "
+                    "on a rocky mountain; S1 wears a grey-green coat and S2 a black vest."
+                ),
+            }],
+        }
+        stabilize_generated_identity_references(
+            plan, "hong-kong-comic-fighter"
+        )
+        request = plan["media_requests"][0]
+        self.assertFalse(request.get("identity_anchor", False))
+        self.assertEqual(request["reuse_policy"], "time_scoped")
+        self.assertIn("exactly two unique visible people", request["prompt"])
+        self.assertNotIn("exactly one visible identity subject", request["prompt"])
+
+    def test_subject_count_guard_replaces_stale_one_person_and_environment_guards(self):
+        request = {
+            "requirement_id": "auto_image_s4",
+            "subject_keywords": ["S1", "S2", "two-fighter collision"],
+            "prompt": (
+                "S1 catches S2 at the true contact point. Exactly two visible people in frame. "
+                "EXACT SUBJECT COUNT LOCK: exactly one visible person and no one else. No crowd, "
+                "staff, silhouettes, human reflections, portraits, mannequins or duplicated bodies. "
+                "ENVIRONMENT-ONLY COUNT LOCK: no visible people, human silhouettes, reflections, "
+                "portraits, mannequins or face-like figures."
+            ),
+        }
+        _append_subject_count_guard(request, identity=True)
+        self.assertEqual(request["prompt"].count("SUBJECT COUNT LOCK:"), 1)
+        self.assertIn("exactly two unique visible people", request["prompt"])
+        self.assertNotIn("exactly one visible person", request["prompt"])
+        self.assertNotIn("ENVIRONMENT-ONLY", request["prompt"])
+
+    def test_hong_kong_comic_generated_stills_are_bound_to_loaded_source_plates(self):
+        plan = {
+            "duration_seconds": 15.0,
+            "design_warnings": [],
+            "existing_media_uses": [
+                {"requirement_id": "long_jie_panel", "media_id": "P1", "media_type": "image"},
+                {"requirement_id": "shen_wu_panel", "media_id": "P2", "media_type": "image"},
+            ],
+            "media_requests": [
+                {"requirement_id": "long_jie_identity", "media_type": "image", "prompt": "Long Jie identity portrait"},
+                {"requirement_id": "shen_wu_action", "media_type": "image", "prompt": "Shen Wu action frame"},
+                {"requirement_id": "opening_pressure_state", "media_type": "image", "start_seconds": 0.0, "end_seconds": 1.0, "prompt": "Opening pressure state"},
+                {"requirement_id": "final_resolve_state", "media_type": "image", "start_seconds": 14.0, "end_seconds": 15.0, "prompt": "Final resolve state"},
+            ],
+        }
+        inventory = [
+            {"media_id": "P1", "media_type": "image", "loaded": True, "local_path": "long_jie.jpg"},
+            {"media_id": "P2", "media_type": "image", "loaded": True, "local_path": "shen_wu.jpg"},
+        ]
+        enforce_hong_kong_comic_generated_source_plates(
+            plan, inventory, "hong-kong-comic-fighter"
+        )
+        requests = {row["requirement_id"]: row for row in plan["media_requests"]}
+        self.assertEqual(requests["long_jie_identity"]["source_plate_media_id"], "P1")
+        self.assertEqual(requests["shen_wu_action"]["source_plate_media_id"], "P2")
+        self.assertEqual(requests["opening_pressure_state"]["source_plate_media_id"], "P1")
+        self.assertEqual(requests["final_resolve_state"]["source_plate_media_id"], "P2")
+        for request in requests.values():
+            self.assertEqual(request["source_plate_mode"], "source_img2img")
+            self.assertEqual(request["derived_from_media_id"], request["source_plate_media_id"])
+            self.assertIn("SOURCE COMIC PLATE LOCK", request["prompt"])
+        self.assertTrue(all(
+            row["usage"] == "analysis_only" and not row["identity_anchor"]
+            for row in plan["existing_media_uses"]
+        ))
+
+    def test_hong_kong_comic_strong_labels_override_wrong_but_valid_source_ids(self):
+        plan = {
+            "duration_seconds": 30.0,
+            "design_warnings": [],
+            "existing_media_uses": [
+                {"requirement_id": "s1_identity_anchor", "media_id": "P2", "media_type": "image"},
+                {"requirement_id": "s2_identity_anchor", "media_id": "P3", "media_type": "image"},
+                {"requirement_id": "shot1_composition_anchor", "media_id": "P4", "media_type": "image"},
+            ],
+            "media_requests": [
+                {
+                    "requirement_id": "gen_s1_photoreal_identity", "media_type": "image",
+                    "source_plate_media_id": "P5", "prompt": "One S1 identity portrait.",
+                },
+                {
+                    "requirement_id": "gen_s2_photoreal_identity", "media_type": "image",
+                    "source_plate_media_id": "P5", "prompt": "One S2 identity portrait.",
+                },
+                {
+                    "requirement_id": "auto_image_s1", "media_type": "image",
+                    "source_plate_media_id": "P1", "prompt": "S1 collides with S2.",
+                },
+            ],
+        }
+        inventory = [
+            {"media_id": f"P{index}", "media_type": "image", "loaded": True,
+             "local_path": f"panel_{index}.jpg"}
+            for index in range(1, 6)
+        ]
+        enforce_hong_kong_comic_generated_source_plates(
+            plan, inventory, "hong-kong-comic-fighter"
+        )
+        requests = {row["requirement_id"]: row for row in plan["media_requests"]}
+        self.assertEqual(requests["gen_s1_photoreal_identity"]["source_plate_media_id"], "P2")
+        self.assertEqual(requests["gen_s2_photoreal_identity"]["source_plate_media_id"], "P3")
+        self.assertEqual(requests["auto_image_s1"]["source_plate_media_id"], "P4")
+        self.assertIn("transform @P2", requests["gen_s1_photoreal_identity"]["prompt"])
+        self.assertIn("exactly two unique visible people", requests["auto_image_s1"]["prompt"])
+
+    def test_unproven_legacy_generated_comic_reference_is_demoted(self):
+        plan = {
+            "duration_seconds": 15.0,
+            "design_warnings": [],
+            "existing_media_uses": [{
+                "requirement_id": "old_wrong_actor",
+                "media_id": "P10",
+                "media_type": "image",
+                "usage": "h3_reference",
+                "identity_anchor": True,
+            }],
+        }
+        enforce_hong_kong_comic_source_mapping(
+            plan,
+            [{
+                "media_id": "P10", "media_type": "image", "loaded": True,
+                "local_path": "media/generated_references/R0001/wrong_actor.png",
+                "analysis_summary": "AI Design generated reference, photoreal fighter",
+            }],
+            "hong-kong-comic-fighter",
+        )
+        use = plan["existing_media_uses"][0]
+        self.assertEqual(use["usage"], "analysis_only")
+        self.assertFalse(use["identity_anchor"])
+        self.assertIn("UNPROVEN GENERATED COMIC REFERENCE EXCLUDED", use["instruction"])
+
+    def test_hong_kong_comic_source_plate_pass_runs_in_normalize_pipeline(self):
+        payload = sample_design()
+        payload["media_requests"] = [{
+            "requirement_id": "comic_action_state",
+            "media_type": "image",
+            "usage": "h3_reference",
+            "reuse_policy": "time_scoped",
+            "start_seconds": 0.0,
+            "end_seconds": 4.0,
+            "track": "V1",
+            "subject_keywords": ["two fighters"],
+            "prompt": "Exactly two fighters collide on the source terrain.",
+        }]
+        plan = normalize_design_plan(
+            payload,
+            {"image": 9, "video": 3, "audio": 3},
+            existing_media=[{
+                "media_id": "P1", "media_type": "image", "loaded": True,
+                "local_path": __file__, "analysis_summary": "printed Hong Kong comic panel",
+            }],
+            special_skill_key="hong-kong-comic-fighter",
+        )
+        request = plan["media_requests"][0]
+        self.assertEqual(request["source_plate_media_id"], "P1")
+        self.assertEqual(request["source_plate_mode"], "source_img2img")
+        source_use = next(row for row in plan["existing_media_uses"] if row["media_id"] == "P1")
+        self.assertEqual(source_use["usage"], "analysis_only")
+        self.assertFalse(source_use["identity_anchor"])
+
+    def test_markdown_bold_timed_voiceover_does_not_leak_formatting(self):
+        layers = extract_explicit_timed_text_layers(
+            "[00:00-00:04]\n**普通话旁白：**“大地在拳风中裂开。”",
+            4.0,
+        )
+        self.assertEqual(len(layers), 1)
+        self.assertEqual(layers[0]["content"], "大地在拳风中裂开。")
+        self.assertEqual(layers[0]["role"], "voice_over")
+
+    def test_named_comic_characters_and_inner_voice_receive_stable_speakers(self):
+        layers = extract_explicit_timed_text_layers(
+            """[00:00-00:03]
+**龙界（低声）：**“我没有退避的理由。”
+[00:03-00:06]
+**神武不死：**“接我这一拳！”
+[00:06-00:08]
+**年轻龙界的回声：**“站起来。”""",
+            8.0,
+        )
+        self.assertEqual(len(layers), 3)
+        self.assertEqual([row["speaker"] for row in layers], ["S1", "S2", "S1"])
+        self.assertEqual([row["role"] for row in layers], ["dialogue", "dialogue", "voice_over"])
+
+    def test_authored_p1_face_contract_recovers_omitted_existing_media_use(self):
+        payload = sample_design()
+        payload["existing_media_uses"] = []
+        plan = normalize_design_plan(
+            payload,
+            {"image": 9, "video": 3, "audio": 3},
+            existing_media=[{
+                "tag": "<Picture 1>",
+                "type": "image",
+                "loaded": True,
+                "clip_prompt": "A young marathon runner.",
+            }],
+            authored_requirement=(
+                "请参考 @P1 创作，全程保持 @P1 的人脸、发型和身份完全一致。"
+            ),
+        )
+        anchor = next(
+            row for row in plan["existing_media_uses"] if row["media_id"] == "P1"
+        )
+        self.assertTrue(anchor["identity_anchor"])
+        self.assertEqual(anchor["reuse_policy"], "whole_design")
+        self.assertEqual((anchor["start_seconds"], anchor["end_seconds"]), (0.0, 12.0))
+        self.assertIn("authoritative whole-design face identity anchor", anchor["instruction"])
+        self.assertIn("top/outerwear style, material and color", anchor["instruction"])
+        self.assertTrue(all(
+            row.get("identity_anchor_media_id") == "P1"
+            for row in plan["media_requests"]
+            if row["media_type"] == "image"
+        ))
+
+    def test_h3_dialogue_language_catalog_and_deterministic_auto_detection(self):
+        self.assertEqual(len(H3_STABLE_DIALOGUE_LANGUAGES), 11)
+        self.assertEqual(
+            H3_STABLE_DIALOGUE_LANGUAGES,
+            (
+                "Arabic", "Chinese", "English", "French", "German", "Italian",
+                "Japanese", "Korean", "Portuguese", "Russian", "Spanish",
+            ),
+        )
+        self.assertEqual(
+            infer_design_dialogue_language(
+                "\u8bf7\u521b\u4f5c\u90fd\u5e02\u77ed\u5267\uff0c\u52a0\u4e0a\u5408\u9002\u5bf9\u767d\u3002",
+                "auto",
+            ),
+            "Chinese",
+        )
+        self.assertEqual(
+            infer_design_dialogue_language("Create Japanese dialogue.", "auto"),
+            "Japanese",
+        )
+        self.assertEqual(
+            infer_design_dialogue_language("\u666e\u901a\u8bdd\u5bf9\u767d", "English"),
+            "English",
+        )
+
+    def test_dialogue_language_contract_rejects_english_words_for_chinese(self):
+        plan = sample_design()
+        plan["text_layers"] = [{
+            "start_seconds": 0.0,
+            "end_seconds": 2.0,
+            "track": "A4",
+            "content": "Who are you?",
+            "role": "dialogue",
+            "speaker": "S1",
+            "language": "English",
+            "delivery": "Quiet and alert",
+            "lip_sync": True,
+            "explicit_user_requested": True,
+        }]
+        with self.assertRaises(DesignDialogueLanguageContractError):
+            enforce_design_dialogue_language(plan, "Chinese")
+        plan["text_layers"][0]["content"] = "\u4f60\u5230\u5e95\u662f\u8c01\uff1f"
+        plan["text_layers"][0]["language"] = "Mandarin Chinese"
+        protected = enforce_design_dialogue_language(plan, "Chinese")
+        self.assertEqual(protected["text_layers"][0]["language"], "Chinese")
+        self.assertEqual(protected["_dialogue_language"], "Chinese")
+
+        exact_requirement = (
+            "[00:00-00:02]\nDialogue: \u4e0d\u8981\u6539\u5199\u8fd9\u53e5\u8bdd\u3002"
+        )
+        exact_plan = sample_design()
+        exact_plan["text_layers"] = [{
+            **plan["text_layers"][0],
+            "content": "\u4e0d\u8981\u6539\u5199\u8fd9\u53e5\u8bdd\u3002",
+            "language": "Original language",
+        }]
+        exact = enforce_design_dialogue_language(
+            exact_plan,
+            "English",
+            authored_requirement=exact_requirement,
+        )
+        self.assertEqual(exact["text_layers"][0]["content"], "\u4e0d\u8981\u6539\u5199\u8fd9\u53e5\u8bdd\u3002")
+        self.assertEqual(exact["text_layers"][0]["language"], "Chinese")
+
+    def test_design_system_prompt_locks_selected_dialogue_language(self):
+        prompt = build_design_system_prompt({"dialogue_language": "Chinese"})
+        self.assertIn("stable native dialogue support for exactly 11 languages", prompt)
+        self.assertIn("DIALOGUE LANGUAGE CONTRACT: Design selected Chinese", prompt)
+        self.assertIn("Never default to English", prompt)
+        self.assertIn("OUTPUT SIZE CONTRACT", prompt)
+        self.assertIn("compact but complete JSON object", prompt)
+
+    def test_truncated_design_json_raises_structured_decode_error(self):
+        with self.assertRaises(DesignJSONDecodeError) as caught:
+            extract_design_json('{"shots":[{"start_seconds":0.0}')
+        self.assertGreaterEqual(caught.exception.line, 1)
+        self.assertGreaterEqual(caught.exception.column, 1)
+        self.assertGreaterEqual(caught.exception.position, 1)
+
+    def test_requested_narration_cannot_hide_inside_shot_prompt(self):
+        requirement = "\u8bf7\u7528\u4e2d\u6587\u65c1\u767d\u8bb2\u8ff0\u8fd9\u4e2a\u6545\u4e8b\u3002"
+        plan = sample_design()
+        plan["text_layers"] = []
+        plan["shots"][0]["additional_direction"] = (
+            "The narrator says: 'This line is wrongly hidden in the Shot.'"
+        )
+        with self.assertRaises(DesignSpeechLayerContractError):
+            validate_requested_speech_layer_contract(requirement, plan)
+        plan["text_layers"] = [{
+            "start_seconds": 0.0,
+            "end_seconds": 3.0,
+            "track": "A5",
+            "content": "\u4eca\u591c\uff0c\u6545\u4e8b\u4ece\u8fd9\u91cc\u5f00\u59cb\u3002",
+            "role": "voice_over",
+            "speaker": "S1",
+            "language": "Chinese",
+            "delivery": "Natural",
+            "lip_sync": False,
+            "explicit_user_requested": True,
+        }]
+        self.assertEqual(
+            validate_requested_speech_layer_contract(requirement, plan),
+            {"voice_over"},
+        )
+
+    def test_missing_generic_speech_becomes_nonblocking_timeline_reminder(self):
+        requirement = "Create a suspense scene with suitable Mandarin dialogue."
+        plan = sample_design()
+        plan["text_layers"] = []
+        reconciled = reconcile_requested_speech_layer_contract(requirement, plan)
+        self.assertEqual(reconciled["_missing_speech_roles"], ["dialogue"])
+        reminder = next(
+            item for item in reconciled["markers"]
+            if item["preset"].startswith("⚠ ADD EDITABLE ")
+        )
+        self.assertEqual(reminder["time_seconds"], 0.0)
+        self.assertIn("Type Tool", reminder["direction"])
+        self.assertTrue(any(
+            item.startswith("[TIMELINE REMINDER]")
+            for item in reconciled["design_warnings"]
+        ))
+        # The strict validator remains available for diagnostics and retry.
+        with self.assertRaises(DesignSpeechLayerContractError):
+            validate_requested_speech_layer_contract(requirement, reconciled)
+
+    def test_reconcile_does_not_downgrade_missing_exact_timed_words(self):
+        requirement = '[00:00-00:03]\nMandarin dialogue: "Keep this exact line."'
+        plan = sample_design()
+        plan["duration_seconds"] = 3.0
+        plan["text_layers"] = []
+        with self.assertRaises(DesignSpeechLayerContractError):
+            reconcile_requested_speech_layer_contract(requirement, plan)
+
+        protected = protect_explicit_timed_text_layers(plan, requirement)
+        reconciled = reconcile_requested_speech_layer_contract(requirement, protected)
+        self.assertEqual(reconciled["text_layers"][0]["content"], "Keep this exact line.")
+        self.assertNotIn("_missing_speech_roles", reconciled)
+        self.assertFalse(any(
+            item["preset"].startswith("⚠ ADD EDITABLE ")
+            for item in reconciled["markers"]
+        ))
+
+    def test_subtitle_switch_defaults_off_and_on_builds_editable_captions(self):
+        plan = sample_design()
+        plan["theme_text"] = "#AI_INVENTED"
+        plan["theme_text_explicit_user_requested"] = True
+        plan["shots"][-1]["continuity_state"] = (
+            "Hold the final pose. The theme text '#AI_INVENTED' appears over black."
+        )
+        plan["text_layers"] = [{
+            "start_seconds": 0.0,
+            "end_seconds": 3.0,
+            "track": "A4",
+            "content": "\u4f60\u542c\u89c1\u4e86\u5417\uff1f",
+            "role": "dialogue",
+            "speaker": "S1",
+            "language": "Chinese",
+            "delivery": "Quiet",
+            "lip_sync": True,
+            "explicit_user_requested": True,
+        }, {
+            "start_seconds": 0.0,
+            "end_seconds": 3.0,
+            "track": "V4",
+            "content": "AI invented caption",
+            "role": "on_screen_text",
+            "speaker": "S1",
+            "language": "English",
+            "delivery": "Readable",
+            "lip_sync": False,
+            "explicit_user_requested": True,
+        }]
+        requirement = "\u8bf7\u7528\u4e2d\u6587\u5bf9\u767d\u8bb2\u8ff0\u6545\u4e8b\u3002"
+        without = enforce_design_subtitle_policy(
+            plan, False, authored_requirement=requirement
+        )
+        self.assertFalse(without["theme_text"])
+        self.assertEqual(
+            [row["role"] for row in without["text_layers"]], ["dialogue"]
+        )
+        self.assertNotIn(
+            "theme text", without["shots"][-1]["continuity_state"].lower()
+        )
+        self.assertIn("VISIBLE TEXT LOCK", without["constraints"])
+        self.assertIn("No subtitles", without["constraints"])
+        with_subtitles = enforce_design_subtitle_policy(
+            plan, True, authored_requirement=requirement
+        )
+        captions = [
+            row for row in with_subtitles["text_layers"]
+            if row["role"] == "on_screen_text"
+            and row["content"] == "\u4f60\u542c\u89c1\u4e86\u5417\uff1f"
+        ]
+        self.assertEqual(len(captions), 1)
+        self.assertEqual(captions[0]["track"], "V4")
+        self.assertIn("VISIBLE TEXT WHITELIST", with_subtitles["constraints"])
+
+    def test_subtitles_off_preserves_explicit_comic_technique_title_only(self):
+        plan = sample_design()
+        plan["text_layers"] = [{
+            "start_seconds": 1.0,
+            "end_seconds": 2.0,
+            "track": "V4",
+            "content": "烈阳天劫",
+            "role": "on_screen_text",
+            "speaker": "S1",
+            "language": "Chinese",
+            "delivery": "Comic technique title",
+            "lip_sync": False,
+            "explicit_user_requested": True,
+            "timeline_visible_text_kind": "comic_technique_title",
+        }, {
+            "start_seconds": 2.0,
+            "end_seconds": 3.0,
+            "track": "V4",
+            "content": "AI invented caption",
+            "role": "on_screen_text",
+            "speaker": "S1",
+            "language": "English",
+            "delivery": "Caption",
+            "lip_sync": False,
+            "explicit_user_requested": True,
+        }]
+        result = enforce_design_subtitle_policy(
+            plan,
+            False,
+            authored_requirement="每一个招式都加入可编辑的招式文字。",
+        )
+        self.assertEqual(
+            [row["content"] for row in result["text_layers"]], ["烈阳天劫"]
+        )
+
+    def test_design_system_prompt_defaults_subtitles_off(self):
+        prompt = build_design_system_prompt({"dialogue_language": "auto"})
+        self.assertIn("SUBTITLE CONTRACT: subtitles are OFF", prompt)
+        self.assertIn("keep the spoken words exclusively in those text_layers", prompt)
+
+    def test_realtime_action_cleanup_preserves_negative_speed_rules(self):
+        cleaned = _street_fighter_realtime_action_text(
+            "No slow motion, no bullet-time and no non-combat walking. "
+            "S1 slowly walks forward before the punch."
+        )
+        self.assertIn("No slow motion", cleaned)
+        self.assertIn("no bullet-time", cleaned)
+        self.assertIn("no non-combat walking", cleaned)
+        self.assertIn("at full speed", cleaned)
+        self.assertIn("explosive combat footwork", cleaned)
+        self.assertNotIn("no in real time", cleaned.casefold())
+
     LATE_SINGLE_WOMAN_REQUIREMENT = """帮我创作30秒的视频，内容和旁白如下：
 题目：大齡剩女的困惑
 [00:00 - 00:07] 畫面：女主角一臉委屈、眼眶泛淚地看著鏡頭。
@@ -143,6 +928,118 @@ class DesignEngineTests(unittest.TestCase):
             [(row["start_seconds"], row["end_seconds"]) for row in plan["text_layers"]],
             [(0.0, 7.0), (7.0, 15.0), (15.0, 23.0), (23.0, 30.0)],
         )
+
+    def test_duration_parser_rejects_camera_geometry_and_dimension_ranges(self):
+        self.assertIsNone(
+            infer_explicit_design_duration(
+                "镜头从0–360度完成环绕，[0–360]度也表示角度，路线宽6–10px，"
+                "[6–10] px仍是线宽，参考图为1920–1080。"
+            )
+        )
+        self.assertEqual(infer_explicit_design_duration("[0-5] 画面"), 5.0)
+        self.assertEqual(infer_explicit_design_duration("[00:00-00:07] 画面"), 7.0)
+        self.assertEqual(infer_explicit_design_duration("0-5秒 画面"), 5.0)
+        self.assertEqual(
+            infer_explicit_design_duration(
+                "准确12.00秒。旁白：[0.00-3.50] 第一幕。对白：[3.50-5.50] 开战。"
+            ),
+            12.0,
+        )
+        self.assertEqual(
+            extract_explicit_timed_text_layers(
+                "0–360度运镜进度\n普通话对白：「这不是一个时间范围。」"
+            ),
+            [],
+        )
+
+    def test_drone_skill_templates_keep_declared_duration_above_examples(self):
+        expectations = {
+            "drone-fly-on-city": (12.0, ["P3", "P4", "P5"]),
+            "drone-fly-on-city-fireworks": (15.0, ["P3", "P4", "P5"]),
+        }
+        inventory = [
+            {
+                "media_id": "P1", "media_type": "image", "loaded": True,
+                "filename": "p1.png", "analysis_summary": "user-authored city scene",
+            },
+            {
+                "media_id": "P2", "media_type": "image", "loaded": True,
+                "filename": "p2.png",
+            },
+        ]
+        for skill_key, (expected_duration, expected_ids) in expectations.items():
+            with self.subTest(skill=skill_key):
+                requirement = (
+                    PROJECT_ROOT / "skill special" / skill_key / "DESIGN_REQUIREMENT.txt"
+                ).read_text(encoding="utf-8")
+                self.assertEqual(
+                    infer_explicit_design_duration(requirement), expected_duration
+                )
+                payload = sample_design()
+                payload["duration_seconds"] = 360.0
+                payload["shots"] = [{
+                    **payload["shots"][0],
+                    "start_seconds": 0.0,
+                    "end_seconds": 360.0,
+                }]
+                payload["media_requests"] = []
+                payload["existing_media_uses"] = []
+                plan = normalize_design_plan(
+                    payload,
+                    {"image": 10000, "video": 10000, "audio": 10000},
+                    existing_media=inventory,
+                    repair_media_plan=True,
+                    authored_requirement=requirement,
+                    special_skill_key=skill_key,
+                    selected_media_ids=["P1", "P2"],
+                )
+                images = [
+                    row for row in plan["media_requests"]
+                    if row["media_type"] == "image"
+                ]
+                self.assertEqual(plan["duration_seconds"], expected_duration)
+                self.assertEqual(
+                    [row["preferred_media_id"] for row in images], expected_ids
+                )
+                self.assertEqual(len(images), 3)
+                self.assertEqual(images[-1]["end_seconds"], expected_duration)
+                validate_drone_image_request_budget(plan, skill_key)
+
+    def test_drone_generation_guard_blocks_mass_or_unmapped_image_requests(self):
+        valid = {
+            "duration_seconds": 12.0,
+            "existing_media_uses": [
+                {"media_id": "P1", "usage": "h3_reference"},
+                {"media_id": "P2", "usage": "analysis_only"},
+            ],
+            "media_requests": [
+                {
+                    "requirement_id": f"p1_derived_camera_stage_{index + 1:02d}",
+                    "media_type": "image",
+                    "derived_from_media_id": "P1",
+                    "start_seconds": float(index * 5),
+                    "end_seconds": min(12.0, float((index + 1) * 5)),
+                }
+                for index in range(3)
+            ],
+        }
+        validate_drone_image_request_budget(valid, "drone-fly-on-city")
+
+        mass_plan = json.loads(json.dumps(valid))
+        mass_plan["media_requests"] *= 24
+        with self.assertRaisesRegex(ValueError, "permits exactly 3"):
+            validate_drone_image_request_budget(
+                mass_plan, "drone-fly-on-city-fireworks"
+            )
+
+        missing_route = json.loads(json.dumps(valid))
+        missing_route["existing_media_uses"] = [
+            {"media_id": "P1", "usage": "h3_reference"}
+        ]
+        with self.assertRaisesRegex(ValueError, "requires loaded @P2"):
+            validate_drone_image_request_budget(
+                missing_route, "drone-fly-on-city"
+            )
 
     def test_duration_contract_is_injected_into_design_system_prompt(self):
         prompt = build_design_system_prompt({
@@ -242,6 +1139,64 @@ class DesignEngineTests(unittest.TestCase):
         self.assertIn("natural on-location film dialogue", female)
         self.assertIn("not narration", female)
         self.assertIn("克制而坚定", female)
+
+    def test_qwen3_tts_engine_maps_studio_speakers_and_languages(self):
+        self.assertEqual(normalize_tts_engine("qwen3_tts_local"), "qwen3_tts_local")
+        self.assertEqual(qwen3_tts_speaker("S1"), "Vivian")
+        self.assertEqual(qwen3_tts_speaker("S2"), "Uncle_Fu")
+        self.assertEqual(qwen3_tts_speaker("S3"), "Serena")
+        self.assertEqual(qwen3_tts_speaker("S4"), "Dylan")
+        self.assertEqual(qwen3_tts_language("Mandarin Chinese"), "Chinese")
+        self.assertEqual(qwen3_tts_language("French"), "French")
+        self.assertEqual(qwen3_tts_language("unknown"), "Auto")
+
+    def test_qwen3_tts_provider_composes_and_releases_worker_model(self):
+        output = PROJECT_ROOT / ".director_cache" / "qwen3_tts_provider_test.wav"
+        output.unlink(missing_ok=True)
+        events = []
+
+        class FakeQwen:
+            def __init__(self, job):
+                events.append(("load", job["engine"]))
+
+            def synthesize(self, layer, target):
+                events.append(("synthesize", layer["speaker"]))
+                with wave.open(str(target), "wb") as sink:
+                    sink.setnchannels(1)
+                    sink.setsampwidth(2)
+                    sink.setframerate(24000)
+                    sink.writeframes(b"\0\0" * 2400)
+
+            def release(self):
+                events.append(("release", None))
+
+        try:
+            with patch("tts_service.Qwen3TTSLocalSynthesizer", FakeQwen):
+                result = synthesize_timeline({
+                    "engine": "qwen3_tts_local",
+                    "output_path": str(output),
+                    "duration_seconds": 1.0,
+                    "text_layers": [{
+                        "start_seconds": 0.0,
+                        "end_seconds": 1.0,
+                        "role": "dialogue",
+                        "speaker": "S2",
+                        "language": "Mandarin Chinese",
+                        "content": "你好。",
+                    }],
+                    "ffmpeg": str(load_runtime_paths().ffmpeg),
+                })
+            self.assertTrue(result["completed"])
+            self.assertIn("Qwen3-TTS Local", result["engine"])
+            with wave.open(str(output), "rb") as source:
+                composed_duration = source.getnframes() / source.getframerate()
+            self.assertAlmostEqual(composed_duration, 1.0, places=2)
+            self.assertEqual(
+                events,
+                [("load", "qwen3_tts_local"), ("synthesize", "S2"), ("release", None)],
+            )
+        finally:
+            output.unlink(missing_ok=True)
 
     def test_unknown_tts_engine_is_rejected(self):
         with self.assertRaisesRegex(ValueError, "Unsupported"):
@@ -394,6 +1349,53 @@ On-screen text: "EXACT TITLE"'''
         self.assertIn("Music mix contract", music)
         self.assertIn("Duck it about 8 dB", music)
 
+    def test_design_music_modes_are_deterministic(self):
+        plan = sample_design()
+        plan["markers"].append({
+            "time_seconds": 2.0,
+            "preset": "Music Cue",
+            "direction": "Begin a restrained pulse.",
+        })
+        off = enforce_design_music_mode(plan, "off")
+        self.assertEqual(off["non_diegetic_music"], "N/A")
+        self.assertFalse(any(
+            "music" in row["preset"].lower() for row in off["markers"]
+        ))
+        timeline = enforce_design_music_mode(plan, "timeline")
+        self.assertEqual(timeline["non_diegetic_music"], "N/A")
+        self.assertTrue(any(
+            "music" in row["preset"].lower() for row in timeline["markers"]
+        ))
+        auto = enforce_design_music_mode(plan, "auto")
+        self.assertIn("Minimal upbeat pulse", auto["non_diegetic_music"])
+        self.assertIn("Music mix contract", auto["non_diegetic_music"])
+        self.assertEqual(normalize_design_music_mode("unknown"), "auto")
+
+    def test_default_auto_does_not_override_explicit_music_off_contract(self):
+        plan = {
+            "non_diegetic_music": "MUSIC OFF per user directive.",
+            "constraints": "Use native location sound only.",
+            "markers": [{"preset": "Music Cue", "time_seconds": 1.0}],
+        }
+        resolved = enforce_design_music_mode(plan, "auto")
+        self.assertEqual(resolved["_music_mode"], "off")
+        self.assertEqual(resolved["non_diegetic_music"], "N/A")
+        self.assertEqual(resolved["markers"], [])
+
+    def test_design_system_prompt_obeys_selected_music_mode(self):
+        self.assertIn(
+            "MUSIC POLICY: AUTO",
+            build_design_system_prompt({"music_mode": "auto"}),
+        )
+        self.assertIn(
+            "MUSIC POLICY: OFF",
+            build_design_system_prompt({"music_mode": "off"}),
+        )
+        self.assertIn(
+            "MUSIC POLICY: TIMELINE",
+            build_design_system_prompt({"music_mode": "timeline"}),
+        )
+
     def test_automatic_sound_and_music_contracts_are_idempotent(self):
         plan = {
             "creative_brief": "A warrior runs through rain and strikes with a sword.",
@@ -504,6 +1506,64 @@ On-screen text: "EXACT TITLE"'''
             payload={"unload_models": True, "free_memory": True},
         )
 
+    def test_design_ai_generation_allows_large_json_and_reports_truncation(self):
+        calls = []
+
+        def fake_request(url, *, api_key, timeout, payload=None):
+            calls.append((url, payload))
+            if url.endswith("/models"):
+                return {"data": [{"id": "qwen-local"}]}
+            return {
+                "choices": [{
+                    "message": {"content": "{}"},
+                    "finish_reason": "length",
+                }],
+                "usage": {"completion_tokens": 32768},
+            }
+
+        with patch("design_ai_service.request_json", side_effect=fake_request):
+            result = handle_design_ai_job({
+                "action": "generate",
+                "provider": "lm_studio",
+                "base_url": "http://127.0.0.1:1234/v1",
+                "model": "qwen-local",
+                "system_prompt": "Return JSON.",
+                "user_prompt": "Plan a 45-second film.",
+                "schema": {"type": "object"},
+            })
+
+        completion_payload = next(
+            payload for url, payload in calls if url.endswith("/chat/completions")
+        )
+        self.assertEqual(completion_payload["max_tokens"], 32768)
+        self.assertEqual(result["max_output_tokens"], 32768)
+        self.assertEqual(result["finish_reason"], "length")
+        self.assertEqual(result["output_characters"], 2)
+
+    def test_design_ai_preserves_empty_length_stop_for_ui_recovery(self):
+        def fake_request(url, *, api_key, timeout, payload=None):
+            if url.endswith("/models"):
+                return {"data": [{"id": "qwen-local"}]}
+            return {
+                "choices": [{
+                    "message": {"content": None},
+                    "finish_reason": "length",
+                }]
+            }
+
+        with patch("design_ai_service.request_json", side_effect=fake_request):
+            result = handle_design_ai_job({
+                "action": "generate",
+                "provider": "lm_studio",
+                "base_url": "http://127.0.0.1:1234/v1",
+                "model": "qwen-local",
+                "system_prompt": "Return JSON.",
+                "user_prompt": "Plan the film.",
+                "schema": {"type": "object"},
+            })
+        self.assertEqual(result["text"], "")
+        self.assertEqual(result["finish_reason"], "length")
+
     def test_lm_origin_removes_openai_compatible_v1_path(self):
         self.assertEqual(
             lm_origin("http://192.168.0.185:1234/v1"),
@@ -541,6 +1601,43 @@ On-screen text: "EXACT TITLE"'''
                 "http://127.0.0.1:1234/api/v1/models/unload",
                 {"instance_id": "selected/model.gguf:2"},
             ),
+        )
+
+    def test_cleanup_unload_all_releases_every_reported_lm_instance(self):
+        calls = []
+
+        def fake_request(url, timeout, payload=None):
+            calls.append((url, payload))
+            if url.endswith("/api/v1/models"):
+                return {
+                    "models": [
+                        {
+                            "key": "first/model.gguf",
+                            "loaded_instances": [{"id": "first:model:1"}],
+                        },
+                        {
+                            "key": "second/model.gguf",
+                            "loaded_instances": ["second:model:2"],
+                        },
+                        {"key": "idle/model.gguf", "loaded_instances": []},
+                    ]
+                }
+            return {}
+
+        with patch("design_cleanup_service.request", side_effect=fake_request):
+            result = cleanup({
+                "operation": "manual_unload_all",
+                "unload_all_lm_models": True,
+                "provider": "lm_studio",
+                "base_url": "http://127.0.0.1:1234/v1",
+                "comfyui_server": "",
+                "timeout": 10,
+            })
+        self.assertEqual(result["operation"], "manual_unload_all")
+        self.assertEqual(result["lm_unloaded"], ["first:model:1", "second:model:2"])
+        self.assertEqual(
+            [payload for url, payload in calls if url.endswith("/api/v1/models/unload")],
+            [{"instance_id": "first:model:1"}, {"instance_id": "second:model:2"}],
         )
 
     def test_cleanup_does_not_guess_deleted_or_unloaded_model_instance(self):
@@ -621,6 +1718,7 @@ On-screen text: "EXACT TITLE"'''
                 "timeout": 10,
             })
         self.assertTrue(result["comfyui_unloaded"])
+        self.assertTrue(result["comfyui_cache_cleared"])
         mocked.assert_called_once_with(
             "http://127.0.0.1:8188/free",
             10.0,
@@ -635,6 +1733,8 @@ On-screen text: "EXACT TITLE"'''
             lm_studio_base_url="http://127.0.0.1:1234/v1",
             lm_studio_model="local-model",
             timeout=240,
+            dialogue_language="Japanese",
+            subtitles_enabled=True,
         )
         try:
             save_design_settings(target, settings)
@@ -644,6 +1744,8 @@ On-screen text: "EXACT TITLE"'''
             self.assertEqual(restored.provider, "lm_studio")
             self.assertEqual(restored.lm_studio_model, "local-model")
             self.assertEqual(restored.timeout, 240)
+            self.assertEqual(restored.dialogue_language, "Japanese")
+            self.assertTrue(restored.subtitles_enabled)
             self.assertTrue(restored.generate_comfy_images)
             self.assertEqual(restored.image_checkpoint, "z_image_turbo_bf16.safetensors")
         finally:
@@ -711,6 +1813,43 @@ On-screen text: "EXACT TITLE"'''
         )
         self.assertFalse(
             any("RTXVideoSuperResolution" in row.get("class_type", "") for row in workflow.values())
+        )
+
+    def test_z_image_template_receives_request_specific_negative_prompt(self):
+        template = json.loads(
+            (PROJECT_ROOT / "Z-Image_Text2Image_for_webui_t2i_api.json").read_text(
+                encoding="utf-8-sig"
+            )
+        )
+        workflow = image_workflow(
+            {
+                "prompt": "A clean frozen Kuala Lumpur skyline at blue hour.",
+                "subject_keywords": ["Kuala Lumpur skyline"],
+                "negative_prompt": DRONE_STILL_NEGATIVE_PROMPT,
+            },
+            {
+                "checkpoint": "z_image_turbo_bf16.safetensors",
+                "width": 768,
+                "height": 1024,
+                "steps": 8,
+                "cfg": 1.0,
+                "negative_prompt": "blurry",
+            },
+            4321,
+            "h3_design/drone_still",
+            template,
+        )
+        sampler = next(
+            node for node in workflow.values() if node.get("class_type") == "KSampler"
+        )
+        negative_link = sampler["inputs"]["negative"]
+        negative_node = workflow[str(negative_link[0])]
+        self.assertEqual(negative_node["class_type"], "CLIPTextEncode")
+        self.assertIn("blurry", negative_node["inputs"]["text"])
+        self.assertIn("orbit ring", negative_node["inputs"]["text"])
+        self.assertIn("neon loop around buildings", negative_node["inputs"]["text"])
+        self.assertEqual(
+            negative_node["inputs"]["clip"], workflow["6"]["inputs"]["clip"]
         )
 
     def test_z_image_patching_finds_nodes_by_class_type_not_fixed_ids(self):
@@ -818,6 +1957,115 @@ On-screen text: "EXACT TITLE"'''
         self.assertIn("requirement_id", media_request["required"])
         self.assertIn("reuse_policy", media_request["required"])
 
+    def test_analysis_only_control_picture_never_becomes_h3_reference(self):
+        payload = sample_design()
+        payload["media_requests"] = []
+        payload["creative_brief"] = "Follow the route extracted from @P2 without showing it."
+        payload["constraints"] = "Negative prompt: red route line, red waypoint, UI overlay."
+        payload["shots"][0]["additional_direction"] = (
+            "Use <Picture 2> only as control data and follow its extracted waypoints."
+        )
+        payload["existing_media_uses"] = [
+            {
+                "requirement_id": "scene_master", "media_id": "P1",
+                "media_type": "image", "usage": "h3_reference",
+                "reuse_policy": "whole_design", "start_seconds": 0.0,
+                "end_seconds": 12.0, "track": "V1", "subject_keywords": ["city"],
+                "instruction": "Preserve @P1 as the city scene master.",
+            },
+            {
+                "requirement_id": "route_control", "media_id": "P2",
+                "media_type": "image", "usage": "route_control_analysis_only",
+                "reuse_policy": "whole_design", "start_seconds": 0.0,
+                "end_seconds": 12.0, "track": "V1", "subject_keywords": ["route control"],
+                "instruction": "Read @P2 only to extract abstract waypoints.",
+            },
+        ]
+        inventory = [
+            {"media_id": "P1", "media_type": "image", "loaded": True},
+            {"media_id": "P2", "media_type": "image", "loaded": True},
+        ]
+        plan = normalize_design_plan(
+            payload,
+            {"image": 9, "video": 3, "audio": 3},
+            existing_media=inventory,
+        )
+
+        control = next(row for row in plan["existing_media_uses"] if row["media_id"] == "P2")
+        self.assertTrue(is_analysis_only_media_use(control))
+        self.assertEqual(control["usage"], "analysis_only")
+        renderable = " ".join([
+            plan["creative_brief"],
+            plan["constraints"],
+            *[row["additional_direction"] for row in plan["shots"]],
+        ])
+        self.assertNotIn("@P2", renderable)
+        self.assertNotIn("<Picture 2>", renderable)
+        self.assertIn("pre-analysed non-visual control instructions", renderable)
+        self.assertNotIn("red route line", renderable.lower())
+        self.assertNotIn("red waypoint", renderable.lower())
+        self.assertIn("all planning controls remain non-visual", renderable)
+        usage_enum = (
+            DESIGN_JSON_SCHEMA["properties"]["existing_media_uses"]["items"]
+            ["properties"]["usage"]["enum"]
+        )
+        self.assertIn("analysis_only", usage_enum)
+        self.assertIn("route_control_analysis_only", usage_enum)
+
+    def test_analysis_only_control_is_removed_from_generated_reference_prompts(self):
+        payload = sample_design()
+        payload["existing_media_uses"] = [
+            {
+                "requirement_id": "scene_master", "media_id": "P1",
+                "media_type": "image", "usage": "h3_reference",
+                "reuse_policy": "whole_design", "start_seconds": 0.0,
+                "end_seconds": 12.0, "track": "V1", "subject_keywords": ["city"],
+                "instruction": "Preserve @P1 as the city scene master.",
+            },
+            {
+                "requirement_id": "route_control", "media_id": "P2",
+                "media_type": "image", "usage": "analysis_only",
+                "reuse_policy": "whole_design", "start_seconds": 0.0,
+                "end_seconds": 12.0, "track": "V1", "subject_keywords": ["route"],
+                "instruction": "Read @P2 only to extract abstract waypoints.",
+            },
+        ]
+        payload["media_requests"] = [{
+            "requirement_id": "clean_city_midpoint",
+            "media_type": "image",
+            "usage": "h3_reference",
+            "reuse_policy": "time_scoped",
+            "start_seconds": 0.0,
+            "end_seconds": 4.0,
+            "track": "V2",
+            "subject_keywords": ["@P2 red route waypoint marker"],
+            "prompt": (
+                "Photoreal city aerial matching @P1. Follow the red route from @P2. "
+                "No visible route graphics or waypoint markers. No visible people."
+            ),
+            "identity_anchor": True,
+        }]
+        inventory = [
+            {"media_id": "P1", "media_type": "image", "loaded": True},
+            {"media_id": "P2", "media_type": "image", "loaded": True},
+        ]
+
+        plan = normalize_design_plan(
+            payload,
+            {"image": 9, "video": 3, "audio": 3},
+            existing_media=inventory,
+        )
+
+        request = plan["media_requests"][0]
+        renderable = " ".join([request["prompt"], *request["subject_keywords"]]).lower()
+        self.assertNotIn("@p2", renderable)
+        self.assertNotIn("red route", renderable)
+        self.assertNotIn("route graphics", renderable)
+        self.assertNotIn("waypoint marker", renderable)
+        self.assertFalse(request.get("identity_anchor", False))
+        self.assertNotIn("PRIMARY RECURRING CHARACTER IDENTITY ANCHOR", request["prompt"])
+        self.assertIn("ENVIRONMENT-ONLY COUNT LOCK", request["prompt"])
+
     def test_shot_schema_separates_core_state_and_optional_flourish(self):
         shot = DESIGN_JSON_SCHEMA["properties"]["shots"]["items"]
         self.assertIn("continuity_state", shot["required"])
@@ -848,6 +2096,25 @@ On-screen text: "EXACT TITLE"'''
         )
         self.assertIn("Red leaves swirl", budgeted["optional_flourish"])
         self.assertIn("omit", budget["notes"].lower())
+
+    def test_action_budget_preserves_decimal_timing_inside_numbered_beats(self):
+        budgeted = normalize_shot_action_budget({
+            "start_seconds": 0.5,
+            "end_seconds": 2.5,
+            "subject_action": (
+                "[BEAT 01 | 0.5-1.5s] S2 drives a low side kick into range; "
+                "[BEAT 02 | 1.5-2.5s] S1 checks the shin and pivots outside."
+            ),
+            "optional_flourish": "Dust drifts.",
+        })
+        budget = budgeted["action_budget"]
+        self.assertEqual(budget["core_action_count"], 2)
+        self.assertEqual(budget["status"], "within_budget")
+        self.assertIn("0.5-1.5s", budgeted["h3_executable_action"])
+        self.assertIn("1.5-2.5s", budgeted["h3_executable_action"])
+        self.assertIn("low side kick", budgeted["h3_executable_action"])
+        self.assertIn("checks the shin", budgeted["h3_executable_action"])
+        self.assertNotIn("BEAT", budgeted["h3_optional_flourish"])
 
     def test_action_budget_survives_normalizing_an_already_normalized_plan(self):
         payload = sample_design()
@@ -930,11 +2197,101 @@ On-screen text: "EXACT TITLE"'''
         self.assertIn("core action", plan["constraints"])
         self.assertIn("action_budget", plan["shots"][0])
 
-    def test_overlapping_camera_shots_are_rejected(self):
+    def test_overlapping_camera_shots_are_repaired_to_shared_half_second_boundary(self):
         payload = sample_design()
         payload["shots"][1]["start_seconds"] = 3.0
-        with self.assertRaisesRegex(ValueError, "overlaps"):
-            normalize_design_plan(payload, {"image": 9, "video": 3, "audio": 3})
+        plan = normalize_design_plan(payload, {"image": 9, "video": 3, "audio": 3})
+        self.assertEqual(plan["shots"][0]["end_seconds"], 3.5)
+        self.assertEqual(plan["shots"][1]["start_seconds"], 3.5)
+        self.assertTrue(any(
+            "Auto-repaired overlapping camera Shots S1/S2" in warning
+            for warning in plan["design_warnings"]
+        ))
+
+    def test_overlapping_camera_shots_merge_impossible_subsecond_union(self):
+        payload = sample_design()
+        payload["duration_seconds"] = 1.0
+        payload["shots"] = [
+            {**payload["shots"][0], "start_seconds": 0.0, "end_seconds": 0.5},
+            {**payload["shots"][1], "start_seconds": 0.0, "end_seconds": 0.5},
+        ]
+        payload["media_requests"] = []
+        plan = normalize_design_plan(payload, {"image": 9, "video": 3, "audio": 3})
+        self.assertEqual(len(plan["shots"]), 1)
+        self.assertIn(
+            payload["shots"][1]["subject_action"].rstrip("."),
+            plan["shots"][0]["subject_action"],
+        )
+        self.assertTrue(any(
+            "Auto-merged overlapping camera Shots" in warning
+            for warning in plan["design_warnings"]
+        ))
+
+    def test_apply_preflight_repairs_duration_brief_style_duplicate_id_and_t2i(self):
+        payload = sample_design()
+        payload["duration_seconds"] = 12.0
+        payload["creative_brief"] = ""
+        payload["global_visual_style"] = ""
+        payload["media_requests"] = [
+            {
+                **payload["media_requests"][0],
+                "requirement_id": "unsafe_ref",
+                "prompt": "Use <Picture 1> on a blank studio background.",
+            },
+            {
+                **payload["media_requests"][0],
+                "requirement_id": "unsafe_ref",
+                "prompt": "",
+                "start_seconds": 4.0,
+                "end_seconds": 8.0,
+            },
+        ]
+        plan = normalize_design_plan(
+            payload,
+            {"image": 9, "video": 3, "audio": 3},
+            repair_media_plan=True,
+            authored_requirement="Create an exact 15 second video about a cola reveal.",
+        )
+        self.assertEqual(plan["duration_seconds"], 15.0)
+        self.assertTrue(plan["creative_brief"])
+        self.assertTrue(plan["global_visual_style"])
+        self.assertEqual(
+            [item["requirement_id"] for item in plan["media_requests"][:2]],
+            ["unsafe_ref", "unsafe_ref_2"],
+        )
+        self.assertTrue(all(
+            "<Picture" not in item["prompt"] and "blank studio" not in item["prompt"].lower()
+            for item in plan["media_requests"][:2]
+        ))
+        warnings = "\n".join(plan["design_warnings"])
+        self.assertIn("Auto-retimed", warnings)
+        self.assertIn("Inserted a Creative Brief", warnings)
+        self.assertIn("Renamed duplicate media requirement_id", warnings)
+        self.assertIn("Rebuilt unsafe Z-Image request", warnings)
+
+    def test_apply_preflight_aggregates_independent_media_and_structure_blockers(self):
+        payload = sample_design()
+        payload["shots"] = []
+        payload["existing_media_uses"] = [
+            {"media_id": "P4", "media_type": "video"},
+            {"media_id": "V2", "media_type": "video"},
+            {"media_id": "not-a-slot", "media_type": "audio"},
+        ]
+        blockers = collect_design_preflight_blockers(
+            payload,
+            {"image": 9, "video": 3, "audio": 3},
+            existing_media=[],
+            authored_requirement="Use @P7 and @A2 in the video.",
+            selected_media_ids=[],
+        )
+        report = "\n".join(blockers)
+        self.assertGreaterEqual(len(blockers), 5)
+        self.assertIn("at least one executable Shot", report)
+        self.assertIn("P4 is image, not video", report)
+        self.assertIn("V2 is not present", report)
+        self.assertIn("invalid media_id", report)
+        self.assertIn("@P7 has no loaded", report)
+        self.assertIn("@A2 has no loaded", report)
 
     def test_legacy_design_defaults_new_media_planning_fields(self):
         plan = normalize_design_plan(sample_design(), {"image": 9, "video": 3, "audio": 3})
@@ -1138,7 +2495,12 @@ On-screen text: "EXACT TITLE"'''
             ["auto_image_s1", "auto_image_s2"],
         )
         self.assertTrue(all(row["prompt"] for row in images))
-        self.assertTrue(all(row["reuse_policy"] == "time_scoped" for row in images))
+        anchors = [row for row in images if row.get("identity_anchor")]
+        self.assertEqual(len(anchors), 1)
+        self.assertEqual(anchors[0]["reuse_policy"], "whole_design")
+        self.assertTrue(
+            all(row is anchors[0] or row["reuse_policy"] == "time_scoped" for row in images)
+        )
         self.assertTrue(
             all("exactly one frozen instant" in row["prompt"] for row in images)
         )
@@ -1149,6 +2511,57 @@ On-screen text: "EXACT TITLE"'''
             "Decisive in-world moment",
             images[0]["prompt"],
         )
+
+    def test_media_repair_does_not_pad_loaded_virtual_pool_to_five_second_quota(self):
+        payload = sample_design()
+        payload["duration_seconds"] = 120.0
+        payload["shots"] = [
+            {
+                **payload["shots"][0],
+                "start_seconds": float(index * 5),
+                "end_seconds": float((index + 1) * 5),
+            }
+            for index in range(24)
+        ]
+        payload["media_requests"] = []
+        payload["existing_media_uses"] = [
+            {
+                "requirement_id": f"comic_page_{index}",
+                "media_id": f"P{index}",
+                "media_type": "image",
+                "usage": "h3_reference",
+                "reuse_policy": "time_scoped",
+                "start_seconds": float((index - 1) * 10),
+                "end_seconds": float(min(120, index * 10)),
+                "track": "V1",
+                "subject_keywords": ["comic page"],
+                "instruction": f"Use @P{index} only in its assigned story window.",
+            }
+            for index in range(1, 13)
+        ]
+        inventory = [
+            {
+                "media_id": f"P{index}",
+                "media_type": "image",
+                "loaded": True,
+                "filename": f"page_{index}.jpg",
+            }
+            for index in range(1, 13)
+        ]
+
+        plan = normalize_design_plan(
+            payload,
+            {"image": 30, "video": 3, "audio": 3},
+            existing_media=inventory,
+            strict_t2i_prompts=True,
+            repair_media_plan=True,
+        )
+
+        self.assertEqual(plan["media_requests"], [])
+        self.assertFalse(any(
+            "too few visual references" in warning
+            for warning in plan["design_warnings"]
+        ))
 
     def test_media_repair_upgrades_legacy_internal_auto_image_to_one_instant(self):
         payload = sample_design()
@@ -1183,18 +2596,18 @@ On-screen text: "EXACT TITLE"'''
         self.assertIn("duplicate fighters", repaired["prompt"])
         self.assertNotIn("starts far away", repaired["prompt"])
 
-    def test_loaded_media_reserves_slots_for_missing_media_requests(self):
+    def test_loaded_media_does_not_impose_a_project_total_slot_limit(self):
         payload = sample_design()
-        with self.assertRaisesRegex(ValueError, "only 0 free slots"):
-            normalize_design_plan(
-                payload,
-                {"image": 1, "video": 3, "audio": 3},
-                existing_media=[{
-                    "media_id": "P1",
-                    "media_type": "image",
-                    "loaded": True,
-                }],
-            )
+        plan = normalize_design_plan(
+            payload,
+            {"image": 1, "video": 3, "audio": 3},
+            existing_media=[{
+                "media_id": "P1",
+                "media_type": "image",
+                "loaded": True,
+            }],
+        )
+        self.assertEqual(len(plan["media_requests"]), len(payload["media_requests"]))
 
     def test_system_prompt_guards_standalone_t2i_and_blip_replanning(self):
         prompt = build_design_system_prompt({"image_capacity": 9}).lower()
@@ -1264,9 +2677,10 @@ On-screen text: "EXACT TITLE"'''
             payload,
             {"image": 9, "video": 3, "audio": 3},
         )
-        self.assertEqual(
-            plan["media_requests"][0]["prompt"],
-            "Legacy identity reference based on <Picture 1>.",
+        self.assertTrue(
+            plan["media_requests"][0]["prompt"].startswith(
+                "Legacy identity reference based on <Picture 1>."
+            )
         )
 
     def test_t2i_prompt_rejects_self_or_future_image_dependency(self):
@@ -1374,11 +2788,649 @@ On-screen text: "EXACT TITLE"'''
         self.assertEqual(plan["markers"][0]["preset"], "Final Hold")
         self.assertEqual(plan["markers"][0]["time_seconds"], 11.0)
 
-    def test_capacity_is_enforced_before_material_creation(self):
+    def test_virtual_pool_allows_project_total_beyond_physical_capacity(self):
         payload = sample_design()
-        payload["media_requests"].append(dict(payload["media_requests"][0]))
-        with self.assertRaisesRegex(ValueError, "only 1 slots"):
-            normalize_design_plan(payload, {"image": 1, "video": 3, "audio": 3})
+        duplicate = dict(payload["media_requests"][0])
+        duplicate["requirement_id"] = "later_visual"
+        duplicate["start_seconds"] = 8.0
+        duplicate["end_seconds"] = 12.0
+        payload["media_requests"].append(duplicate)
+        plan = normalize_design_plan(payload, {"image": 1, "video": 3, "audio": 3})
+        self.assertEqual(
+            len([row for row in plan["media_requests"] if row["media_type"] == "image"]),
+            2,
+        )
+
+    def test_drone_scene_keyframe_chain_keeps_p1_and_builds_p1_derived_stages(self):
+        payload = sample_design()
+        payload["duration_seconds"] = 12.0
+        payload["shots"][-1]["end_seconds"] = 12.0
+        payload["existing_media_uses"] = [
+            {
+                "requirement_id": "opening_scene", "media_id": "P1",
+                "media_type": "image", "usage": "h3_reference",
+                "reuse_policy": "whole_design", "start_seconds": 0.0,
+                "end_seconds": 12.0, "track": "V1",
+                "subject_keywords": ["opening city"],
+                "instruction": "Use @P1 as the opening city scene.",
+            },
+            {
+                "requirement_id": "route_control", "media_id": "P2",
+                "media_type": "image", "usage": "analysis_only",
+                "reuse_policy": "whole_design", "start_seconds": 0.0,
+                "end_seconds": 12.0, "track": "V2",
+                "subject_keywords": ["route"],
+                "instruction": "Extract route geometry from @P2 only.",
+            },
+            {
+                "requirement_id": "later_scene", "media_id": "P3",
+                "media_type": "image", "usage": "h3_reference",
+                "reuse_policy": "time_scoped", "start_seconds": 6.0,
+                "end_seconds": 12.0, "track": "V1",
+                "subject_keywords": ["later skyline"],
+                "instruction": "Use @P3 as the next city scene.",
+            },
+        ]
+        duplicate_p3 = dict(payload["existing_media_uses"][-1])
+        duplicate_p3["requirement_id"] = "later_scene_duplicate"
+        duplicate_p3["start_seconds"] = 9.0
+        payload["existing_media_uses"].append(duplicate_p3)
+        plan = normalize_design_plan(
+            payload,
+            {"image": 9, "video": 3, "audio": 3},
+            existing_media=[
+                {"media_id": "P1", "media_type": "image", "loaded": True,
+                 "filename": "opening.png", "analysis_summary": "opening river skyline"},
+                {"media_id": "P2", "media_type": "image", "loaded": True,
+                 "filename": "route.png", "analysis_summary": "editor route control"},
+                {"media_id": "P3", "media_type": "image", "loaded": True,
+                 "filename": "later.png", "analysis_summary": "harbour towers at blue hour"},
+            ],
+            special_skill_key="drone-fly-on-city",
+        )
+        uses = {row["media_id"]: row for row in plan["existing_media_uses"]}
+        self.assertEqual((uses["P1"]["start_seconds"], uses["P1"]["end_seconds"]), (0.0, 12.0))
+        self.assertNotIn("P3", uses)
+        self.assertEqual(uses["P2"]["usage"], "analysis_only")
+        self.assertIn("sole visual truth in every Segment", uses["P1"]["instruction"])
+        image_requests = [
+            row for row in plan["media_requests"] if row["media_type"] == "image"
+        ]
+        self.assertEqual(len(image_requests), 3)
+        stages = image_requests
+        self.assertEqual([row.get("preferred_media_id") for row in stages], [
+            "P4", "P5", "P6",
+        ])
+        self.assertTrue(all(row["derived_from_media_id"] == "P1" for row in stages))
+        self.assertTrue(all("opening river skyline" in row["prompt"] for row in stages))
+        self.assertFalse(any(row.get("immutable_scene_plate") for row in image_requests))
+        self.assertEqual(stages[-1]["end_seconds"], 12.0)
+
+    def test_drone_single_p1_creates_five_second_stage_references_without_terminal_plate(self):
+        payload = sample_design()
+        payload["duration_seconds"] = 12.0
+        payload["shots"][-1]["end_seconds"] = 12.0
+        payload["media_requests"] = []
+        payload["existing_media_uses"] = [{
+            "requirement_id": "opening_scene", "media_id": "P1",
+            "media_type": "image", "usage": "h3_reference",
+            "reuse_policy": "whole_design", "start_seconds": 0.0,
+            "end_seconds": 12.0, "track": "V1",
+            "subject_keywords": ["city"], "instruction": "Use @P1.",
+        }]
+        plan = normalize_design_plan(
+            payload,
+            {"image": 9, "video": 3, "audio": 3},
+            existing_media=[{
+                "media_id": "P1", "media_type": "image", "loaded": True,
+                "filename": "p1.png", "analysis_summary": "cool blue city skyline",
+            }],
+            special_skill_key="drone-fly-on-city",
+        )
+        images = [row for row in plan["media_requests"] if row["media_type"] == "image"]
+        self.assertEqual(len(images), 3)
+        self.assertEqual([row.get("preferred_media_id") for row in images], [
+            "P3", "P4", "P5",
+        ])
+        self.assertEqual(
+            [(row["start_seconds"], row["end_seconds"]) for row in images],
+            [(0.0, 5.0), (5.0, 10.0), (10.0, 12.0)],
+        )
+        self.assertEqual(images[0]["scene_anchor_role"], "p3_ground_takeoff_anchor")
+        self.assertEqual(images[-1]["end_seconds"], 12.0)
+        self.assertFalse(any(row.get("immutable_scene_plate") for row in images))
+
+    def test_drone_open_p2_path_uses_p1_orbit_then_route_without_klcc(self):
+        from PIL import Image, ImageDraw
+
+        folder = PROJECT_ROOT / ".director_cache" / "drone_route_extract_test"
+        shutil.rmtree(folder, ignore_errors=True)
+        folder.mkdir(parents=True, exist_ok=True)
+        try:
+            route_path = folder / "p2_route.png"
+            route_image = Image.new("RGB", (320, 180), "white")
+            draw = ImageDraw.Draw(route_image)
+            draw.line([(20, 150), (90, 80), (170, 115), (295, 25)], fill=(245, 20, 30), width=7)
+            draw.ellipse((4, 146, 12, 154), fill=(0, 255, 0))
+            draw.ellipse((303, 21, 311, 29), fill=(0, 0, 255))
+            route_image.save(route_path)
+            route = analyse_red_route(route_path)
+            self.assertTrue(route["detected"])
+            self.assertFalse(route["closed_loop"])
+            self.assertGreaterEqual(len(route["waypoints"]), 3)
+
+            payload = sample_design()
+            payload["duration_seconds"] = 12.0
+            payload["shots"][-1]["end_seconds"] = 12.0
+            payload["shots"][0]["camera_movement"] = (
+                "One smooth clockwise 360-degree orbit around the Petronas Twin Towers"
+            )
+            payload["shots"][0]["subject_action"] = (
+                "The drone lifts off, banks right and flies past the first street."
+            )
+            payload["shots"][0]["optional_flourish"] = (
+                "Rotor vibration shakes the drone during takeoff."
+            )
+            payload["existing_media_uses"] = [
+                {
+                    "requirement_id": "scene", "media_id": "P1", "media_type": "image",
+                    "usage": "h3_reference", "reuse_policy": "whole_design",
+                    "start_seconds": 0.0, "end_seconds": 12.0, "track": "V1",
+                    "subject_keywords": [], "instruction": "Use @P1.",
+                },
+                {
+                    "requirement_id": "path", "media_id": "P2", "media_type": "image",
+                    "usage": "analysis_only", "reuse_policy": "whole_design",
+                    "start_seconds": 0.0, "end_seconds": 12.0, "track": "V2",
+                    "subject_keywords": [], "instruction": "Analyse @P2.",
+                },
+            ]
+            plan = normalize_design_plan(
+                payload, {"image": 9, "video": 3, "audio": 3},
+                existing_media=[
+                    {"media_id": "P1", "media_type": "image", "loaded": True,
+                     "filename": "canal.png", "semantic_enrichment": "Venice canal, stone bridge, amber dusk"},
+                    {"media_id": "P2", "media_type": "image", "loaded": True,
+                     "filename": "route.png", "local_path": str(route_path)},
+                ],
+                special_skill_key="drone-fly-on-city",
+                authored_requirement="沿P2路线飞行，不要自行改路线。",
+            )
+            renderable = json.dumps(plan["shots"], ensure_ascii=False)
+            self.assertNotIn("Petronas", renderable)
+            self.assertIn("GROUND-LAUNCH PHASE", renderable)
+            self.assertIn("one complete, smooth, wide clockwise lap", renderable)
+            self.assertIn("front-to-right-to-rear-to-left-to-front", renderable)
+            self.assertIn("not an in-place camera rotation", renderable)
+            self.assertIn("ROUTE-EXIT PHASE", renderable)
+            self.assertLess(
+                renderable.index("LANDMARK-ORBIT PHASE"),
+                renderable.index("ROUTE-EXIT PHASE"),
+            )
+            self.assertIn("visible forward displacement", renderable)
+            self.assertNotIn("The drone", renderable)
+            self.assertNotIn("rotor vibration", renderable.casefold())
+            self.assertIn(DRONE_CAMERA_ONLY_POV_CONTRACT, renderable)
+            self.assertIn(
+                "The onboard camera viewpoint lifts off",
+                plan["shots"][0]["h3_executable_action"],
+            )
+            stage_prompts = "\n".join(
+                row["prompt"] for row in plan["media_requests"]
+                if row.get("derived_from_media_id") == "P1"
+            )
+            self.assertIn("Venice canal", stage_prompts)
+            self.assertNotIn("Kuala Lumpur", stage_prompts)
+            self.assertNotIn("Petronas", stage_prompts)
+        finally:
+            shutil.rmtree(folder, ignore_errors=True)
+
+    def test_fireworks_plan_has_no_automatic_terminal_composite(self):
+        payload = sample_design()
+        payload["duration_seconds"] = 15.0
+        payload["shots"][-1]["end_seconds"] = 15.0
+        payload["media_requests"] = []
+        payload["existing_media_uses"] = [{
+            "requirement_id": "scene", "media_id": "P1",
+            "media_type": "image", "usage": "h3_reference",
+            "reuse_policy": "whole_design", "start_seconds": 0.0,
+            "end_seconds": 15.0, "track": "V1",
+            "subject_keywords": ["towers"], "instruction": "Use @P1.",
+        }]
+        plan = normalize_design_plan(
+            payload,
+            {"image": 9, "video": 3, "audio": 3},
+            existing_media=[{
+                "media_id": "P1", "media_type": "image", "loaded": True,
+                "filename": "p1.png", "analysis_summary": "Petronas towers night skyline",
+            }],
+            special_skill_key="drone-fly-on-city-fireworks",
+        )
+        images = [row for row in plan["media_requests"] if row["media_type"] == "image"]
+        self.assertEqual(len(images), 3)
+        self.assertEqual(images[-1]["end_seconds"], 15.0)
+        self.assertTrue(all(row["source_plate_mode"] == "p1_img2img" for row in images))
+
+    def test_source_plate_path_is_bound_locally_and_not_sent_to_design_model(self):
+        folder = PROJECT_ROOT / ".director_cache" / "immutable_path_binding_test"
+        shutil.rmtree(folder, ignore_errors=True)
+        folder.mkdir(parents=True, exist_ok=True)
+        try:
+            source = folder / "p1.png"
+            source.write_bytes(b"image")
+            material = {"source_plate_media_id": "P1"}
+            bind_design_source_plate_paths(
+                [material],
+                [{"media_id": "P1", "local_path": str(source)}],
+            )
+            self.assertEqual(Path(material["source_plate_local_path"]), source.resolve())
+            prompt = build_design_system_prompt({
+                "existing_media": [{
+                    "media_id": "P1", "loaded": True, "local_path": str(source),
+                }]
+            })
+            self.assertNotIn(str(source), prompt)
+            self.assertNotIn("local_path", prompt)
+        finally:
+            shutil.rmtree(folder, ignore_errors=True)
+
+    def test_design_model_context_blocks_filename_and_drone_p2_semantic_pollution(self):
+        context = {
+            "bound_h3_skills": {
+                "special": {"key": "drone-fly-on-city-fireworks"},
+            },
+            "existing_media": [
+                {
+                    "media_id": "P1", "media_type": "image", "loaded": True,
+                    "filename": "download_98451.jpg",
+                    "local_path": "C:/private/download_98451.jpg",
+                    "analysis_summary": "Kowloon Walled City poster, dense old buildings",
+                },
+                {
+                    "media_id": "P2", "media_type": "image", "loaded": True,
+                    "filename": "kuala-lumpur-twin-towers-klcc-park-route.png",
+                    "local_path": "C:/private/kuala-lumpur-twin-towers-klcc-park-route.png",
+                    "caption": "Petronas Twin Towers route overlay",
+                    "raw_analysis_summary": "Kuala Lumpur skyline and red line",
+                    "semantic_enrichment": "KLCC landmark route map",
+                    "analysis_summary": "Twin towers route control",
+                    "clip_prompt": "orbit the Petronas towers",
+                },
+            ],
+            "current_prompt_fields": {
+                "brief": "Old Kuala Lumpur Petronas Twin Towers draft",
+                "shots": "Orbit KLCC before following the route",
+            },
+            "existing_shots_and_cues": [
+                {"subject_action": "Pass the Petronas Twin Towers"},
+            ],
+        }
+        sanitized = sanitize_design_model_context(context)
+        serialized = json.dumps(sanitized, ensure_ascii=False).casefold()
+        self.assertIn("kowloon walled city", serialized)
+        for polluted in (
+            "download_98451", "kuala-lumpur", "twin towers", "klcc",
+            "petronas", "c:/private", "filename", "local_path",
+        ):
+            self.assertNotIn(polluted, serialized)
+        route = sanitized["existing_media"][1]
+        self.assertEqual(route["planning_role"], "analysis_only")
+        self.assertEqual(route["analysis_status"], "isolated_control")
+
+        prompt = build_design_system_prompt(context).casefold()
+        self.assertIn("kowloon walled city", prompt)
+        self.assertNotIn("petronas", prompt)
+        self.assertNotIn("kuala-lumpur", prompt)
+        self.assertNotIn("klcc", prompt)
+        self.assertNotIn("old kuala lumpur", prompt)
+
+    def test_immutable_plate_renderer_copies_p1_and_composites_only_effects(self):
+        from PIL import Image, ImageChops
+
+        folder = PROJECT_ROOT / ".director_cache" / "immutable_plate_renderer_test"
+        shutil.rmtree(folder, ignore_errors=True)
+        folder.mkdir(parents=True, exist_ok=True)
+        try:
+            source = folder / "p1.png"
+            original = Image.new("RGB", (320, 180), (12, 28, 55))
+            for x in range(135, 185):
+                for y in range(28, 170):
+                    original.putpixel((x, y), (205, 212, 220))
+            original.save(source)
+
+            copied = folder / "copy.png"
+            copy_meta = render_immutable_source_plate({
+                "source_plate_local_path": str(source),
+                "source_plate_effect_profile": "preserve_existing",
+            }, copied, 42)
+            self.assertIsNone(ImageChops.difference(original, Image.open(copied).convert("RGB")).getbbox())
+            self.assertEqual(copy_meta["mode"], "immutable_copy")
+
+            fireworks = folder / "fireworks.png"
+            effect_meta = render_immutable_source_plate({
+                "source_plate_local_path": str(source),
+                "source_plate_effect_profile": "fireworks",
+            }, fireworks, 42)
+            rendered = Image.open(fireworks).convert("RGB")
+            self.assertEqual(rendered.size, original.size)
+            self.assertIsNotNone(ImageChops.difference(original, rendered).getbbox())
+            self.assertEqual(effect_meta["mode"], "immutable_effect_composite")
+            self.assertEqual(effect_meta["geometry_source"], "unchanged P1 pixels")
+        finally:
+            shutil.rmtree(folder, ignore_errors=True)
+
+    def test_drone_still_reference_removes_motion_trajectory_priming(self):
+        request = sanitize_drone_still_image_request({
+            "requirement_id": "city_orbit_reference",
+            "media_type": "image",
+            "subject_keywords": [
+                "Kuala Lumpur skyline",
+                "360-degree orbit",
+                "visible orbit ring",
+            ],
+            "prompt": (
+                "Photoreal Kuala Lumpur skyline at blue hour. "
+                "The camera completes one seamless full 360-degree orbital yaw around the towers. "
+                "Stable exposure and detailed architecture."
+            ),
+        })
+        self.assertIn("Photoreal Kuala Lumpur skyline", request["prompt"])
+        self.assertIn("Stable exposure and detailed architecture", request["prompt"])
+        self.assertNotIn("orbital yaw", request["prompt"])
+        self.assertIn(DRONE_STILL_CLEAN_FRAME_CONTRACT, request["prompt"])
+        self.assertEqual(request["subject_keywords"], ["Kuala Lumpur skyline"])
+        self.assertEqual(request["negative_prompt"], DRONE_STILL_NEGATIVE_PROMPT)
+
+        payload = sample_design()
+        payload["shots"][0]["camera_movement"] = (
+            "One continuous 360-degree orbital yaw around the central tower"
+        )
+        payload["media_requests"][0].update({
+            "subject_keywords": ["city skyline", "360-degree orbit"],
+            "prompt": (
+                "Photoreal city skyline at blue hour. The camera follows a 360-degree orbit "
+                "around the central tower. Stable architecture and clean natural lights."
+            ),
+        })
+        plan = normalize_design_plan(
+            payload,
+            {"image": 9, "video": 3, "audio": 3},
+            special_skill_key="drone-fly-on-city",
+        )
+        self.assertIn("360-degree orbital yaw", plan["shots"][0]["camera_movement"])
+        still_request = next(
+            row for row in plan["media_requests"] if row["media_type"] == "image"
+        )
+        self.assertNotIn("camera follows a 360-degree orbit", still_request["prompt"])
+        self.assertIn(DRONE_STILL_CLEAN_FRAME_CONTRACT, still_request["prompt"])
+
+    def test_drone_fireworks_still_keeps_bursts_but_removes_camera_orbit(self):
+        request = sanitize_drone_still_image_request(
+            {
+                "media_type": "image",
+                "subject_keywords": [
+                    "gold chrysanthemum fireworks",
+                    "clockwise orbital yaw",
+                    "wet street reflections",
+                ],
+                "prompt": (
+                    "Photoreal Petronas Twin Towers at night. "
+                    "The camera performs a wide clockwise orbital yaw around the towers. "
+                    "Gold chrysanthemum fireworks bloom behind the spires with natural smoke "
+                    "and wet-street reflections."
+                ),
+            },
+            fireworks=True,
+        )
+        self.assertNotIn("orbital yaw", request["prompt"])
+        self.assertIn("Gold chrysanthemum fireworks", request["prompt"])
+        self.assertIn(DRONE_STILL_CLEAN_FRAME_CONTRACT, request["prompt"])
+        self.assertIn(DRONE_FIREWORKS_STILL_CONTRACT, request["prompt"])
+        self.assertNotIn("clockwise orbital yaw", request["subject_keywords"])
+        self.assertIn("gold chrysanthemum fireworks", request["subject_keywords"])
+        self.assertIn(DRONE_FIREWORKS_STILL_NEGATIVE_PROMPT, request["negative_prompt"])
+
+        payload = sample_design()
+        payload["shots"][0]["camera_movement"] = (
+            "One smooth clockwise 360-degree orbit around the Petronas Twin Towers"
+        )
+        payload["media_requests"][0].update({
+            "subject_keywords": ["night skyline", "360-degree orbit", "gold fireworks"],
+            "prompt": (
+                "Night skyline with gold fireworks above the towers. "
+                "The camera completes a 360-degree orbit around the towers."
+            ),
+        })
+        plan = normalize_design_plan(
+            payload,
+            {"image": 9, "video": 3, "audio": 3},
+            special_skill_key="drone-fly-on-city-fireworks",
+        )
+        self.assertIn("360-degree orbit", plan["shots"][0]["camera_movement"])
+        still = next(row for row in plan["media_requests"] if row["media_type"] == "image")
+        self.assertNotIn("camera completes a 360-degree orbit", still["prompt"])
+        self.assertIn("gold fireworks", still["prompt"].lower())
+        self.assertIn(DRONE_FIREWORKS_STILL_CONTRACT, still["prompt"])
+
+    def test_later_loaded_pictures_never_replace_drone_p1_scene_master(self):
+        payload = sample_design()
+        payload["duration_seconds"] = 12.0
+        payload["shots"][-1]["end_seconds"] = 12.0
+        payload["media_requests"] = []
+        payload["existing_media_uses"] = [
+            {
+                "requirement_id": f"scene_{media_id.lower()}",
+                "media_id": media_id, "media_type": "image",
+                "usage": "h3_reference", "reuse_policy": "time_scoped",
+                "start_seconds": 0.0, "end_seconds": 12.0, "track": "V1",
+                "subject_keywords": ["city"], "instruction": f"Use @{media_id}.",
+            }
+            for media_id in ("P1", "P3", "P4", "P5")
+        ]
+        inventory = [
+            {"media_id": media_id, "media_type": "image", "loaded": True,
+             "filename": f"{media_id.lower()}.png", "analysis_summary": "user city scene"}
+            for media_id in ("P1", "P2", "P3", "P5")
+        ]
+        inventory.append({
+            "media_id": "P4", "media_type": "image", "loaded": True,
+            "filename": "generated_references/terminal.png",
+            "analysis_summary": "AI DESIGN GENERATED REFERENCE auto terminal keyframe",
+        })
+        plan = normalize_design_plan(
+            payload, {"image": 9, "video": 3, "audio": 3},
+            existing_media=inventory, special_skill_key="drone-fly-on-city",
+        )
+        self.assertEqual(
+            {row["media_id"] for row in plan["existing_media_uses"]}, {"P1", "P2"}
+        )
+        images = [row for row in plan["media_requests"] if row["media_type"] == "image"]
+        self.assertTrue(all(row.get("derived_from_media_id") == "P1" for row in images))
+        self.assertEqual(images[-1]["preferred_media_id"], "P8")
+
+        # A manually replaced later Picture also cannot become a second scene
+        # master for these two route-controlled Skills.
+        replaced_inventory = [dict(row) for row in inventory]
+        replaced_p4 = next(row for row in replaced_inventory if row["media_id"] == "P4")
+        replaced_p4.update(filename="user_replacement.png", analysis_summary="new riverside scene")
+        replaced = normalize_design_plan(
+            payload, {"image": 9, "video": 3, "audio": 3},
+            existing_media=replaced_inventory, special_skill_key="drone-fly-on-city",
+        )
+        self.assertEqual(
+            {row["media_id"] for row in replaced["existing_media_uses"]}, {"P1", "P2"}
+        )
+
+    def test_selected_later_drone_picture_does_not_override_p1(self):
+        payload = sample_design()
+        payload["duration_seconds"] = 12.0
+        payload["shots"][-1]["end_seconds"] = 12.0
+        payload["media_requests"] = []
+        payload["existing_media_uses"] = [{
+            "requirement_id": "opening_scene", "media_id": "P1",
+            "media_type": "image", "usage": "h3_reference",
+            "reuse_policy": "whole_design", "start_seconds": 0.0,
+            "end_seconds": 12.0, "track": "V1", "subject_keywords": ["city"],
+            "instruction": "Use @P1 as the opening.",
+        }]
+        plan = normalize_design_plan(
+            payload, {"image": 9, "video": 3, "audio": 3},
+            existing_media=[
+                {"media_id": "P1", "media_type": "image", "loaded": True,
+                 "filename": "opening.png"},
+                {"media_id": "P2", "media_type": "image", "loaded": True,
+                 "filename": "route.png"},
+                {"media_id": "P3", "media_type": "image", "loaded": True,
+                 "filename": "new_scene.png", "analysis_summary": "new coastal skyline"},
+            ],
+            special_skill_key="drone-fly-on-city",
+            selected_media_ids=["P1", "P2", "P3"],
+        )
+        uses = {row["media_id"]: row for row in plan["existing_media_uses"]}
+        self.assertEqual(set(uses), {"P1", "P2"})
+        self.assertEqual(uses["P2"]["usage"], "analysis_only")
+        self.assertIn("sole visual truth", uses["P1"]["instruction"])
+        images = [row for row in plan["media_requests"] if row["media_type"] == "image"]
+        self.assertEqual(images[-1]["preferred_media_id"], "P6")
+
+    def test_dark_rescue_first_person_is_enforced_in_every_renderable_field(self):
+        payload = sample_design()
+        payload["shots"][0].update({
+            "framing": "Third-person hero shot",
+            "camera_angle": "External camera above the rescuer",
+            "camera_movement": "The camera follows S2 through the doorway",
+            "subject_action": "S2 walks to the trapped woman and opens the door.",
+            "additional_direction": "Use an over-the-shoulder shot.",
+        })
+        payload["media_requests"][0]["prompt"] = (
+            "An external camera shows S2 and the damaged doorway."
+        )
+        plan = normalize_design_plan(
+            payload,
+            {"image": 9, "video": 3, "audio": 3},
+            special_skill_key="dark-rescue-h3",
+        )
+        for shot in plan["shots"]:
+            self.assertTrue(
+                shot["framing"].startswith("Strict first-person POV from S2's eye line")
+            )
+            self.assertTrue(shot["subject_action"].startswith("S2's first-person POV"))
+            self.assertTrue(shot["h3_executable_action"].startswith("S2's first-person POV"))
+            self.assertIn("POV proof in this Shot", shot["additional_direction"])
+            self.assertIn("body-motivated", shot["additional_direction"].lower())
+            self.assertIn("first-person eye height", shot["continuity_state"])
+            self.assertTrue(
+                shot["action_budget"]["original_subject_action"].startswith(
+                    "S2's first-person POV"
+                )
+            )
+        image_request = next(
+            row for row in plan["media_requests"] if row["media_type"] == "image"
+        )
+        self.assertTrue(
+            image_request["prompt"].startswith(
+                "A strict first-person POV reference image from S2's physical eye line"
+            )
+        )
+        self.assertIn("never leaves S2's point of view", plan["constraints"])
+        self.assertIn(
+            "dark-rescue-h3 enforced physical first-person POV evidence",
+            " ".join(plan["design_warnings"]),
+        )
+        reapplied = normalize_design_plan(
+            plan,
+            {"image": 9, "video": 3, "audio": 3},
+            special_skill_key="dark-rescue-h3",
+        )
+        for first, second in zip(plan["shots"], reapplied["shots"]):
+            self.assertEqual(second["framing"], first["framing"])
+            self.assertEqual(second["subject_action"], first["subject_action"])
+            self.assertEqual(second["additional_direction"], first["additional_direction"])
+            self.assertEqual(second["continuity_state"], first["continuity_state"])
+
+    def test_dark_rescue_no_pov_does_not_receive_first_person_rewrite(self):
+        payload = sample_design()
+        payload["shots"][0]["framing"] = "External medium-wide rescue two-shot"
+        plan = normalize_design_plan(
+            payload,
+            {"image": 9, "video": 3, "audio": 3},
+            special_skill_key="dark-rescue-h3-no-pov",
+        )
+        self.assertEqual(
+            plan["shots"][0]["framing"], "External medium-wide rescue two-shot"
+        )
+        self.assertNotIn("camera is physically inside S2", plan["constraints"])
+
+    def test_hong_kong_comic_move_titles_are_editable_timeline_layers(self):
+        plan = {
+            "duration_seconds": 6.0,
+            "constraints": "",
+            "shots": [
+                {
+                    "start_seconds": 0.0,
+                    "end_seconds": 3.0,
+                    "subject_action": "Long Jie releases a solar palm into the counter impact.",
+                },
+                {
+                    "start_seconds": 3.0,
+                    "end_seconds": 6.0,
+                    "subject_action": "Shen Wu Bu Si completes a heavy hook punch.",
+                },
+            ],
+            "text_layers": [],
+        }
+        enforce_hong_kong_comic_technique_text_layers(
+            plan,
+            "hong-kong-comic-fighter",
+            "每一个招式都加入可编辑的招式文字。",
+        )
+        titles = [
+            row for row in plan["text_layers"]
+            if row["role"] == "on_screen_text"
+        ]
+        self.assertEqual([row["content"] for row in titles], ["烈阳天劫", "极霸之拳"])
+        self.assertTrue(all(row["track"] == "V4" for row in titles))
+        self.assertTrue(all(row["explicit_user_requested"] for row in titles))
+        self.assertIn("COMIC TECHNIQUE TITLE CONTRACT", plan["constraints"])
+
+    def test_hong_kong_comic_opening_is_fast_superhero_pressure_not_walking(self):
+        plan = {
+            "constraints": "",
+            "shots": [{
+                "start_seconds": 0.0,
+                "end_seconds": 2.0,
+                "subject_action": "S1 punches and S2 parries.",
+                "camera_movement": "Static",
+                "movement_speed": "Slow",
+                "additional_direction": "",
+            }],
+        }
+        enforce_hong_kong_comic_superhero_opening(
+            plan, "hong-kong-comic-fighter"
+        )
+        first = plan["shots"][0]
+        self.assertIn("0.00-1.00s SUPERHERO PRESSURE ARRIVAL", first["subject_action"])
+        self.assertIn("low-angle close rising FPV arc", first["camera_movement"])
+        self.assertEqual(first["movement_speed"], "Explosive real-time")
+        self.assertIn("not walking", first["additional_direction"])
+
+    def test_dragon_realm_revision_preserves_authored_narration_and_dialogue(self):
+        requirement = (
+            PROJECT_ROOT
+            / "example"
+            / "Dragon_Realm_vs_Immortal_Martial"
+            / "DESIGN_REQUIREMENT_WORLD_POWER_REVISION.txt"
+        ).read_text(encoding="utf-8")
+        layers = extract_explicit_timed_text_layers(requirement, 12.0)
+        self.assertEqual(
+            [(row["role"], row["content"]) for row in layers],
+            [
+                ("voice_over", "龙界复出后第一时间找到神武不死"),
+                ("dialogue", "找不到逃避的理由"),
+            ],
+        )
+        self.assertEqual(layers[1]["speaker"], "S1")
+        self.assertTrue(all(row["explicit_user_requested"] for row in layers))
 
     def test_materialize_creates_timed_keyword_placeholders_and_sidecars(self):
         plan = normalize_design_plan(sample_design(), {"image": 9, "video": 3, "audio": 3})
@@ -1440,6 +3492,144 @@ On-screen text: "EXACT TITLE"'''
             self.assertEqual(len(saved["media_requests"]), 1)
         finally:
             shutil.rmtree(root, ignore_errors=True)
+
+
+    def test_beat_synced_entrance_repairs_p3_audio_slow_motion_and_reference_ranges(self):
+        payload = sample_design()
+        payload["duration_seconds"] = 18.0
+        payload["shots"] = [
+            {**payload["shots"][0], "start_seconds": 0.0, "end_seconds": 8.0,
+             "additional_direction": "@P3 defines the corridor. No extra may look directly into camera for longer than 0.3 seconds."},
+            {**payload["shots"][1], "start_seconds": 8.0, "end_seconds": 11.0},
+            {**payload["shots"][1], "start_seconds": 11.0, "end_seconds": 13.0},
+            {**payload["shots"][1], "start_seconds": 13.0, "end_seconds": 18.0,
+             "movement_speed": "Slow camera truck"},
+        ]
+        payload["existing_media_uses"] = [
+            {
+                "requirement_id": f"legacy_{media_id.lower()}", "media_id": media_id,
+                "media_type": "audio" if media_id == "A1" else "image",
+                "usage": "h3_reference", "reuse_policy": "whole_design",
+                "start_seconds": 0.0, "end_seconds": 18.0,
+                "track": "A1" if media_id == "A1" else "V1",
+                "subject_keywords": [],
+                "instruction": "P3 is the corridor" if media_id == "P3" else "legacy",
+            }
+            for media_id in ("P1", "P2", "P3", "P4", "A1")
+        ]
+        payload["media_requests"] = [{
+            "requirement_id": "unwanted_corridor",
+            "media_type": "image", "usage": "h3_reference",
+            "reuse_policy": "time_scoped", "start_seconds": 0.0,
+            "end_seconds": 8.0, "track": "V5",
+            "subject_keywords": ["corridor"],
+            "prompt": "Photoreal corridor, no visible people.",
+        }]
+        inventory = [
+            {
+                "media_id": media_id,
+                "media_type": "audio" if media_id == "A1" else "image",
+                "loaded": True,
+            }
+            for media_id in ("P1", "P2", "P3", "P4", "A1")
+        ]
+
+        plan = normalize_design_plan(
+            payload,
+            {"image": 9, "video": 3, "audio": 3},
+            existing_media=inventory,
+            special_skill_key=BEAT_SYNCED_ENTRANCE_SPECIAL_SKILL,
+        )
+
+        self.assertEqual(len(plan["shots"]), 5)
+        self.assertEqual(
+            [(row["start_seconds"], row["end_seconds"]) for row in plan["shots"]],
+            [(0.0, 6.0), (6.0, 9.0), (9.0, 11.5), (11.5, 13.5), (13.5, 18.0)],
+        )
+        self.assertIn("physically rounds", plan["shots"][1]["subject_action"])
+        self.assertIn("notices and passes @P2", plan["shots"][1]["subject_action"])
+        self.assertIn("clearing real corner geometry", plan["shots"][1]["additional_direction"])
+        self.assertIn("physically rounds", plan["shots"][2]["subject_action"])
+        self.assertIn("camera settles on @P3", plan["shots"][2]["subject_action"])
+        self.assertIn("never an environment", plan["shots"][2]["additional_direction"])
+        self.assertIn("1.0-1.5 seconds", plan["shots"][0]["additional_direction"])
+        self.assertIn("opens or closes a locker", plan["shots"][0]["additional_direction"])
+        self.assertIn("checking a watch", plan["shots"][0]["additional_direction"])
+        self.assertIn("no running", plan["shots"][0]["additional_direction"].lower())
+        self.assertIn("45-60%", plan["shots"][-1]["movement_speed"])
+        self.assertIn("@P5 as the sole environment", plan["shots"][-1]["environment_response"])
+        self.assertIn("shared contact shadows", plan["shots"][-1]["environment_response"])
+        self.assertIn("Very slow horizontal slide", plan["shots"][-1]["camera_movement"])
+        self.assertIn("preserving its camera height, horizon and viewing direction", plan["shots"][-1]["camera_movement"])
+        self.assertNotIn("fpv", plan["shots"][-1]["camera_movement"].lower())
+        self.assertNotIn("orbit", plan["shots"][-1]["camera_movement"].lower())
+        self.assertEqual(plan["shots"][-1]["continuity_mode"], "Motion Reference")
+        self.assertIn("CAMPUS COMPOSITE", plan["shots"][-1]["location_transition"])
+        self.assertIn("incoming motion-reference frames control only", plan["shots"][-1]["additional_direction"])
+        self.assertIn("subject identity", plan["shots"][-1]["additional_direction"])
+        self.assertIn("INDOOR", plan["shots"][3]["location_transition"])
+        self.assertIn("OUTDOOR", plan["shots"][3]["location_transition"])
+        self.assertIn("face and both eyes clear", plan["shots"][3]["subject_action"])
+        self.assertIn("unmistakable surprise", plan["shots"][3]["subject_action"])
+        self.assertIn("full-frame wipe", plan["shots"][3]["subject_action"])
+        self.assertEqual(plan["shots"][3]["continuity_mode"], "Hard Cut")
+        transition_presets = [row["preset"] for row in plan["transitions"]]
+        self.assertEqual(
+            transition_presets,
+            [
+                "Corridor Corner Reveal",
+                "Corridor Corner Reveal",
+                "Eyeline Continuity Cut",
+                "Architectural Occlusion Scene Cut",
+            ],
+        )
+        self.assertEqual(len(plan["media_requests"]), 1)
+        p5_request = plan["media_requests"][0]
+        self.assertEqual(p5_request["requirement_id"], "beat_p5_environment_population")
+        self.assertEqual(p5_request["preferred_media_id"], "P5")
+        self.assertEqual(
+            (p5_request["start_seconds"], p5_request["end_seconds"]),
+            (11.5, 18.0),
+        )
+        self.assertIn("students with backpacks", p5_request["prompt"])
+        self.assertIn("waiting for a bus", p5_request["prompt"])
+        self.assertIn("pedestrians naturally crossing", p5_request["prompt"])
+        self.assertNotIn("@P", p5_request["prompt"])
+        p3 = [row for row in plan["existing_media_uses"] if row["media_id"] == "P3"]
+        self.assertEqual([(row["start_seconds"], row["end_seconds"]) for row in p3], [(9.0, 11.5)])
+        p1 = [row for row in plan["existing_media_uses"] if row["media_id"] == "P1"]
+        self.assertEqual(
+            [(row["start_seconds"], row["end_seconds"]) for row in p1],
+            [(0.0, 9.0), (11.5, 13.5)],
+        )
+        p2 = [row for row in plan["existing_media_uses"] if row["media_id"] == "P2"]
+        self.assertEqual([(row["start_seconds"], row["end_seconds"]) for row in p2], [(6.0, 11.5)])
+        self.assertTrue(all(row["reuse_policy"] == "time_scoped" for row in p1 + p3))
+        a1 = next(row for row in plan["existing_media_uses"] if row["media_id"] == "A1")
+        self.assertIn("Segment's Timeline start", a1["instruction"])
+        p4 = next(row for row in plan["existing_media_uses"] if row["media_id"] == "P4")
+        self.assertIn("P4 SUBJECT COMPOSITE", p4["instruction"])
+        self.assertIn("do not use @P4 as a background plate", p4["instruction"])
+        self.assertIn("P5 populated school exterior", p4["instruction"])
+
+        loaded_p5_plan = normalize_design_plan(
+            payload,
+            {"image": 9, "video": 3, "audio": 3},
+            existing_media=inventory + [{
+                "media_id": "P5", "media_type": "image", "loaded": True,
+            }],
+            special_skill_key=BEAT_SYNCED_ENTRANCE_SPECIAL_SKILL,
+        )
+        self.assertEqual(loaded_p5_plan["media_requests"], [])
+        loaded_p5 = next(
+            row for row in loaded_p5_plan["existing_media_uses"]
+            if row["media_id"] == "P5"
+        )
+        self.assertEqual(
+            (loaded_p5["start_seconds"], loaded_p5["end_seconds"]),
+            (11.5, 18.0),
+        )
+        self.assertIn("ENVIRONMENT POPULATION KEYFRAME", loaded_p5["instruction"])
 
 
 if __name__ == "__main__":

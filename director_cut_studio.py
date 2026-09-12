@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import faulthandler
+import gc
 from copy import deepcopy
 from dataclasses import asdict, dataclass, field
 import hashlib
@@ -19,12 +20,16 @@ import time
 import traceback
 from urllib.parse import urlparse
 
-from PySide6.QtCore import QEvent, QMimeData, QObject, QPoint, QRectF, QSize, Qt, QTimer, QUrl, Signal
-from PySide6.QtGui import QBrush, QColor, QDrag, QIcon, QImage, QKeySequence, QPainter, QPen, QPixmap, QPolygon, QUndoCommand, QUndoStack
+from PySide6.QtCore import (
+    QEvent, QEasingCurve, QMimeData, QObject, QPoint, QRectF, QSize, Qt,
+    QTimer, QUrl, QVariantAnimation, Signal,
+)
+from PySide6.QtGui import QAction, QBrush, QColor, QDrag, QIcon, QImage, QKeySequence, QPainter, QPen, QPixmap, QPixmapCache, QPolygon, QUndoCommand, QUndoStack
 from PySide6.QtMultimedia import QAudioOutput, QMediaPlayer, QVideoSink
 from PySide6.QtMultimediaWidgets import QVideoWidget
 from PySide6.QtWidgets import (
     QApplication,
+    QAbstractItemView,
     QButtonGroup,
     QCheckBox,
     QColorDialog,
@@ -43,12 +48,14 @@ from PySide6.QtWidgets import (
     QGraphicsView,
     QGridLayout,
     QGroupBox,
+    QHeaderView,
     QHBoxLayout,
     QInputDialog,
     QLabel,
     QLineEdit,
     QListWidget,
     QListWidgetItem,
+    QListView,
     QMainWindow,
     QMessageBox,
     QMenu,
@@ -60,9 +67,15 @@ from PySide6.QtWidgets import (
     QSpinBox,
     QSplitter,
     QStackedWidget,
+    QStyle,
+    QStyledItemDelegate,
+    QStyleOptionViewItem,
     QTabWidget,
+    QTableWidget,
+    QTableWidgetItem,
     QToolButton,
     QToolBar,
+    QToolTip,
     QVBoxLayout,
     QWidget,
     QWidgetAction,
@@ -77,6 +90,36 @@ from media_engine import (
     media_type_for_path,
     probe_media,
 )
+from audio_engine import evaluate_native_audio_qc
+from native_audio_engine import (
+    NativeAudioProfile,
+    audio_reference_intent_text,
+    build_native_audio_profile,
+    environment_continuity_text,
+    native_audio_direction_text,
+)
+from combat_environment_engine import (
+    CAUSALITY_CONTRACT,
+    ENVIRONMENT_PHYSICS_SCHEMA_VERSION,
+    HONG_KONG_COMIC_FIGHTER_SKILL,
+    REFERENCE_WORLD_CAUSALITY_CONTRACT,
+    STREET_FIGHTER_SKILL as ENVIRONMENT_COMBAT_SPECIAL_SKILL,
+    environmental_combat_prompt_clause,
+    reconcile_environmental_combat_rows,
+)
+from combat_action_engine import (
+    ACTION_CAUSALITY_CONTRACT,
+    ACTION_CARRIER_CONTRACT,
+    COMBAT_ACTION_SCHEMA_VERSION,
+    DYNAMIC_CAMERA_CONTRACT,
+    FACT_LEDGER_CONTRACT,
+    FIVE_DUTY_CONTRACT,
+    COMBAT_ACTION_SKILLS,
+    combat_action_prompt_clause,
+    compact_street_fighter_prompt_field,
+    reconcile_combat_action_rows,
+    reconcile_final_combat_markers,
+)
 from media_semantic_enrichment import (
     MEDIA_SEMANTIC_ENRICHMENT_SCHEMA,
     build_enrichment_job_context,
@@ -86,22 +129,56 @@ from media_semantic_enrichment import (
     render_semantic_enrichment,
 )
 from design_engine import (
+    BEAT_SYNCED_ENTRANCE_SPECIAL_SKILL,
     DESIGN_JSON_SCHEMA,
+    H3_STABLE_DIALOGUE_LANGUAGES,
+    DesignDialogueLanguageContractError,
     DesignDurationContractError,
+    DesignJSONDecodeError,
+    DesignSpeechLayerContractError,
     automatic_background_music,
     automatic_background_soundscape,
     authored_text_layers_with_plan_assignments,
+    bind_design_source_plate_paths,
     build_design_system_prompt,
+    collect_design_preflight_blockers,
+    enforce_design_dialogue_language,
+    enforce_design_music_mode,
+    enforce_design_subtitle_policy,
     extract_explicit_timed_text_layers,
+    infer_design_dialogue_language,
     infer_explicit_design_duration,
+    is_drone_special_skill,
+    is_analysis_only_media_use,
     materialize_design_media,
     normalize_shot_action_budget,
     normalize_design_plan,
+    normalize_design_music_mode,
     protect_explicit_timed_text_layers,
+    reconcile_requested_speech_layer_contract,
+    render_special_design_requirement_template,
+    requested_speech_roles,
+    sanitize_drone_still_image_request,
+    SPEECH_TIMELINE_MARKER_PREFIX,
+    SPEECH_TIMELINE_REMINDER_PREFIX,
+    STREET_FIGHTER_FPV_COMBAT_CONTRACT,
+    STREET_FIGHTER_MARKET_CONTRACT,
+    STREET_FIGHTER_P1_P2_PIXEL_LOCK,
+    speech_timing_budget,
     spatial_acoustics_profile,
+    street_fighter_character_bindings,
+    validate_drone_image_request_budget,
     validate_explicit_timed_text_contract,
+    validate_requested_speech_layer_contract,
 )
 from design_settings import DesignAISettings, load_design_settings, save_design_settings
+from smart_cut_engine import (
+    SMART_CUT_MODES,
+    normalize_lm_hints,
+    plan_smart_cut,
+    smart_cut_lm_prompts,
+    smart_cut_lm_schema,
+)
 from prompt_engine import PromptSpec, split_shots
 from prompt_presets import (
     CONSTRAINT_PRESETS,
@@ -121,9 +198,51 @@ from prompt_preset_store import (
     load_prompt_presets,
     save_prompt_preset,
 )
+from project_workspace import (
+    QUALITY_PROFILES,
+    WORKSPACE_LAYOUT_VERSION,
+    allocate_workspace_root,
+    ensure_workspace_layout,
+    estimate_resources,
+    link_or_copy,
+    locate_workspace_for_project,
+    migrate_legacy_shot_takes,
+    next_design_revision,
+    normalize_segment_take_states,
+    normalize_shot_take_states,
+    design_requirement_project_name,
+    picture_overview_project_name,
+    project_display_name_for_plan,
+    project_name_is_provisional,
+    refine_provisional_workspace_root,
+    rebase_workspace_take_states,
+    record_segment_take,
+    clear_shot_segment_refs_for_window,
+    slugify_project_name,
+    workspace_folder_name,
+    update_resource_calibration,
+    utc_now_text,
+    write_shot_manifests,
+    workspace_project_path,
+)
+from project_storage import (
+    archive_workspace,
+    build_storage_report,
+    safe_cleanup_plan,
+    safe_cleanup_workspace,
+)
+from project_integrity import repair_project_payload, repair_speech_timing_payload
 from runtime_paths import PROJECT_ROOT, load_runtime_paths
 from settings_engine import RenderSettings, load_settings, save_settings
 from version_info import APP_VERSION, PROJECT_FORMAT_VERSION
+from qwen3_tts_runtime import (
+    QWEN3_TTS_MODEL_DIR,
+    QWEN3_TTS_RUNTIME_DIR,
+    qwen3_tts_missing_message,
+    qwen3_tts_model_missing,
+    qwen3_tts_runtime_missing,
+    qwen3_tts_support_missing,
+)
 from voxcpm_runtime import (
     VOXCPM_MODEL_DIR,
     voxcpm_missing_message,
@@ -144,10 +263,15 @@ from special_skill_store import (
 )
 from segment_engine import (
     MAX_NATIVE_SECONDS,
+    align_segments_to_dialogue_turns,
     content_fingerprint,
     derive_named_segment_seed,
+    normalize_speech_overlap_policy,
     plan_render_segments,
+    plan_speech_track_lanes,
     plan_shot_render_segments,
+    protect_segment_boundaries_from_atomic_shots,
+    protect_segment_boundaries_from_speech,
     ranges_intersect,
     scope_timed_prompt_text,
 )
@@ -176,6 +300,23 @@ PROMPT_PRESET_ENV_ROOT = PROJECT_ROOT / "preset_env"
 MIME_SLOT = "application/x-h3-media-slot"
 MEDIA_POOL_COLUMNS = 3
 MEDIA_CARD_MIN_WIDTH = 80
+
+
+def _canonical_special_skill_key(value: object) -> str:
+    """Migrate historical Special Skill keys without breaking saved projects."""
+
+    key = str(value or "").strip()
+    if key.casefold() == "dark-rescue-h3-no-pov":
+        return "dark-rescue-h3-no-pov"
+    return key
+
+
+def _bound_special_skill_key(context: dict | None) -> str:
+    """Return the selected Special Skill key from a Design context."""
+
+    bound = (context or {}).get("bound_h3_skills") or {}
+    special = bound.get("special") or {}
+    return _canonical_special_skill_key(special.get("key", ""))
 TIMELINE_RULER_HEIGHT = 20
 RENDER_STATUS_BAR_HEIGHT = 6
 DIRECTOR_LANE_HEIGHT = 20
@@ -183,7 +324,51 @@ DIRECTOR_LANE_TYPES = ("shot", "transition", "marker")
 DIRECTOR_LANES_TOP = TIMELINE_RULER_HEIGHT + RENDER_STATUS_BAR_HEIGHT
 TIMELINE_TRACKS_TOP = DIRECTOR_LANES_TOP + DIRECTOR_LANE_HEIGHT * len(DIRECTOR_LANE_TYPES)
 TIMELINE_SNAP_SECONDS = 0.5
-SMART_RENDER_POLICY_VERSION = 11
+# The Work Area end is also a deliberate manual Timeline-extension control.
+# Keep it independent from the currently loaded endpoint so a new 12-second
+# project can be expanded to 45s, 120s or a future long-form duration directly
+# from the Generation toolbar.  Six hours remains safely inside Qt's
+# millisecond slider integer range while covering the planned 90-minute mode.
+MAX_MANUAL_TIMELINE_SECONDS = 6.0 * 60.0 * 60.0
+MIN_PRODUCTION_BATCH_SECONDS = 5.0
+SMART_RENDER_POLICY_VERSION = 22
+
+_UNTRACKED_VISIBLE_TEXT_TOKEN_RE = re.compile(
+    r"\b(?:text|words?|subtitle|caption|title|lower[- ]?third|hashtag|typography|legible)\b|"
+    r"字幕|文字|字样|字樣|标题|標題|可读|可讀",
+    re.I,
+)
+_VISIBLE_DISPLAY_CONTEXT_RE = re.compile(
+    r"\b(?:screen|monitor|display|overlay|visible|show|render|appear|reveal|center)\b|"
+    r"屏幕|螢幕|画面|畫面|显示|顯示|出现|出現|呈现|呈現|中央",
+    re.I,
+)
+_QUOTED_VISIBLE_WORD_RE = re.compile(
+    r"(?:['\"‘“「『《])"
+    r"[^'\"‘’“”「」『』《》]{1,120}"
+    r"(?:['\"’”」』》])"
+)
+
+
+def strip_untracked_visible_text_directions(value: object) -> str:
+    """Remove visible-word requests unless a Timeline on_screen_text layer owns them."""
+    clauses = re.split(
+        r"(?<=[.!?;])\s+|(?<=[。！？；])\s*|\n+",
+        str(value or "").strip(),
+    )
+    return " ".join(
+        clause.strip()
+        for clause in clauses
+        if clause.strip()
+        and clause.strip(" \t\r\n'\"‘’“”「」『』《》")
+        and not (
+            (
+                _UNTRACKED_VISIBLE_TEXT_TOKEN_RE.search(clause)
+                and _VISIBLE_DISPLAY_CONTEXT_RE.search(clause)
+            )
+            or _QUOTED_VISIBLE_WORD_RE.search(clause)
+        )
+    ).strip()
 CONTINUITY_MODE_LABELS = (
     "Auto", "Hard Cut", "Match Action", "Motion Reference", "Transition",
 )
@@ -228,6 +413,16 @@ def resolve_project_media_path(
 ) -> Path | None:
     """Recover a saved media path after a portable project folder is moved."""
     project_dir = project_path.expanduser().resolve().parent
+    # Canonical workspaces store the JSON in ``Workspace/project`` while
+    # media lives in sibling trees such as ``Workspace/media/generated_references``.
+    # Searching only below the JSON directory made every copied generated
+    # reference look missing even though it was visible in the Media Pool.
+    workspace_dir = (
+        project_dir.parent
+        if project_dir.name.casefold() == "project"
+        else project_dir
+    )
+    search_roots = list(dict.fromkeys((project_dir, workspace_dir)))
     raw_path = str(saved.get("local_path") or "").strip()
     filename = str(saved.get("filename") or "").strip()
     original = Path(raw_path).expanduser() if raw_path else None
@@ -240,11 +435,11 @@ def resolve_project_media_path(
         except (ValueError, OSError):
             relative = None
         if relative is not None:
-            candidates.append(project_dir / relative)
+            candidates.extend(root / relative for root in search_roots)
     if filename:
-        candidates.append(project_dir / filename)
+        candidates.extend(root / filename for root in search_roots)
     if original is not None and original.name:
-        candidates.append(project_dir / original.name)
+        candidates.extend(root / original.name for root in search_roots)
 
     seen: set[str] = set()
     for candidate in candidates:
@@ -257,7 +452,16 @@ def resolve_project_media_path(
 
     basename = filename or (original.name if original is not None else "")
     if basename:
-        matches = [item for item in project_dir.rglob(basename) if item.is_file()]
+        matches: list[Path] = []
+        matched_keys: set[str] = set()
+        for root in search_roots:
+            for item in root.rglob(basename):
+                if not item.is_file():
+                    continue
+                key = os.path.normcase(str(item.resolve()))
+                if key not in matched_keys:
+                    matched_keys.add(key)
+                    matches.append(item)
         if len(matches) == 1:
             return matches[0].resolve()
     return None
@@ -851,6 +1055,8 @@ class TextLayer:
     delivery: str = "Natural"
     lip_sync: bool = True
     shot_id: str = ""
+    speech_timing_auto_adjusted: bool = False
+    overlap_policy: str = "auto"
 
     def __post_init__(self) -> None:
         self.font_size = max(8, min(240, int(self.font_size)))
@@ -862,8 +1068,20 @@ class TextLayer:
             self.content_role = "on_screen_text"
         self.speaker = self.speaker if self.speaker in {"S1", "S2"} else "S1"
         self.language = str(self.language).strip() or "English"
+        if re.search(r"[\u3400-\u9fff]", self.text) and self.language.lower() in {
+            "english", "original language", "auto",
+        }:
+            self.language = "Mandarin Chinese"
         self.delivery = str(self.delivery).strip() or "Natural"
         self.lip_sync = bool(self.lip_sync)
+        self.speech_timing_auto_adjusted = bool(self.speech_timing_auto_adjusted)
+        self.overlap_policy = normalize_speech_overlap_policy(self.overlap_policy)
+
+
+def text_layer_from_mapping(value: dict) -> TextLayer:
+    """Load current or future Text Layer JSON without rejecting extra metadata."""
+    allowed = TextLayer.__dataclass_fields__.keys()
+    return TextLayer(**{key: value[key] for key in allowed if key in value})
 
 
 def text_layer_track_kind(content_role: str) -> str:
@@ -916,6 +1134,63 @@ class DirectorCue:
     action_budget_notes: str = ""
     authored_subject_action: str = ""
     authored_environment_response: str = ""
+    environment_interaction: str = ""
+    incoming_environment_state: str = ""
+    outgoing_environment_state: str = ""
+    crowd_reaction: str = ""
+    location_transition: str = ""
+    environment_state_status: str = ""
+    environment_physics_schema_version: int = 0
+    combat_action_chain: str = ""
+    incoming_combat_state: str = ""
+    outgoing_combat_state: str = ""
+    next_action_trigger: str = ""
+    event_causality_chain: str = ""
+    physical_feedback_chain: str = ""
+    causal_risk_original_action: str = ""
+    causal_risk_repair_status: str = ""
+    causal_risk_repair_notes: str = ""
+    causal_validation_status: str = ""
+    causal_validation_issues: list[str] = field(default_factory=list)
+    causal_validation_inherited_fields: list[str] = field(default_factory=list)
+    final_action_resolution: str = ""
+    final_camera_resolution: str = ""
+    final_action_stable: bool = False
+    combat_continuity_status: str = ""
+    combat_continuity_notes: str = ""
+    combat_action_schema_version: int = 0
+    combat_fact_context: str = ""
+    combat_story_duty_index: int = 0
+    combat_story_duty: str = ""
+    combat_story_duty_instruction: str = ""
+    combat_action_beats: list[dict] = field(default_factory=list)
+    combat_action_carrier: str = ""
+    combat_force_vector: dict[str, str] = field(default_factory=dict)
+    incoming_combat_state_vector: dict[str, str] = field(default_factory=dict)
+    outgoing_combat_state_vector: dict[str, str] = field(default_factory=dict)
+    camera_position_sector: str = ""
+    camera_motion_relation: str = ""
+    camera_action_trigger: str = ""
+    dynamic_camera_direction: str = ""
+    contact_material: str = ""
+    environment_force_vector: dict[str, str] = field(default_factory=dict)
+    combat_action_chain_user_edited: bool = False
+    incoming_combat_state_user_edited: bool = False
+    outgoing_combat_state_user_edited: bool = False
+    next_action_trigger_user_edited: bool = False
+    environment_interaction_user_edited: bool = False
+    incoming_environment_state_user_edited: bool = False
+    outgoing_environment_state_user_edited: bool = False
+    crowd_reaction_user_edited: bool = False
+    location_transition_user_edited: bool = False
+    native_audio_direction: str = ""
+    environment_continuity: str = ""
+    audio_reference_intent: str = ""
+    native_audio_qc_status: str = "Not analyzed"
+    native_audio_direction_user_edited: bool = False
+    environment_continuity_user_edited: bool = False
+    audio_reference_intent_user_edited: bool = False
+    native_audio_qc_user_edited: bool = False
 
     def __post_init__(self) -> None:
         if self.cue_type not in DIRECTOR_LANE_TYPES and self.cue_type != "cut":
@@ -958,6 +1233,13 @@ class DirectorCue:
             self.authored_environment_response = (
                 self.authored_environment_response or self.environment_response
             )
+
+
+def director_cue_from_mapping(value: dict) -> DirectorCue:
+    """Load current or future Director Cue JSON without rejecting extra metadata."""
+
+    allowed = DirectorCue.__dataclass_fields__.keys()
+    return DirectorCue(**{key: value[key] for key in allowed if key in value})
 
 
 def default_timeline_tracks() -> list[TimelineTrack]:
@@ -1421,6 +1703,7 @@ class MediaCardBusyOverlay(QWidget):
 class MediaCard(QFrame):
     selected = Signal(object)
     file_dropped = Signal(object, str)
+    z_image_regeneration_requested = Signal(object)
 
     def __init__(self, asset: MediaAsset) -> None:
         super().__init__()
@@ -1474,6 +1757,9 @@ class MediaCard(QFrame):
             child.setAttribute(Qt.WA_TransparentForMouseEvents, True)
         self.busy_overlay = MediaCardBusyOverlay(self)
         self.refresh_mode()
+        # A Picture with a valid local file must never wait for the asynchronous
+        # preparation worker merely to become visible in Media Pool.
+        self.set_local_image_fallback()
 
     def refresh_mode(self, active_in_window: bool | None = None) -> None:
         if active_in_window is not None:
@@ -1519,6 +1805,19 @@ class MediaCard(QFrame):
             if self.asset.recognition
             else "识别 …"
         )
+
+    def set_local_image_fallback(self) -> bool:
+        """Display the source Picture immediately, before derived preview work."""
+        if self.asset.media_type != "image":
+            return False
+        source = Path(str(self.asset.local_path or ""))
+        if not source.is_file():
+            return False
+        pixmap = QPixmap(str(source))
+        if pixmap.isNull():
+            return False
+        self.set_preview(pixmap)
+        return True
 
     def set_analysis_status(self, text: str) -> None:
         self.analysis_status = text
@@ -1615,6 +1914,32 @@ class MediaCard(QFrame):
         path = event.mimeData().urls()[0].toLocalFile()
         self.file_dropped.emit(self.asset, path)
         event.acceptProposedAction()
+
+    def create_context_menu(self) -> QMenu:
+        """Build the small Media Pool menu used by mouse and UI tests."""
+        menu = QMenu(self)
+        regenerate = menu.addAction("REGENERATE WITH Z-IMAGE")
+        regenerate.setObjectName("regenerateWithZImageAction")
+        regenerate.setToolTip(
+            "Generate a new image from this Picture's existing prompt, identity, "
+            "subject-count, Shot relationship and Timeline range"
+        )
+        regenerate.setEnabled(
+            self.asset.media_type == "image"
+            and bool(
+                str(self.asset.clip_prompt).strip()
+                or str(self.asset.recognition).strip()
+            )
+        )
+        regenerate.triggered.connect(
+            lambda _checked=False: self.z_image_regeneration_requested.emit(self.asset)
+        )
+        return menu
+
+    def contextMenuEvent(self, event) -> None:  # noqa: N802
+        menu = self.create_context_menu()
+        menu.exec(event.globalPos())
+        event.accept()
 
 
 class TrackHeaderWidget(QWidget):
@@ -2047,6 +2372,18 @@ class TimelineTextClip(QGraphicsRectItem):
             "voice_over": ("#9a6530", "#efbd78"),
             "lyrics": ("#6d55a5", "#cbb8f5"),
         }.get(layer.content_role, ("#a34f9e", "#efb5ea"))
+        speech_budget = (
+            speech_timing_budget(
+                layer.text,
+                layer.language,
+                layer.delivery,
+                layer.end_seconds - layer.start_seconds,
+            )
+            if layer.content_role in {"dialogue", "voice_over", "lyrics"}
+            else None
+        )
+        if speech_budget and speech_budget["risk"]:
+            fill, edge = "#8f1d25", "#ff4b55"
         self.setBrush(QColor(fill))
         self.setPen(QPen(QColor(edge), 1))
         self.setFlags(QGraphicsItem.ItemIsSelectable | QGraphicsItem.ItemSendsGeometryChanges)
@@ -2057,6 +2394,8 @@ class TimelineTextClip(QGraphicsRectItem):
         role_prefix = {
             "on_screen_text": "TXT", "dialogue": "DIA", "voice_over": "VO", "lyrics": "LYR"
         }.get(layer.content_role, "TXT")
+        if speech_budget and speech_budget["risk"]:
+            role_prefix = "! " + role_prefix
         self.label = QGraphicsSimpleTextItem(f"{role_prefix}  {label}", self)
         self.label.setBrush(QColor("white"))
         self.label.setPos(5, max(0.0, (clip_height - 14) / 2))
@@ -2067,7 +2406,13 @@ class TimelineTextClip(QGraphicsRectItem):
             handle.setPen(QPen(Qt.NoPen))
         self._position_handles()
         self.setToolTip(
-            "Text layer · use Type Tool to edit · drag body to move · "
+            f"Text layer · {text_layer_track_name(layer.track_id, layer.content_role)}"
+            + (
+                f" · Language: {layer.language} · Overlap: {layer.overlap_policy.upper()}"
+                if layer.content_role in {"dialogue", "voice_over", "lyrics"}
+                else ""
+            )
+            + " · use Type Tool to edit · drag body to move · "
             "drag either bright edge to trim · Delete removes"
         )
 
@@ -2206,8 +2551,26 @@ class TimelineCueItem(QGraphicsRectItem):
         width = max(10.0, duration * pixels_per_second)
         super().__init__(0, 0, width, DIRECTOR_LANE_HEIGHT - 2)
         self.setPos(cue.start_seconds * pixels_per_second, lane_y + 1)
-        self.setBrush(QColor(self.COLORS.get(cue.cue_type, "#5f6670")))
-        self.setPen(QPen(QColor("#d7dde4"), 1))
+        speech_reminder = cue.preset.startswith(SPEECH_TIMELINE_MARKER_PREFIX)
+        environment_warning = (
+            cue.cue_type == "shot" and cue.environment_state_status == "warning"
+        )
+        environment_transition = (
+            cue.cue_type == "shot" and cue.environment_state_status == "transition"
+        )
+        combat_warning = (
+            cue.cue_type == "shot" and cue.combat_continuity_status == "warning"
+        )
+        causal_warning = (
+            cue.cue_type == "shot" and cue.causal_validation_status == "warning"
+        )
+        cue_color = (
+            "#c43d4b" if speech_reminder or environment_warning or combat_warning or causal_warning
+            else "#b57537" if environment_transition
+            else self.COLORS.get(cue.cue_type, "#5f6670")
+        )
+        self.setBrush(QColor(cue_color))
+        self.setPen(QPen(QColor("#ffd7dc" if speech_reminder or environment_warning or combat_warning or causal_warning else "#d7dde4"), 1))
         self.setFlag(QGraphicsItem.ItemIsSelectable, True)
         shot_number = cue.cue_id[1:] if cue.cue_id.startswith("S") else cue.cue_id
         label = (
@@ -2232,6 +2595,30 @@ class TimelineCueItem(QGraphicsRectItem):
                         f"{cue.camera_movement} · {cue.movement_speed} · {cue.movement_amplitude} amplitude",
                         cue.subject_action,
                         cue.environment_response,
+                        (
+                            "ENVIRONMENT STATE WARNING: repair the cause/state chain before render."
+                            if environment_warning else ""
+                        ),
+                        (
+                            "COMBAT CONTINUITY WARNING: " + cue.combat_continuity_notes
+                            if combat_warning else ""
+                        ),
+                        (
+                            "CAUSAL REPAIR: " + cue.causal_risk_repair_notes
+                            if cue.causal_risk_repair_status == "auto_fixed" and cue.causal_risk_repair_notes else ""
+                        ),
+                        (
+                            "CAUSAL VALIDATION WARNING: "
+                            + "; ".join(cue.causal_validation_issues)
+                            if causal_warning else ""
+                        ),
+                        (
+                            "FINAL ACTION: " + cue.final_action_resolution
+                            if cue.final_action_resolution else ""
+                        ),
+                        cue.environment_interaction,
+                        cue.crowd_reaction,
+                        cue.location_transition,
                         *(
                             f"AI media reference: {direction}"
                             for direction in cue.semantic_reference_directions.values()
@@ -2482,6 +2869,7 @@ class TimelineView(QGraphicsView):
             "reusable": QColor("#2f9d57"),
             "dirty": QColor("#d4a72c"),
             "running": QColor("#258bc4"),
+            "reconnecting": QColor("#d58a2c"),
             "failed": QColor("#c84d4d"),
             "pending": QColor("#596068"),
         }
@@ -2526,6 +2914,7 @@ class TimelineView(QGraphicsView):
                 "reusable": "Generated · reusable",
                 "dirty": "Edited · needs render",
                 "running": "Rendering",
+                "reconnecting": "Server disconnected · auto reconnecting",
                 "failed": "Render failed",
                 "pending": "Not generated",
             }.get(status, status)
@@ -2952,6 +3341,21 @@ class TimelineView(QGraphicsView):
         super().keyPressEvent(event)
 
 
+class CompactSecondsSpinBox(QDoubleSpinBox):
+    """Keep sub-second values while displaying compact labels such as 0s/15s."""
+
+    def textFromValue(self, value: float) -> str:  # noqa: N802
+        text = f"{float(value):.2f}".rstrip("0").rstrip(".")
+        return f"{text}s"
+
+    def valueFromText(self, text: str) -> float:  # noqa: N802
+        cleaned = str(text).strip().lower().removesuffix("s").strip()
+        try:
+            return float(cleaned)
+        except ValueError:
+            return self.value()
+
+
 class PrecisionScrubSlider(QSlider):
     """A millisecond transport slider with anchored, non-jumping drag."""
 
@@ -3012,6 +3416,146 @@ class MonitorSplitPane(QWidget):
 
     def minimumSizeHint(self) -> QSize:  # noqa: N802
         return QSize(1, 1)
+
+class ProjectStorageDialog(QDialog):
+    """Inspect, safely reclaim and archive one fixed Project Workspace."""
+
+    def __init__(self, workspace: Path, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.workspace = Path(workspace).expanduser().resolve()
+        self.setWindowTitle("Project Storage · Report / Safe Cleanup / Archive")
+        self.resize(820, 620)
+        layout = QVBoxLayout(self)
+        self.summary = QLabel()
+        self.summary.setWordWrap(True)
+        self.summary.setStyleSheet(
+            "color:#72d7e5; font-weight:600; padding:8px; "
+            "background:#121619; border:1px solid #343a40;"
+        )
+        layout.addWidget(self.summary)
+        self.details = QPlainTextEdit()
+        self.details.setReadOnly(True)
+        layout.addWidget(self.details, 1)
+        buttons = QHBoxLayout()
+        refresh = QPushButton("REFRESH REPORT")
+        refresh.clicked.connect(self.refresh_report)
+        self.cleanup_button = QPushButton("SAFE CLEANUP")
+        self.cleanup_button.clicked.connect(self.safe_cleanup)
+        archive = QPushButton("ARCHIVE PROJECT")
+        archive.clicked.connect(self.archive_project)
+        close = QPushButton("CLOSE")
+        close.clicked.connect(self.accept)
+        buttons.addWidget(refresh)
+        buttons.addWidget(self.cleanup_button)
+        buttons.addWidget(archive)
+        buttons.addStretch(1)
+        buttons.addWidget(close)
+        layout.addLayout(buttons)
+        self.refresh_report()
+
+    @staticmethod
+    def _size(value: int) -> str:
+        amount = float(max(0, int(value)))
+        for suffix in ("B", "KB", "MB", "GB", "TB"):
+            if amount < 1024.0 or suffix == "TB":
+                return f"{amount:.2f} {suffix}"
+            amount /= 1024.0
+        return f"{amount:.2f} TB"
+
+    def refresh_report(self) -> None:
+        try:
+            report = build_storage_report(self.workspace)
+            cleanup = safe_cleanup_plan(self.workspace)
+        except Exception as exc:
+            self.summary.setText(f"Storage Report failed · {exc}")
+            self.details.setPlainText(str(exc))
+            self.cleanup_button.setEnabled(False)
+            return
+        self.cleanup_button.setEnabled(bool(cleanup["candidate_count"]))
+        self.summary.setText(
+            f"{self.workspace.name} · {report['file_count']} files · "
+            f"logical {self._size(report['logical_bytes'])} · "
+            f"physical {self._size(report['physical_bytes'])} · "
+            f"safe cleanup {self._size(cleanup['reclaimable_bytes'])}"
+        )
+        lines = [
+            f"Workspace: {self.workspace}",
+            f"Hard-link storage saved: {self._size(report['hardlink_saved_bytes'])}",
+            f"Copied duplicate physical bytes: {self._size(report['duplicate_physical_bytes'])}",
+            "",
+            "CATEGORY                                  FILES          LOGICAL",
+        ]
+        for name, values in report["categories"].items():
+            lines.append(
+                f"{name:<40}{values['files']:>6}  {self._size(values['logical_bytes']):>16}"
+            )
+        lines.extend(
+            [
+                "",
+                f"SAFE CLEANUP DRY RUN · {cleanup['candidate_count']} file(s) · "
+                f"{self._size(cleanup['reclaimable_bytes'])}",
+            ]
+        )
+        for row in cleanup["candidates"]:
+            lines.append(
+                f"- {row['path']} · {self._size(row['bytes'])} · {row['reason']}"
+            )
+        if not cleanup["candidates"]:
+            lines.append("- Nothing disposable was found.")
+        lines.extend(["", "PROTECTED"] + [f"- {item}" for item in cleanup["protected_contract"]])
+        self.details.setPlainText("\n".join(lines))
+
+    def safe_cleanup(self) -> None:
+        plan = safe_cleanup_plan(self.workspace)
+        if not plan["candidate_count"]:
+            QMessageBox.information(self, "Safe Cleanup", "No verified disposable files were found.")
+            return
+        choice = QMessageBox.question(
+            self,
+            "Confirm Safe Cleanup",
+            f"Remove {plan['candidate_count']} verified disposable file(s) and reclaim "
+            f"{self._size(plan['reclaimable_bytes'])}?\n\n"
+            "Generated Masters, Media Pool sources and all Segment Preview/Approved Takes are protected.",
+            QMessageBox.Yes | QMessageBox.Cancel,
+            QMessageBox.Cancel,
+        )
+        if choice != QMessageBox.Yes:
+            return
+        result = safe_cleanup_workspace(self.workspace, dry_run=False)
+        self.refresh_report()
+        QMessageBox.information(
+            self,
+            "Safe Cleanup complete",
+            f"Removed {result['removed_count']} file(s) · "
+            f"reclaimed {self._size(result['removed_bytes'])}.",
+        )
+
+    def archive_project(self) -> None:
+        suggested = self.workspace.parent / f"{self.workspace.name}.h3project.zip"
+        filename, _ = QFileDialog.getSaveFileName(
+            self,
+            "Archive Project",
+            str(suggested),
+            "H3 Project Archive (*.h3project.zip);;ZIP archive (*.zip)",
+        )
+        if not filename:
+            return
+        if not filename.casefold().endswith((".zip", ".h3project.zip")):
+            filename += ".h3project.zip"
+        try:
+            result = archive_workspace(self.workspace, filename)
+        except Exception as exc:
+            QMessageBox.critical(self, "Archive Project failed", str(exc))
+            return
+        QMessageBox.information(
+            self,
+            "Archive Project complete",
+            f"Verified archive: {result['archive']}\n"
+            f"Files: {result['file_count']}\n"
+            f"Archive size: {self._size(result['archive_bytes'])}\n"
+            f"Consolidated external sources: {result['external_source_count']}",
+        )
+
 
 class PromptPresetDialog(QDialog):
     """Choose and edit presets stored together in one category .env file."""
@@ -3196,6 +3740,19 @@ class SpecialSkillCreatorDialog(QDialog):
         metadata.setColumnStretch(3, 1)
         layout.addLayout(metadata)
 
+        template_label = QLabel(
+            "DESIGN REQUIREMENT TEMPLATE · optional text inserted when this Special Skill opens Design"
+        )
+        template_label.setStyleSheet("color:#aeb9c3;")
+        layout.addWidget(template_label)
+        self.requirement_template_edit = QPlainTextEdit()
+        self.requirement_template_edit.setObjectName("specialSkillRequirementTemplateEdit")
+        self.requirement_template_edit.setPlaceholderText(
+            "Example: Create a 45-second scene using this Skill's dialogue, sound and visual rules."
+        )
+        self.requirement_template_edit.setMaximumHeight(90)
+        layout.addWidget(self.requirement_template_edit)
+
         editors = QSplitter(Qt.Horizontal)
         english_panel = QWidget()
         english_layout = QVBoxLayout(english_panel)
@@ -3277,6 +3834,7 @@ class SpecialSkillCreatorDialog(QDialog):
         self.binding_combo.setCurrentIndex(0)
         self.english_edit.setPlainText(DEFAULT_SPECIAL_SKILL_BODY)
         self.chinese_edit.clear()
+        self.requirement_template_edit.clear()
         self.path_label.setText(
             f"New folder will be saved under: {self.special_root.resolve()}"
         )
@@ -3300,6 +3858,9 @@ class SpecialSkillCreatorDialog(QDialog):
         self.binding_combo.setCurrentIndex(1 if document.standalone else 0)
         self.english_edit.setPlainText(document.body)
         self.chinese_edit.setPlainText(document.chinese_body)
+        self.requirement_template_edit.setPlainText(
+            document.design_requirement_template
+        )
         self.path_label.setText(str(document.path or (self.special_root / key / "SKILL.md")))
 
     def _document(self) -> SpecialSkillDocument:
@@ -3309,6 +3870,9 @@ class SpecialSkillCreatorDialog(QDialog):
             body=self.english_edit.toPlainText().strip(),
             chinese_body=self.chinese_edit.toPlainText().strip(),
             standalone=bool(self.binding_combo.currentData()),
+            design_requirement_template=(
+                self.requirement_template_edit.toPlainText().strip()
+            ),
         )
 
     def _validate(self) -> bool:
@@ -3711,12 +4275,32 @@ class ContentLayerDialog(QDialog):
         self.speaker_combo.setCurrentText(layer.speaker)
         self.language_combo = QComboBox()
         self.language_combo.setEditable(True)
-        self.language_combo.addItems(("English", "Chinese", "Cantonese", "Malay", "Japanese", "Korean"))
+        timeline_languages = (
+            "Auto", "Mandarin Chinese", "Cantonese", "Malay",
+            *H3_STABLE_DIALOGUE_LANGUAGES,
+        )
+        self.language_combo.addItems(tuple(dict.fromkeys(timeline_languages)))
         self.language_combo.setCurrentText(layer.language)
+        self.language_combo.setToolTip(
+            "Language for this individual Dialogue, Voice-over or Lyrics layer. "
+            "It is saved with the Timeline and passed to H3 native speech or the selected TTS engine."
+        )
         self.delivery_combo = QComboBox()
         self.delivery_combo.setEditable(True)
         self.delivery_combo.addItems(("Natural", "Calm", "Whispered", "Urgent", "Confident", "Emotional"))
         self.delivery_combo.setCurrentText(layer.delivery)
+        self.overlap_combo = QComboBox()
+        self.overlap_combo.addItem("AUTO · move colliding speech to another track", "auto")
+        self.overlap_combo.addItem("OVERLAP · intentional simultaneous speech", "overlap")
+        self.overlap_combo.addItem("SEQUENTIAL · move this clip after earlier speech", "sequential")
+        self.overlap_combo.setCurrentIndex(
+            max(0, self.overlap_combo.findData(layer.overlap_policy))
+        )
+        self.overlap_combo.setToolTip(
+            "AUTO preserves timing and assigns another speech track when needed. "
+            "OVERLAP explicitly authorizes simultaneous voices. SEQUENTIAL moves "
+            "this clip after earlier speech of the same type without shortening it."
+        )
         self.lip_sync_check = QCheckBox("Accurate visible lip synchronization")
         self.lip_sync_check.setChecked(layer.lip_sync)
         self.shot_combo = QComboBox()
@@ -3737,16 +4321,19 @@ class ContentLayerDialog(QDialog):
         form.addRow("Font Size", self.font_size_spin)
         form.addRow("Color", self.color_button)
         self.dialogue_rows: list[tuple[QLabel, QWidget]] = []
+        self.semantic_rows: dict[str, tuple[QLabel, QWidget]] = {}
         for title, widget in (
             ("Speaker", self.speaker_combo),
             ("Language", self.language_combo),
             ("Delivery", self.delivery_combo),
+            ("Overlap", self.overlap_combo),
             ("Lip Sync", self.lip_sync_check),
             ("所属 Shot", self.shot_combo),
         ):
             label = QLabel(title)
             form.addRow(label, widget)
             self.dialogue_rows.append((label, widget))
+            self.semantic_rows[title] = (label, widget)
         layout.addLayout(form)
         buttons = QDialogButtonBox(QDialogButtonBox.Save | QDialogButtonBox.Cancel)
         buttons.accepted.connect(self._validate)
@@ -3755,11 +4342,14 @@ class ContentLayerDialog(QDialog):
         self._refresh_role_fields()
 
     def _refresh_role_fields(self) -> None:
-        dialogue = self.role_combo.currentData() == "dialogue"
-        for label, widget in self.dialogue_rows:
-            label.setVisible(dialogue)
-            widget.setVisible(dialogue)
-        visible_text = self.role_combo.currentData() == "on_screen_text"
+        role = str(self.role_combo.currentData() or "on_screen_text")
+        dialogue = role == "dialogue"
+        speech = role in {"dialogue", "voice_over", "lyrics"}
+        for title, (label, widget) in self.semantic_rows.items():
+            visible = dialogue if title == "Lip Sync" else speech
+            label.setVisible(visible)
+            widget.setVisible(visible)
+        visible_text = role == "on_screen_text"
         self.font_size_spin.setEnabled(visible_text)
         self.color_button.setEnabled(visible_text)
 
@@ -3783,7 +4373,9 @@ class ContentLayerDialog(QDialog):
         self.accept()
 
     def state(self) -> dict:
-        dialogue = self.role_combo.currentData() == "dialogue"
+        role = str(self.role_combo.currentData() or "on_screen_text")
+        dialogue = role == "dialogue"
+        speech = role in {"dialogue", "voice_over", "lyrics"}
         start, end = snap_timeline_range(
             self.start_spin.value(), self.end_spin.value(), self.end_spin.maximum()
         )
@@ -3793,13 +4385,1334 @@ class ContentLayerDialog(QDialog):
             "end_seconds": end,
             "font_size": self.font_size_spin.value(),
             "color": self._color,
-            "content_role": self.role_combo.currentData(),
-            "speaker": self.speaker_combo.currentText() if dialogue else "S1",
-            "language": self.language_combo.currentText().strip() if dialogue else "English",
-            "delivery": self.delivery_combo.currentText().strip() if dialogue else "Natural",
+            "content_role": role,
+            # Hidden Voice-over/Lyrics fields retain their existing values;
+            # editing only Language must never reset speaker, delivery or Shot.
+            "speaker": self.speaker_combo.currentText() if speech else "S1",
+            "language": self.language_combo.currentText().strip() if speech else "English",
+            "delivery": self.delivery_combo.currentText().strip() if speech else "Natural",
+            "overlap_policy": (
+                str(self.overlap_combo.currentData() or "auto") if speech else "auto"
+            ),
             "lip_sync": self.lip_sync_check.isChecked() if dialogue else False,
-            "shot_id": self.shot_combo.currentData() if dialogue else "",
+            "shot_id": self.shot_combo.currentData() if speech else "",
         }
+
+
+class SmartCutDialog(QDialog):
+    """Non-destructive review surface for deterministic and LM-assisted cuts."""
+
+    ai_refine_requested = Signal(object)
+    ACTION_LABELS = {
+        "keep": "KEEP",
+        "trim": "TRIM",
+        "merge": "MERGE",
+        "remove": "REMOVE",
+    }
+    ACTION_COLORS = {
+        "keep": QColor("#255f43"),
+        "trim": QColor("#8a6a22"),
+        "merge": QColor("#285f8d"),
+        "remove": QColor("#8f3340"),
+    }
+
+    def __init__(
+        self,
+        shot_inputs: list[dict],
+        target_duration: float,
+        mode: str = "balanced",
+        parent: QWidget | None = None,
+    ) -> None:
+        super().__init__(parent)
+        self.setObjectName("smartCutDialog")
+        self.setWindowTitle("SMART CUT · Story Constraint Planner")
+        self.resize(1280, 760)
+        self.setMinimumSize(980, 620)
+        self.shot_inputs = deepcopy(shot_inputs)
+        self.semantic_hints: dict[str, dict] = {}
+        self.plan = plan_smart_cut(
+            self.shot_inputs,
+            target_duration,
+            mode=mode,
+            grid_seconds=TIMELINE_SNAP_SECONDS,
+            segment_seconds=MAX_NATIVE_SECONDS,
+        )
+        self._loading = False
+
+        root = QVBoxLayout(self)
+        top = QHBoxLayout()
+        self.original_label = QLabel()
+        self.edited_label = QLabel()
+        self.target_label = QLabel()
+        self.delta_label = QLabel()
+        for widget in (
+            self.original_label,
+            self.edited_label,
+            self.target_label,
+            self.delta_label,
+        ):
+            top.addWidget(widget)
+            top.addSpacing(12)
+        top.addStretch(1)
+        top.addWidget(QLabel("MODE"))
+        self.mode_combo = QComboBox()
+        for key, label in (
+            ("safe", "Safe"),
+            ("balanced", "Balanced"),
+            ("aggressive", "Aggressive"),
+        ):
+            self.mode_combo.addItem(label, key)
+        self.mode_combo.setCurrentIndex(max(0, self.mode_combo.findData(self.plan["mode"])))
+        top.addWidget(self.mode_combo)
+        self.auto_plan_button = QPushButton("AUTO PLAN")
+        self.auto_plan_button.setToolTip(
+            "Recalculate exact 0.5-second timing locally. No AI or Timeline edit is performed."
+        )
+        top.addWidget(self.auto_plan_button)
+        self.ai_button = QPushButton("AI SEMANTIC REFINE")
+        self.ai_button.setToolTip(
+            "Ask the configured Design provider to classify story roles and redundancy. "
+            "The AI cannot author timings or directly edit the Timeline."
+        )
+        top.addWidget(self.ai_button)
+        root.addLayout(top)
+
+        self.warning_label = QLabel()
+        self.warning_label.setWordWrap(True)
+        self.warning_label.setStyleSheet("color:#ffb65c; font-weight:600;")
+        root.addWidget(self.warning_label)
+
+        splitter = QSplitter(Qt.Horizontal)
+        self.table = QTableWidget(0, 9)
+        self.table.setObjectName("smartCutDecisionTable")
+        self.table.setHorizontalHeaderLabels([
+            "Action", "Shot", "Role", "Original", "Proposed", "Saved",
+            "Importance", "Risk", "Reason",
+        ])
+        self.table.setSelectionBehavior(QAbstractItemView.SelectRows)
+        self.table.setSelectionMode(QAbstractItemView.SingleSelection)
+        self.table.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        self.table.verticalHeader().hide()
+        header = self.table.horizontalHeader()
+        header.setSectionResizeMode(QHeaderView.ResizeToContents)
+        header.setSectionResizeMode(8, QHeaderView.Stretch)
+        splitter.addWidget(self.table)
+
+        inspector = QWidget()
+        inspector.setMinimumWidth(320)
+        inspector_layout = QVBoxLayout(inspector)
+        inspector_layout.addWidget(QLabel("SELECTED DECISION"))
+        form = QFormLayout()
+        self.action_combo = QComboBox()
+        self.duration_spin = QDoubleSpinBox()
+        self.duration_spin.setRange(0.0, 120.0)
+        self.duration_spin.setDecimals(1)
+        self.duration_spin.setSingleStep(TIMELINE_SNAP_SECONDS)
+        self.duration_spin.setSuffix(" s")
+        self.lock_check = QCheckBox("LOCK · preserve this Shot")
+        self.role_label = QLabel("—")
+        self.dependency_label = QLabel("—")
+        self.dependency_label.setWordWrap(True)
+        form.addRow("Action", self.action_combo)
+        form.addRow("Duration", self.duration_spin)
+        form.addRow("Story role", self.role_label)
+        form.addRow("Dependencies", self.dependency_label)
+        form.addRow("", self.lock_check)
+        inspector_layout.addLayout(form)
+        inspector_layout.addWidget(QLabel("Reason / protection"))
+        self.reason_text = QPlainTextEdit()
+        self.reason_text.setReadOnly(True)
+        inspector_layout.addWidget(self.reason_text, 1)
+        self.ai_status = QLabel("Local deterministic plan · AI semantics not requested")
+        self.ai_status.setWordWrap(True)
+        self.ai_status.setStyleSheet("color:#8ea0af;")
+        inspector_layout.addWidget(self.ai_status)
+        splitter.addWidget(inspector)
+        splitter.setStretchFactor(0, 4)
+        splitter.setStretchFactor(1, 1)
+        root.addWidget(splitter, 1)
+
+        hint = QLabel(
+            "KEEP preserves a Shot; TRIM shortens optional time; MERGE omits a redundant beat "
+            "and records its surviving neighbor; REMOVE omits the complete Shot. Nothing changes "
+            "on the Timeline until APPLY SMART CUT."
+        )
+        hint.setWordWrap(True)
+        hint.setStyleSheet("color:#91a0ad;")
+        root.addWidget(hint)
+        buttons = QDialogButtonBox(QDialogButtonBox.Cancel)
+        self.apply_button = buttons.addButton("APPLY SMART CUT", QDialogButtonBox.AcceptRole)
+        self.apply_button.setObjectName("smartCutApply")
+        root.addWidget(buttons)
+
+        self.table.currentCellChanged.connect(self._load_selected)
+        self.auto_plan_button.clicked.connect(self._replan)
+        self.ai_button.clicked.connect(lambda: self.ai_refine_requested.emit(self))
+        self.mode_combo.currentIndexChanged.connect(self._replan)
+        self.action_combo.currentIndexChanged.connect(self._save_selected_action)
+        self.duration_spin.valueChanged.connect(self._save_selected_duration)
+        self.lock_check.toggled.connect(self._lock_selected)
+        buttons.rejected.connect(self.reject)
+        self.apply_button.clicked.connect(self._accept_plan)
+        self._refresh_table()
+        if self.table.rowCount():
+            self.table.setCurrentCell(0, 0)
+
+    def _decision(self, row: int | None = None) -> dict | None:
+        index = self.table.currentRow() if row is None else row
+        if not (0 <= index < len(self.plan.get("decisions", []))):
+            return None
+        return self.plan["decisions"][index]
+
+    def _refresh_summary(self) -> None:
+        current = float(self.plan["current_duration"])
+        edited = sum(float(row["proposed_duration"]) for row in self.plan["decisions"])
+        target = float(self.plan["target_duration"])
+        self.plan["edited_duration"] = snap_timeline_seconds(edited)
+        self.plan["saved_seconds"] = snap_timeline_seconds(current - edited)
+        self.plan["on_target"] = abs(edited - target) <= 0.01
+        self.original_label.setText(f"ORIGINAL  {current:.1f}s")
+        self.edited_label.setText(f"EDITED  {edited:.1f}s")
+        self.target_label.setText(f"TARGET  {target:.1f}s")
+        delta = edited - target
+        if abs(delta) <= 0.01:
+            self.delta_label.setText("ON TARGET  0.0s")
+            self.delta_label.setStyleSheet("color:#55d98b; font-weight:700;")
+        else:
+            self.delta_label.setText(
+                f"{'OVER' if delta > 0 else 'UNDER'}  {abs(delta):.1f}s"
+            )
+            self.delta_label.setStyleSheet("color:#ffb65c; font-weight:700;")
+        warnings = list(self.plan.get("warnings") or [])
+        self.warning_label.setText("\n".join("⚠ " + value for value in warnings))
+        self.warning_label.setVisible(bool(warnings))
+
+    def _refresh_table(self) -> None:
+        current_id = ""
+        selected = self._decision()
+        if selected:
+            current_id = selected["shot_id"]
+        self._loading = True
+        self.table.setRowCount(len(self.plan["decisions"]))
+        selected_row = 0
+        for row_index, decision in enumerate(self.plan["decisions"]):
+            action = str(decision["action"])
+            risk = (
+                "DIALOGUE"
+                if decision["speech_count"] and action in {"remove", "merge"}
+                else "HIGH"
+                if decision["dependency_strength"] >= 6 and action != "keep"
+                else "MEDIUM"
+                if action in {"trim", "merge"}
+                else "LOW"
+            )
+            values = [
+                self.ACTION_LABELS.get(action, action.upper()),
+                str(decision["shot_id"]),
+                str(decision["story_role"]),
+                f"{float(decision['original_duration']):.1f}s",
+                f"{float(decision['proposed_duration']):.1f}s",
+                f"{float(decision['saved_seconds']):.1f}s",
+                f"{float(decision['importance']):.0f}",
+                risk,
+                str(decision["reason"]),
+            ]
+            for column, value in enumerate(values):
+                item = QTableWidgetItem(value)
+                if column == 0:
+                    item.setBackground(self.ACTION_COLORS.get(action, QColor("#333333")))
+                    item.setForeground(QColor("white"))
+                self.table.setItem(row_index, column, item)
+            if decision["shot_id"] == current_id:
+                selected_row = row_index
+        self._loading = False
+        self._refresh_summary()
+        if self.table.rowCount():
+            self.table.setCurrentCell(selected_row, 0)
+
+    def _load_selected(self, *_args) -> None:
+        decision = self._decision()
+        self._loading = True
+        self.action_combo.clear()
+        if decision is None:
+            self._loading = False
+            return
+        actions = ["keep", "trim"]
+        if not decision["protected"]:
+            actions.append("remove")
+            if decision.get("merge_into"):
+                actions.append("merge")
+        elif decision["action"] == "merge":
+            actions.append("merge")
+        for action in actions:
+            self.action_combo.addItem(self.ACTION_LABELS[action], action)
+        self.action_combo.setCurrentIndex(
+            max(0, self.action_combo.findData(decision["action"]))
+        )
+        self.duration_spin.setMaximum(float(decision["original_duration"]))
+        self.duration_spin.setMinimum(
+            0.0 if decision["action"] in {"remove", "merge"} else float(decision["minimum_duration"])
+        )
+        self.duration_spin.setValue(float(decision["proposed_duration"]))
+        self.duration_spin.setEnabled(decision["action"] == "trim" and not decision["locked"])
+        self.lock_check.setChecked(bool(decision["locked"]))
+        self.role_label.setText(
+            f"{decision['story_role']} · importance {float(decision['importance']):.0f}"
+        )
+        self.dependency_label.setText(
+            f"strength {decision['dependency_strength']}/10 · native-boundary cost "
+            f"{float(decision['boundary_cost']):.0f}"
+        )
+        self.reason_text.setPlainText(str(decision["reason"]))
+        self._loading = False
+
+    def _replan(self, *_args) -> None:
+        if self._loading:
+            return
+        mode = str(self.mode_combo.currentData() or "balanced")
+        locked_ids = {
+            row["shot_id"] for row in self.plan.get("decisions", []) if row.get("locked")
+        }
+        for source in self.shot_inputs:
+            source["locked"] = str(source.get("cue_id")) in locked_ids
+        self.plan = plan_smart_cut(
+            self.shot_inputs,
+            float(self.plan["target_duration"]),
+            mode=mode,
+            semantic_hints=self.semantic_hints,
+            grid_seconds=TIMELINE_SNAP_SECONDS,
+            segment_seconds=MAX_NATIVE_SECONDS,
+        )
+        self._refresh_table()
+
+    def _save_selected_action(self, *_args) -> None:
+        if self._loading:
+            return
+        decision = self._decision()
+        if decision is None:
+            return
+        action = str(self.action_combo.currentData() or "keep")
+        decision["action"] = action
+        if action == "keep":
+            decision["proposed_duration"] = float(decision["original_duration"])
+        elif action == "trim":
+            decision["proposed_duration"] = max(
+                float(decision["minimum_duration"]),
+                min(
+                    float(decision["original_duration"]) - TIMELINE_SNAP_SECONDS,
+                    float(decision["proposed_duration"]) or float(decision["minimum_duration"]),
+                ),
+            )
+        else:
+            decision["proposed_duration"] = 0.0
+        decision["saved_seconds"] = round(
+            float(decision["original_duration"]) - float(decision["proposed_duration"]), 6
+        )
+        self._refresh_table()
+
+    def _save_selected_duration(self, value: float) -> None:
+        if self._loading:
+            return
+        decision = self._decision()
+        if decision is None or decision["action"] != "trim":
+            return
+        decision["proposed_duration"] = snap_timeline_seconds(max(
+            float(decision["minimum_duration"]),
+            min(float(decision["original_duration"]), float(value)),
+        ))
+        decision["saved_seconds"] = round(
+            float(decision["original_duration"]) - float(decision["proposed_duration"]), 6
+        )
+        self._refresh_table()
+
+    def _lock_selected(self, enabled: bool) -> None:
+        if self._loading:
+            return
+        decision = self._decision()
+        if decision is None:
+            return
+        decision["locked"] = bool(enabled)
+        if enabled:
+            decision["action"] = "keep"
+            decision["proposed_duration"] = float(decision["original_duration"])
+            decision["saved_seconds"] = 0.0
+        self._refresh_table()
+
+    def set_ai_running(self, running: bool, message: str) -> None:
+        self.ai_button.setEnabled(not running)
+        self.auto_plan_button.setEnabled(not running)
+        self.ai_status.setText(message)
+
+    def apply_ai_hints(self, hints: dict[str, dict], model: str = "") -> None:
+        self.semantic_hints = deepcopy(hints)
+        self.ai_status.setText(
+            f"AI semantic hints applied from {model or 'configured model'} · "
+            "all timings recalculated locally"
+        )
+        self._replan()
+
+    def _accept_plan(self) -> None:
+        edited = float(self.plan["edited_duration"])
+        target = float(self.plan["target_duration"])
+        if abs(edited - target) > 0.01:
+            answer = QMessageBox.question(
+                self,
+                "Smart Cut target not exact",
+                f"This protected plan is {edited:.1f}s while the target is {target:.1f}s. "
+                "Apply the reviewed plan anyway?",
+            )
+            if answer != QMessageBox.Yes:
+                return
+        self.accept()
+
+    def result_plan(self) -> dict:
+        return deepcopy(self.plan)
+
+
+class StoryboardCardDelegate(QStyledItemDelegate):
+    """Paint Storyboard cards with lift, shadow and drop-settle feedback."""
+
+    def __init__(self, board: "StoryboardBlockList") -> None:
+        super().__init__(board)
+        self.board = board
+
+    def paint(self, painter, option, index) -> None:  # noqa: N802
+        opt = QStyleOptionViewItem(option)
+        item = self.board.itemFromIndex(index)
+        hovered = bool(option.state & QStyle.State_MouseOver)
+        dragging = item is self.board._drag_item
+        settling = item is self.board._drop_item
+        lift = 0
+        if hovered and not dragging:
+            lift = 3
+        if settling:
+            pulse = 1.0 - abs((self.board._drop_progress * 2.0) - 1.0)
+            lift = max(lift, round(6.0 * pulse))
+
+        if lift or settling:
+            painter.save()
+            shadow = QRectF(opt.rect.adjusted(5, 6, -3, 2))
+            shadow.translate(0, -lift)
+            painter.setPen(Qt.NoPen)
+            painter.setBrush(QColor(0, 0, 0, 105 if settling else 75))
+            painter.drawRoundedRect(shadow, 6, 6)
+            painter.restore()
+            opt.rect.translate(0, -lift)
+
+        super().paint(painter, opt, index)
+        if settling:
+            painter.save()
+            alpha = max(0, round(220 * (1.0 - self.board._drop_progress)))
+            painter.setPen(QPen(QColor(71, 215, 255, alpha), 2))
+            painter.setBrush(Qt.NoBrush)
+            painter.drawRoundedRect(QRectF(opt.rect).adjusted(1, 1, -2, -2), 5, 5)
+            painter.restore()
+
+
+class StoryboardBlockList(QListWidget):
+    """Plain-item Shot board whose order can be changed safely by drag and drop."""
+
+    order_changed = Signal()
+    MIME_CARD = "application/x-h3-storyboard-card"
+    DISPLAY_MODES = {
+        "extra_large_icons": "Extra large icons",
+        "large_icons": "Large icons",
+        "medium_icons": "Medium icons",
+        "small_icons": "Small icons",
+        "list": "List",
+        "details": "Details",
+        "tiles": "Tiles",
+        "content": "Content",
+    }
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.setObjectName("storyboardBlockList")
+        self.setSelectionMode(QAbstractItemView.SingleSelection)
+        self.setDragEnabled(True)
+        self.setAcceptDrops(True)
+        self.setDropIndicatorShown(True)
+        self.setDefaultDropAction(Qt.MoveAction)
+        self.setDragDropMode(QAbstractItemView.InternalMove)
+        self.setDragDropOverwriteMode(False)
+        self.setViewMode(QListView.IconMode)
+        self.setMovement(QListView.Snap)
+        self.setResizeMode(QListView.Adjust)
+        self.setFlow(QListView.LeftToRight)
+        self.setWrapping(True)
+        self.setWordWrap(True)
+        self.setTextElideMode(Qt.ElideRight)
+        self.setSpacing(10)
+        self.setMouseTracking(True)
+        self.viewport().setAcceptDrops(True)
+        self.viewport().setAttribute(Qt.WA_Hover, True)
+        self.setStyleSheet(
+            "QListWidget#storyboardBlockList { background:#0d1115; border:1px solid #303840; }"
+            "QListWidget#storyboardBlockList::item { background:#111417; color:#edf2f6; "
+            "border:1px solid #28313a; border-radius:4px; padding:8px; }"
+            "QListWidget#storyboardBlockList::item:hover { background:#18212a; "
+            "border:1px solid #557080; }"
+            "QListWidget#storyboardBlockList::item:selected { background:#1c2730; "
+            "border:2px solid #47d7ff; }"
+        )
+        self.model().rowsMoved.connect(lambda *_args: self.order_changed.emit())
+        self._drag_item: QListWidgetItem | None = None
+        self._drag_original_row = -1
+        self._reflow_animation: QVariantAnimation | None = None
+        self._drop_animation: QVariantAnimation | None = None
+        self._drop_item: QListWidgetItem | None = None
+        self._drop_progress = 0.0
+        self.setItemDelegate(StoryboardCardDelegate(self))
+        self.display_mode = "large_icons"
+        self._update_card_geometry()
+
+    def _update_card_geometry(self) -> None:
+        available = max(320, self.viewport().width() - 28)
+        mode = self.display_mode
+        if mode in {"list", "details", "content"}:
+            self.setViewMode(QListView.ListMode)
+            self.setFlow(QListView.TopToBottom)
+            self.setWrapping(False)
+        else:
+            self.setViewMode(QListView.IconMode)
+            self.setFlow(QListView.LeftToRight)
+            self.setWrapping(True)
+
+        if mode == "extra_large_icons":
+            columns, text_height = 2, 188
+        elif mode == "large_icons":
+            columns, text_height = 3, 172
+        elif mode == "medium_icons":
+            columns, text_height = 4, 138
+        elif mode == "small_icons":
+            columns, text_height = 5, 105
+        elif mode == "tiles":
+            columns, text_height = 2, 118
+        elif mode == "content":
+            columns, text_height = 1, 54
+        elif mode == "details":
+            columns, text_height = 1, 12
+        else:  # List
+            columns, text_height = 1, 28
+        self.visual_columns = columns
+        width = max(170, (available - (columns - 1) * 12) // columns)
+        if mode == "extra_large_icons":
+            width = min(540, width)
+        elif mode == "large_icons":
+            width = min(390, width)
+        elif mode == "medium_icons":
+            width = min(300, width)
+        elif mode == "small_icons":
+            width = min(230, width)
+        elif mode == "tiles":
+            width = min(510, width)
+        else:
+            width = available
+        if mode == "details":
+            icon_width, icon_height = 48, 27
+        elif mode == "list":
+            icon_width, icon_height = 96, 54
+        elif mode == "content":
+            icon_width, icon_height = 300, 169
+        elif mode == "tiles":
+            icon_width, icon_height = min(220, width // 2), min(124, round(min(220, width // 2) * 9 / 16))
+        else:
+            icon_width = max(140, width - 24)
+            icon_height = max(79, round(icon_width * 9 / 16))
+        self.setIconSize(QSize(icon_width, icon_height))
+        row_height = icon_height + text_height if self.viewMode() == QListView.IconMode else max(icon_height + 18, text_height + 48)
+        self.setGridSize(QSize(width, row_height))
+        for index in range(self.count()):
+            self.item(index).setSizeHint(QSize(width - 8, max(42, row_height - 10)))
+
+    def set_display_mode(self, mode: str) -> None:
+        normalized = str(mode or "large_icons").strip().lower()
+        if normalized not in self.DISPLAY_MODES:
+            normalized = "large_icons"
+        self.display_mode = normalized
+        self._update_card_geometry()
+        self.doItemsLayout()
+        self.viewport().update()
+
+    def resizeEvent(self, event) -> None:
+        super().resizeEvent(event)
+        self._update_card_geometry()
+
+    @staticmethod
+    def _entry_key(item: QListWidgetItem) -> str:
+        return str((item.data(Qt.UserRole) or {}).get("cue_id") or id(item))
+
+    def _positions(self) -> dict[str, QPoint]:
+        return {
+            self._entry_key(self.item(index)): self.visualItemRect(self.item(index)).topLeft()
+            for index in range(self.count())
+            if self.item(index) is not self._drag_item
+        }
+
+    def _animate_reflow(self, before: dict[str, QPoint]) -> None:
+        self.doItemsLayout()
+        after = self._positions()
+        moving: list[tuple[QListWidgetItem, QPoint, QPoint]] = []
+        for index in range(self.count()):
+            item = self.item(index)
+            key = self._entry_key(item)
+            if item is self._drag_item or key not in before or key not in after:
+                continue
+            if before[key] != after[key]:
+                moving.append((item, before[key], after[key]))
+        if not moving:
+            return
+        if self._reflow_animation is not None:
+            self._reflow_animation.stop()
+        animation = QVariantAnimation(self)
+        self._reflow_animation = animation
+        animation.setStartValue(0.0)
+        animation.setEndValue(1.0)
+        animation.setDuration(190)
+        animation.setEasingCurve(QEasingCurve.OutCubic)
+
+        def update(value) -> None:
+            progress = float(value)
+            for item, start, end in moving:
+                if self.row(item) < 0:
+                    continue
+                point = QPoint(
+                    round(start.x() + (end.x() - start.x()) * progress),
+                    round(start.y() + (end.y() - start.y()) * progress),
+                )
+                self.setPositionForIndex(point, self.indexFromItem(item))
+            self.viewport().update()
+
+        animation.valueChanged.connect(update)
+        animation.finished.connect(lambda: self.doItemsLayout())
+        animation.start()
+
+    @staticmethod
+    def _drag_ghost(source: QPixmap) -> QPixmap:
+        """Return a lifted card preview with a soft layered shadow."""
+        margin = 16
+        ghost = QPixmap(source.width() + margin * 2, source.height() + margin * 2)
+        ghost.fill(Qt.transparent)
+        painter = QPainter(ghost)
+        painter.setRenderHint(QPainter.Antialiasing)
+        base = QRectF(margin, margin + 4, source.width(), source.height())
+        painter.setPen(Qt.NoPen)
+        for spread, alpha in ((10, 14), (7, 22), (4, 34), (2, 48)):
+            painter.setBrush(QColor(0, 0, 0, alpha))
+            painter.drawRoundedRect(base.adjusted(-spread, -spread, spread, spread), 9, 9)
+        painter.setOpacity(0.94)
+        painter.drawPixmap(margin, margin - 2, source)
+        painter.end()
+        return ghost
+
+    def _animate_drop_settle(self, item: QListWidgetItem | None) -> None:
+        """Pulse and settle the released card so the final position is explicit."""
+        if item is None or self.row(item) < 0:
+            return
+        if self._drop_animation is not None:
+            self._drop_animation.stop()
+        self._drop_item = item
+        self._drop_progress = 0.0
+        animation = QVariantAnimation(self)
+        self._drop_animation = animation
+        animation.setStartValue(0.0)
+        animation.setEndValue(1.0)
+        animation.setDuration(260)
+        animation.setEasingCurve(QEasingCurve.OutCubic)
+
+        def update(value) -> None:
+            self._drop_progress = float(value)
+            self.viewport().update(self.visualItemRect(item).adjusted(-8, -10, 8, 10))
+
+        def finish() -> None:
+            self._drop_progress = 0.0
+            self._drop_item = None
+            self.viewport().update()
+
+        animation.valueChanged.connect(update)
+        animation.finished.connect(finish)
+        animation.start()
+
+    def _placeholder_visual(self) -> None:
+        if self._drag_item is None:
+            return
+        self._drag_item.setIcon(QIcon())
+        self._drag_item.setText("DROP HERE\n\nRelease to place this Shot")
+        self._drag_item.setTextAlignment(Qt.AlignCenter)
+        self._drag_item.setBackground(QColor("#18232b"))
+        self._drag_item.setForeground(QColor("#47d7ff"))
+
+    def _move_drag_placeholder(self, target_row: int) -> None:
+        if self._drag_item is None or self.count() < 2:
+            return
+        current_row = self.row(self._drag_item)
+        target_row = max(0, min(int(target_row), self.count() - 1))
+        if current_row < 0 or current_row == target_row:
+            return
+        before = self._positions()
+        item = self.takeItem(current_row)
+        self.insertItem(target_row, item)
+        self.setCurrentItem(item)
+        self.order_changed.emit()
+        self._placeholder_visual()
+        self._animate_reflow(before)
+
+    def move_selected(self, offset: int) -> bool:
+        item = self.currentItem()
+        current_row = self.row(item) if item is not None else -1
+        target_row = current_row + int(offset)
+        if item is None or current_row < 0 or not (0 <= target_row < self.count()):
+            return False
+        before = self._positions()
+        moved = self.takeItem(current_row)
+        self.insertItem(target_row, moved)
+        self.setCurrentItem(moved)
+        self.order_changed.emit()
+        self._animate_reflow(before)
+        self._animate_drop_settle(moved)
+        return True
+
+    def startDrag(self, supported_actions) -> None:  # noqa: N802
+        item = self.currentItem()
+        if item is None:
+            return
+        self._drag_item = item
+        self._drag_original_row = self.row(item)
+        rect = self.visualItemRect(item)
+        ghost = self._drag_ghost(self.viewport().grab(rect))
+        drag = QDrag(self)
+        mime = QMimeData()
+        mime.setData(self.MIME_CARD, self._entry_key(item).encode("utf-8"))
+        drag.setMimeData(mime)
+        drag.setPixmap(ghost)
+        drag.setHotSpot(
+            QPoint(
+                min(rect.width() // 2, 90) + 16,
+                min(rect.height() // 3, 70) + 14,
+            )
+        )
+        self._placeholder_visual()
+        result = drag.exec(Qt.MoveAction)
+        if result != Qt.MoveAction and self.row(item) != self._drag_original_row:
+            before = self._positions()
+            moved = self.takeItem(self.row(item))
+            self.insertItem(self._drag_original_row, moved)
+            self._animate_reflow(before)
+        self._drag_item = None
+        self._drag_original_row = -1
+        self.order_changed.emit()
+        self.setCurrentItem(item)
+        if result == Qt.MoveAction:
+            self._animate_drop_settle(item)
+
+    def dragEnterEvent(self, event) -> None:  # noqa: N802
+        if event.mimeData().hasFormat(self.MIME_CARD):
+            event.setDropAction(Qt.MoveAction)
+            event.accept()
+            return
+        super().dragEnterEvent(event)
+
+    def dragMoveEvent(self, event) -> None:  # noqa: N802
+        if not event.mimeData().hasFormat(self.MIME_CARD):
+            super().dragMoveEvent(event)
+            return
+        point = event.position().toPoint()
+        index = self.indexAt(point)
+        target_row = index.row() if index.isValid() else self.count() - 1
+        if index.isValid():
+            rect = self.visualRect(index)
+            if point.y() > rect.center().y() or point.x() > rect.center().x():
+                target_row = min(self.count() - 1, target_row + 1)
+        self._move_drag_placeholder(target_row)
+        event.setDropAction(Qt.MoveAction)
+        event.accept()
+
+    def dropEvent(self, event) -> None:  # noqa: N802
+        if event.mimeData().hasFormat(self.MIME_CARD):
+            point = event.position().toPoint()
+            index = self.indexAt(point)
+            if index.isValid():
+                self._move_drag_placeholder(index.row())
+            event.setDropAction(Qt.MoveAction)
+            event.accept()
+            self.order_changed.emit()
+            return
+        super().dropEvent(event)
+
+
+class StoryboardEditorDialog(QDialog):
+    """Non-destructive Shot-card editor committed to Timeline only on Apply."""
+
+    def __init__(
+        self,
+        shots: list[DirectorCue],
+        text_layers: list[TextLayer],
+        media_assets: list[MediaAsset],
+        current_duration: float,
+        target_duration: float,
+        parent: QWidget | None = None,
+        preview_paths: dict[str, Path] | None = None,
+        view_mode: str = "large_icons",
+    ) -> None:
+        super().__init__(parent)
+        self.setObjectName("storyboardEditorDialog")
+        self.setWindowTitle("Storyboard Editor · Shot Structure")
+        screen = QApplication.primaryScreen()
+        available = screen.availableGeometry() if screen else QRectF(0, 0, 1280, 800).toRect()
+        self.resize(min(1480, available.width() - 48), min(900, available.height() - 48))
+        self.setMinimumSize(1050, 620)
+        self.original_duration = max(0.5, float(current_duration))
+        self._loading_inspector = False
+        self.preview_paths = {
+            str(key): Path(value) for key, value in (preview_paths or {}).items()
+        }
+        self._icon_cache: dict[str, QIcon] = {}
+        self.view_mode = (
+            view_mode if view_mode in StoryboardBlockList.DISPLAY_MODES else "large_icons"
+        )
+
+        root = QVBoxLayout(self)
+        summary = QHBoxLayout()
+        self.original_label = QLabel()
+        self.current_label = QLabel()
+        self.delta_label = QLabel()
+        self.target_spin = QDoubleSpinBox()
+        self.target_spin.setObjectName("storyboardEditorTarget")
+        self.target_spin.setRange(0.5, 3600.0)
+        self.target_spin.setDecimals(1)
+        self.target_spin.setSingleStep(TIMELINE_SNAP_SECONDS)
+        self.target_spin.setSuffix(" s")
+        self.target_spin.setValue(max(0.5, float(target_duration)))
+        summary.addWidget(self.original_label)
+        summary.addSpacing(16)
+        summary.addWidget(self.current_label)
+        summary.addSpacing(16)
+        summary.addWidget(QLabel("TARGET"))
+        summary.addWidget(self.target_spin)
+        summary.addSpacing(16)
+        summary.addWidget(self.delta_label)
+        summary.addStretch(1)
+        self.view_button = QToolButton()
+        self.view_button.setObjectName("storyboardViewButton")
+        self.view_button.setPopupMode(QToolButton.InstantPopup)
+        self.view_button.setToolTip("Choose Storyboard card size and layout")
+        self.view_menu = QMenu(self.view_button)
+        self.view_actions = {}
+        view_symbols = {
+            "extra_large_icons": "▣",
+            "large_icons": "▣",
+            "medium_icons": "▤",
+            "small_icons": "▦",
+            "list": "☷",
+            "details": "≡",
+            "tiles": "☷",
+            "content": "☷",
+        }
+        for key, label in StoryboardBlockList.DISPLAY_MODES.items():
+            action = self.view_menu.addAction(f"{view_symbols[key]}   {label}")
+            action.setCheckable(True)
+            action.triggered.connect(
+                lambda _checked=False, selected=key: self._set_view_mode(selected)
+            )
+            self.view_actions[key] = action
+        self.view_button.setMenu(self.view_menu)
+        summary.addWidget(self.view_button)
+        root.addLayout(summary)
+
+        hint = QLabel(
+            "Drag Shot blocks to reorder. Select a block to edit its title, must-complete action "
+            "and duration. Add/Delete changes only this draft until APPLY TO TIMELINE."
+        )
+        hint.setWordWrap(True)
+        hint.setStyleSheet("color:#9aa7b3;")
+        root.addWidget(hint)
+
+        splitter = QSplitter(Qt.Horizontal)
+        self.block_list = StoryboardBlockList()
+        self.block_list.set_display_mode(self.view_mode)
+        splitter.addWidget(self.block_list)
+
+        inspector = QWidget()
+        inspector.setMinimumWidth(315)
+        inspector_layout = QVBoxLayout(inspector)
+        inspector_header = QHBoxLayout()
+        inspector_header.addWidget(QLabel("SELECTED SHOT"))
+        inspector_header.addStretch(1)
+        self.move_left_button = QToolButton()
+        self.move_left_button.setObjectName("storyboardMoveLeft")
+        self.move_left_button.setText("←")
+        self.move_left_button.setToolTip("Move selected Shot one position left")
+        self.move_right_button = QToolButton()
+        self.move_right_button.setObjectName("storyboardMoveRight")
+        self.move_right_button.setText("→")
+        self.move_right_button.setToolTip("Move selected Shot one position right")
+        inspector_header.addWidget(self.move_left_button)
+        inspector_header.addWidget(self.move_right_button)
+        inspector_layout.addLayout(inspector_header)
+        form = QFormLayout()
+        self.title_edit = QLineEdit()
+        self.title_edit.setObjectName("storyboardShotTitle")
+        self.duration_spin = QDoubleSpinBox()
+        self.duration_spin.setObjectName("storyboardShotDuration")
+        self.duration_spin.setRange(0.5, 120.0)
+        self.duration_spin.setDecimals(1)
+        self.duration_spin.setSingleStep(TIMELINE_SNAP_SECONDS)
+        self.duration_spin.setSuffix(" s")
+        self.action_edit = QPlainTextEdit()
+        self.action_edit.setObjectName("storyboardShotAction")
+        self.action_edit.setPlaceholderText("Must-complete subject action")
+        self.action_edit.setMaximumHeight(135)
+        self.detail_label = QLabel("Select a Shot block.")
+        self.detail_label.setWordWrap(True)
+        self.detail_label.setStyleSheet("color:#8ea0af;")
+        form.addRow("Title / Preset", self.title_edit)
+        form.addRow("Duration", self.duration_spin)
+        form.addRow("Core action", self.action_edit)
+        inspector_layout.addLayout(form)
+        inspector_layout.addWidget(self.detail_label)
+        inspector_layout.addStretch(1)
+        splitter.addWidget(inspector)
+        splitter.setStretchFactor(0, 4)
+        splitter.setStretchFactor(1, 1)
+        root.addWidget(splitter, 1)
+
+        tools = QHBoxLayout()
+        self.add_button = QPushButton("+ SHOT")
+        self.add_button.setObjectName("storyboardAddShot")
+        self.delete_button = QPushButton("DELETE SHOT")
+        self.delete_button.setObjectName("storyboardDeleteShot")
+        tools.addWidget(self.add_button)
+        tools.addWidget(self.delete_button)
+        tools.addStretch(1)
+        root.addLayout(tools)
+        buttons = QDialogButtonBox(QDialogButtonBox.Apply | QDialogButtonBox.Cancel)
+        apply_button = buttons.button(QDialogButtonBox.Apply)
+        apply_button.setText("APPLY TO TIMELINE")
+        apply_button.setObjectName("storyboardApply")
+        apply_button.clicked.connect(self._accept_if_valid)
+        buttons.rejected.connect(self.reject)
+        root.addWidget(buttons)
+
+        ordered = sorted(shots, key=lambda cue: (cue.start_seconds, cue.end_seconds))
+        for cue in ordered:
+            dialogue = [
+                layer for layer in text_layers
+                if layer.end_seconds > cue.start_seconds
+                and layer.start_seconds < cue.end_seconds
+                and layer.content_role in {"dialogue", "voice_over", "lyrics"}
+            ]
+            media = [
+                asset for asset in media_assets
+                if asset.timeline_placed
+                and asset.end_seconds > cue.start_seconds
+                and asset.start_seconds < cue.end_seconds
+            ]
+            refs = sorted({media_shortcut(asset) for asset in media if media_shortcut(asset)})
+            preview_path, preview_ref = self._shot_preview_path(media, cue)
+            self._insert_entry({
+                "cue_id": cue.cue_id,
+                "is_new": False,
+                "original_start": float(cue.start_seconds),
+                "original_end": float(cue.end_seconds),
+                "duration": max(0.5, snap_timeline_seconds(cue.end_seconds - cue.start_seconds)),
+                "preset": cue.preset or cue.cue_id,
+                "subject_action": cue.authored_subject_action or cue.subject_action,
+                "environment_response": cue.authored_environment_response or cue.environment_response,
+                "environment_interaction": cue.environment_interaction,
+                "incoming_environment_state": cue.incoming_environment_state,
+                "outgoing_environment_state": cue.outgoing_environment_state,
+                "crowd_reaction": cue.crowd_reaction,
+                "location_transition": cue.location_transition,
+                "environment_state_status": cue.environment_state_status,
+                "environment_physics_schema_version": cue.environment_physics_schema_version,
+                "combat_action_chain": cue.combat_action_chain,
+                "incoming_combat_state": cue.incoming_combat_state,
+                "outgoing_combat_state": cue.outgoing_combat_state,
+                "next_action_trigger": cue.next_action_trigger,
+                "event_causality_chain": cue.event_causality_chain,
+                "physical_feedback_chain": cue.physical_feedback_chain,
+                "causal_risk_original_action": cue.causal_risk_original_action,
+                "causal_risk_repair_status": cue.causal_risk_repair_status,
+                "causal_risk_repair_notes": cue.causal_risk_repair_notes,
+                "causal_validation_status": cue.causal_validation_status,
+                "causal_validation_issues": list(cue.causal_validation_issues),
+                "causal_validation_inherited_fields": list(cue.causal_validation_inherited_fields),
+                "final_action_resolution": cue.final_action_resolution,
+                "final_camera_resolution": cue.final_camera_resolution,
+                "final_action_stable": cue.final_action_stable,
+                "combat_continuity_status": cue.combat_continuity_status,
+                "combat_continuity_notes": cue.combat_continuity_notes,
+                "combat_action_schema_version": cue.combat_action_schema_version,
+                "combat_story_duty": cue.combat_story_duty,
+                "combat_action_carrier": cue.combat_action_carrier,
+                "camera_action_trigger": cue.camera_action_trigger,
+                "combat_force_vector": cue.combat_force_vector,
+                "framing": cue.framing,
+                "dialogue_count": len(dialogue),
+                "media_refs": refs,
+                "preview_path": str(preview_path) if preview_path else "",
+                "preview_ref": preview_ref,
+            })
+        self.block_list.currentItemChanged.connect(self._load_selected)
+        self.block_list.order_changed.connect(self._refresh_all_cards)
+        self.title_edit.textEdited.connect(self._save_selected)
+        self.action_edit.textChanged.connect(self._save_selected)
+        self.duration_spin.valueChanged.connect(self._save_selected)
+        self.target_spin.valueChanged.connect(self._refresh_duration_summary)
+        self.add_button.clicked.connect(self._add_shot)
+        self.delete_button.clicked.connect(self._delete_shot)
+        self.move_left_button.clicked.connect(lambda: self._move_selected(-1))
+        self.move_right_button.clicked.connect(lambda: self._move_selected(1))
+        self._set_view_mode(self.view_mode)
+        if self.block_list.count():
+            self.block_list.setCurrentRow(0)
+        self._refresh_all_cards()
+
+    def _set_view_mode(self, mode: str) -> None:
+        normalized = (
+            mode if mode in StoryboardBlockList.DISPLAY_MODES else "large_icons"
+        )
+        self.view_mode = normalized
+        if hasattr(self, "block_list"):
+            self.block_list.set_display_mode(normalized)
+        for key, action in getattr(self, "view_actions", {}).items():
+            action.blockSignals(True)
+            action.setChecked(key == normalized)
+            action.blockSignals(False)
+        if hasattr(self, "view_button"):
+            label = StoryboardBlockList.DISPLAY_MODES[normalized]
+            self.view_button.setText(f"VIEW · {label.upper()}")
+        if hasattr(self, "block_list") and self.block_list.count():
+            self._refresh_all_cards()
+
+    def _move_selected(self, offset: int) -> None:
+        if self.block_list.move_selected(offset):
+            self._refresh_all_cards()
+        self._refresh_move_buttons()
+
+    def _refresh_move_buttons(self) -> None:
+        row = self.block_list.currentRow()
+        count = self.block_list.count()
+        self.move_left_button.setEnabled(row > 0)
+        self.move_right_button.setEnabled(0 <= row < count - 1)
+
+    def _insert_entry(self, entry: dict, row: int | None = None) -> QListWidgetItem:
+        item = QListWidgetItem()
+        item.setData(Qt.UserRole, deepcopy(entry))
+        item.setTextAlignment(Qt.AlignLeft | Qt.AlignTop)
+        item.setSizeHint(QSize(320, 330))
+        item.setFlags(
+            item.flags()
+            | Qt.ItemIsDragEnabled
+            | Qt.ItemIsDropEnabled
+            | Qt.ItemIsSelectable
+            | Qt.ItemIsEnabled
+        )
+        if row is None:
+            self.block_list.addItem(item)
+        else:
+            self.block_list.insertItem(max(0, min(row, self.block_list.count())), item)
+        self.block_list._update_card_geometry()
+        return item
+
+    def _shot_preview_path(
+        self,
+        media: list[MediaAsset],
+        shot: DirectorCue,
+    ) -> tuple[Path | None, str]:
+        preferred = {
+            str(value).strip().upper()
+            for value in (shot.semantic_reference_directions or {}).keys()
+            if str(value).strip()
+        }
+
+        def preview_score(asset: MediaAsset) -> tuple:
+            start_error = abs(float(asset.start_seconds) - float(shot.start_seconds))
+            end_error = abs(float(asset.end_seconds) - float(shot.end_seconds))
+            exact_shot_frame = start_error <= 0.05 and end_error <= 0.05
+            ref = media_shortcut(asset).upper()
+            node_id = str(asset.node_id).upper()
+            explicitly_directed = ref in preferred or node_id in preferred
+            duration = max(0.0, float(asset.end_seconds) - float(asset.start_seconds))
+            identity_anchor = (
+                ref == "P1"
+                or "PRIMARY RECURRING CHARACTER IDENTITY ANCHOR"
+                in str(asset.clip_prompt or "").upper()
+            )
+            return (
+                0 if explicitly_directed else 1,
+                0 if exact_shot_frame else 1,
+                start_error + end_error,
+                duration,
+                0 if identity_anchor else 1,
+                ref,
+            )
+
+        visual = sorted(
+            (asset for asset in media if asset.media_type in {"image", "video"}),
+            key=preview_score,
+        )
+        image_suffixes = {".png", ".jpg", ".jpeg", ".webp", ".bmp"}
+        for asset in visual:
+            keys = (
+                str(asset.clip_id or ""),
+                str(asset.node_id or ""),
+                str(asset.source_node_id or ""),
+            )
+            for key in keys:
+                candidate = self.preview_paths.get(key)
+                if candidate and candidate.is_file():
+                    return candidate, media_shortcut(asset)
+            local = Path(str(asset.local_path or ""))
+            if local.is_file() and local.suffix.lower() in image_suffixes:
+                return local, media_shortcut(asset)
+        return None, ""
+
+    def _entry_icon(self, entry: dict, label: str) -> QIcon:
+        path_text = str(entry.get("preview_path") or "")
+        cache_key = path_text or f"placeholder:{label}"
+        cached = self._icon_cache.get(cache_key)
+        if cached is not None:
+            return cached
+        canvas = QPixmap(640, 360)
+        source = QPixmap(path_text) if path_text and Path(path_text).is_file() else QPixmap()
+        if source.isNull():
+            canvas.fill(QColor("#090b0d"))
+            painter = QPainter(canvas)
+            painter.setPen(QColor("#64717c"))
+            painter.drawText(canvas.rect(), Qt.AlignCenter, f"{label}\nNO VISUAL REFERENCE")
+            painter.end()
+        else:
+            scaled = source.scaled(
+                canvas.size(), Qt.KeepAspectRatioByExpanding, Qt.SmoothTransformation
+            )
+            left = max(0, (scaled.width() - canvas.width()) // 2)
+            top = max(0, (scaled.height() - canvas.height()) // 2)
+            canvas = scaled.copy(left, top, canvas.width(), canvas.height())
+        icon = QIcon(canvas)
+        self._icon_cache[cache_key] = icon
+        return icon
+
+    def _refresh_all_cards(self) -> None:
+        cursor = 0.0
+        for index in range(self.block_list.count()):
+            item = self.block_list.item(index)
+            entry = dict(item.data(Qt.UserRole) or {})
+            duration = max(0.5, snap_timeline_seconds(float(entry.get("duration", 5.0))))
+            entry["duration"] = duration
+            entry["new_start"] = cursor
+            entry["new_end"] = cursor + duration
+            item.setData(Qt.UserRole, entry)
+            item.setTextAlignment(Qt.AlignLeft | Qt.AlignTop)
+            item.setBackground(QBrush())
+            item.setForeground(QBrush())
+            refs = ", ".join(entry.get("media_refs") or []) or "no media"
+            action = str(entry.get("subject_action") or "No core action yet").strip()
+            environment = str(entry.get("environment_response") or "").strip()
+            if len(action) > 145:
+                action = action[:142].rstrip() + "..."
+            if len(environment) > 90:
+                environment = environment[:87].rstrip() + "..."
+            environment_text = f"\n\n{environment}" if environment else ""
+            item.setIcon(self._entry_icon(entry, f"SHOT {index + 1}"))
+            heading = (
+                f"SHOT {index + 1}  ·  {cursor:.1f}–{cursor + duration:.1f}s  ·  "
+                f"{duration:.1f}s"
+            )
+            preset = str(entry.get("preset") or "Untitled Shot")
+            footer = (
+                f"FRAME {entry.get('preview_ref') or '—'}  ·  "
+                f"SPEECH {int(entry.get('dialogue_count', 0))}  ·  MEDIA {refs}"
+            )
+            environment_badges: list[str] = []
+            if str(entry.get("environment_interaction", "")).strip():
+                environment_badges.append("INTERACTION")
+            if str(entry.get("crowd_reaction", "")).strip():
+                environment_badges.append("CROWD")
+            if "INDOOR→OUTDOOR" in str(entry.get("location_transition", "")):
+                environment_badges.append("INDOOR→OUTDOOR")
+            if str(entry.get("environment_state_status", "")) == "warning":
+                environment_badges.append("STATE CONFLICT")
+                item.setBackground(QBrush(QColor("#4b1e24")))
+            combat_status = str(entry.get("combat_continuity_status", ""))
+            if combat_status == "auto_fixed":
+                environment_badges.append("ACTION AUTO-FIX")
+            elif combat_status == "warning":
+                environment_badges.append("ACTION RISK")
+                item.setBackground(QBrush(QColor("#5b2026")))
+            if str(entry.get("causal_risk_repair_status", "")) == "auto_fixed":
+                environment_badges.append("CAUSAL AUTO-FIX")
+            causal_status = str(entry.get("causal_validation_status", ""))
+            if causal_status == "warning":
+                environment_badges.append("CAUSAL RISK")
+                item.setBackground(QBrush(QColor("#5b2026")))
+            elif causal_status == "auto_fixed" and "CAUSAL AUTO-FIX" not in environment_badges:
+                environment_badges.append("CAUSAL AUTO-FIX")
+            if bool(entry.get("final_action_stable", False)):
+                environment_badges.append("STABLE FINAL")
+            if environment_badges:
+                footer += "  ·  " + " · ".join(environment_badges)
+            mode = self.view_mode
+            if mode == "details":
+                card_text = f"{heading}  |  {preset}  |  {footer}"
+            elif mode == "list":
+                compact_action = action[:100].rstrip() + ("..." if len(action) > 100 else "")
+                card_text = f"{heading}\n{preset} · {compact_action}\n{footer}"
+            elif mode == "small_icons":
+                card_text = f"{heading}\n{preset}\n{footer}"
+            elif mode == "medium_icons":
+                compact_action = action[:80].rstrip() + ("..." if len(action) > 80 else "")
+                card_text = f"{heading}\n{preset}\n\n{compact_action}\n\n{footer}"
+            elif mode == "tiles":
+                compact_action = action[:120].rstrip() + ("..." if len(action) > 120 else "")
+                card_text = f"{heading}\n{preset}\n{compact_action}\n{footer}"
+            else:
+                card_text = (
+                    f"{heading}\n{preset}\n\n{action}{environment_text}\n\n{footer}"
+                )
+            item.setText(card_text)
+            item.setToolTip(
+                f"Drag and drop to reorder SHOT {index + 1}\n"
+                f"{cursor:.1f}–{cursor + duration:.1f}s · {refs}\n"
+                f"{entry.get('environment_interaction', '')}\n"
+                f"{entry.get('crowd_reaction', '')}\n"
+                f"{entry.get('location_transition', '')}\n"
+                f"Combat: {entry.get('combat_continuity_status') or 'not tracked'}\n"
+                f"{entry.get('combat_continuity_notes', '')}"
+            )
+            cursor += duration
+        self._refresh_duration_summary()
+        self._load_selected(self.block_list.currentItem(), None)
+
+    def _refresh_duration_summary(self) -> None:
+        current = sum(
+            float((self.block_list.item(index).data(Qt.UserRole) or {}).get("duration", 0.0))
+            for index in range(self.block_list.count())
+        )
+        target = float(self.target_spin.value())
+        delta = current - target
+        self.original_label.setText(f"ORIGINAL  {self.original_duration:.1f}s")
+        self.current_label.setText(f"EDITED  {current:.1f}s")
+        self.delta_label.setText(
+            f"{'OVER' if delta > 0.01 else 'UNDER' if delta < -0.01 else 'ON TARGET'}  "
+            f"{abs(delta):.1f}s"
+        )
+        self.current_label.setStyleSheet(
+            "color:#47d7ff; font-weight:700;" if abs(current - self.original_duration) > 0.01
+            else "font-weight:700;"
+        )
+        self.delta_label.setStyleSheet(
+            "color:#ffcb55; font-weight:700;" if abs(delta) > 0.01
+            else "color:#65d48b; font-weight:700;"
+        )
+
+    def _load_selected(
+        self,
+        current: QListWidgetItem | None,
+        _previous: QListWidgetItem | None,
+    ) -> None:
+        self._loading_inspector = True
+        enabled = current is not None
+        self.title_edit.setEnabled(enabled)
+        self.duration_spin.setEnabled(enabled)
+        self.action_edit.setEnabled(enabled)
+        self.delete_button.setEnabled(enabled and self.block_list.count() > 1)
+        self._refresh_move_buttons()
+        if current is None:
+            self.title_edit.clear()
+            self.action_edit.clear()
+            self.detail_label.setText("Select a Shot block.")
+        else:
+            entry = dict(current.data(Qt.UserRole) or {})
+            self.title_edit.setText(str(entry.get("preset") or ""))
+            self.duration_spin.setValue(float(entry.get("duration", 5.0)))
+            self.action_edit.setPlainText(str(entry.get("subject_action") or ""))
+            self.detail_label.setText(
+                f"Source: {entry.get('cue_id') or 'New Shot'}\n"
+                f"Original: {float(entry.get('original_start', 0.0)):.1f}–"
+                f"{float(entry.get('original_end', 0.0)):.1f}s\n"
+                f"Speech layers: {int(entry.get('dialogue_count', 0))}\n"
+                f"Media: {', '.join(entry.get('media_refs') or []) or 'none'}\n"
+                f"Environment: {entry.get('environment_state_status') or 'not tracked'}\n"
+                f"Combat: {entry.get('combat_continuity_status') or 'not tracked'}\n"
+                f"{entry.get('combat_continuity_notes') or ''}\n"
+                f"{entry.get('location_transition') or ''}"
+            )
+        self._loading_inspector = False
+
+    def _save_selected(self, *_args) -> None:
+        if self._loading_inspector:
+            return
+        item = self.block_list.currentItem()
+        if item is None:
+            return
+        entry = dict(item.data(Qt.UserRole) or {})
+        entry["preset"] = self.title_edit.text().strip() or "Untitled Shot"
+        entry["subject_action"] = self.action_edit.toPlainText().strip()
+        entry["duration"] = snap_timeline_seconds(self.duration_spin.value())
+        item.setData(Qt.UserRole, entry)
+        self._refresh_all_cards()
+
+    def _add_shot(self) -> None:
+        row = self.block_list.currentRow()
+        insert_at = self.block_list.count() if row < 0 else row + 1
+        item = self._insert_entry({
+            "cue_id": f"story-new-{secrets.token_hex(6)}",
+            "is_new": True,
+            "original_start": 0.0,
+            "original_end": 0.0,
+            "duration": 5.0,
+            "preset": "New Story Beat",
+            "subject_action": "",
+            "environment_response": "",
+            "environment_interaction": "",
+            "incoming_environment_state": "",
+            "outgoing_environment_state": "",
+            "crowd_reaction": "",
+            "location_transition": "",
+            "environment_state_status": "",
+            "environment_physics_schema_version": 0,
+            "combat_action_chain": "",
+            "incoming_combat_state": "",
+            "outgoing_combat_state": "",
+            "next_action_trigger": "",
+            "combat_continuity_status": "",
+            "combat_continuity_notes": "",
+            "combat_action_schema_version": 0,
+            "framing": "Medium-wide",
+            "dialogue_count": 0,
+            "media_refs": [],
+            "preview_path": "",
+            "preview_ref": "",
+        }, insert_at)
+        self.block_list.setCurrentItem(item)
+        self._refresh_all_cards()
+        self.title_edit.setFocus()
+        self.title_edit.selectAll()
+
+    def _delete_shot(self) -> None:
+        if self.block_list.count() <= 1:
+            return
+        row = self.block_list.currentRow()
+        if row < 0:
+            return
+        self.block_list.takeItem(row)
+        self.block_list.setCurrentRow(min(row, self.block_list.count() - 1))
+        self._refresh_all_cards()
+
+    def entries(self) -> list[dict]:
+        self._save_selected()
+        self._refresh_all_cards()
+        return [
+            deepcopy(self.block_list.item(index).data(Qt.UserRole) or {})
+            for index in range(self.block_list.count())
+        ]
+
+    def _accept_if_valid(self) -> None:
+        if not self.block_list.count():
+            QMessageBox.warning(self, "Storyboard", "At least one Shot is required.")
+            return
+        self.accept()
 
 
 class DirectorCueDialog(QDialog):
@@ -3833,8 +5746,50 @@ class DirectorCueDialog(QDialog):
     def __init__(self, cue: DirectorCue, duration: float, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.cue_type = cue.cue_type
+        self._native_audio_original = cue.native_audio_direction
+        self._environment_continuity_original = cue.environment_continuity
+        self._audio_reference_intent_original = cue.audio_reference_intent
+        self._native_audio_qc_original = cue.native_audio_qc_status
+        self._environment_physics_originals = {
+            "environment_interaction": cue.environment_interaction,
+            "incoming_environment_state": cue.incoming_environment_state,
+            "outgoing_environment_state": cue.outgoing_environment_state,
+            "crowd_reaction": cue.crowd_reaction,
+            "location_transition": cue.location_transition,
+        }
+        self._environment_state_original = cue.environment_state_status
+        self._environment_physics_schema_version = cue.environment_physics_schema_version
+        self._combat_action_originals = {
+            "combat_action_chain": cue.combat_action_chain,
+            "incoming_combat_state": cue.incoming_combat_state,
+            "outgoing_combat_state": cue.outgoing_combat_state,
+            "next_action_trigger": cue.next_action_trigger,
+        }
+        self._combat_continuity_status_original = cue.combat_continuity_status
+        self._combat_continuity_notes_original = cue.combat_continuity_notes
+        self._combat_action_schema_version = cue.combat_action_schema_version
+        self._combat_action_override_flags = {
+            "combat_action_chain": cue.combat_action_chain_user_edited,
+            "incoming_combat_state": cue.incoming_combat_state_user_edited,
+            "outgoing_combat_state": cue.outgoing_combat_state_user_edited,
+            "next_action_trigger": cue.next_action_trigger_user_edited,
+        }
+        self._environment_physics_override_flags = {
+            "environment_interaction": cue.environment_interaction_user_edited,
+            "incoming_environment_state": cue.incoming_environment_state_user_edited,
+            "outgoing_environment_state": cue.outgoing_environment_state_user_edited,
+            "crowd_reaction": cue.crowd_reaction_user_edited,
+            "location_transition": cue.location_transition_user_edited,
+        }
+        self._native_audio_override_flags = {
+            "native_audio_direction": cue.native_audio_direction_user_edited,
+            "environment_continuity": cue.environment_continuity_user_edited,
+            "audio_reference_intent": cue.audio_reference_intent_user_edited,
+            "native_audio_qc_status": cue.native_audio_qc_user_edited,
+        }
         self.setWindowTitle(f"{cue.cue_type.title()} Tool · {cue.cue_id}")
         self.setMinimumWidth(460)
+        self.resize(760, 860)
         layout = QVBoxLayout(self)
         form = QFormLayout()
         self.preset_combo = QComboBox()
@@ -3915,6 +5870,112 @@ class DirectorCueDialog(QDialog):
             form.addRow("State to preserve", self.continuity_state_edit)
             form.addRow("Optional flourish", self.optional_flourish_edit)
             form.addRow("Additional direction", self.detail_edit)
+            self.environment_interaction_edit = QPlainTextEdit(cue.environment_interaction)
+            self.environment_interaction_edit.setPlaceholderText(
+                "Auto: visible fighter cause → contact target → primary response → optional secondary response"
+            )
+            self.environment_interaction_edit.setFixedHeight(74)
+            self.incoming_environment_state_edit = QPlainTextEdit(cue.incoming_environment_state)
+            self.incoming_environment_state_edit.setPlaceholderText(
+                "Auto: location and persistent damage/displacement inherited from the previous Shot"
+            )
+            self.incoming_environment_state_edit.setFixedHeight(58)
+            self.outgoing_environment_state_edit = QPlainTextEdit(cue.outgoing_environment_state)
+            self.outgoing_environment_state_edit.setPlaceholderText(
+                "Auto: persistent environment state handed to the following Shot"
+            )
+            self.outgoing_environment_state_edit.setFixedHeight(58)
+            self.crowd_reaction_edit = QPlainTextEdit(cue.crowd_reaction)
+            self.crowd_reaction_edit.setPlaceholderText(
+                "Auto: delayed perimeter-spectator reaction; never an extra combatant"
+            )
+            self.crowd_reaction_edit.setFixedHeight(58)
+            self.location_transition_edit = QPlainTextEdit(cue.location_transition)
+            self.location_transition_edit.setPlaceholderText(
+                "Auto: indoor, threshold or outdoor route continuity driven by active combat"
+            )
+            self.location_transition_edit.setFixedHeight(68)
+            physics_status = cue.environment_state_status or "Not tracked"
+            self.environment_state_label = QLabel(physics_status.replace("_", " ").title())
+            self.environment_state_label.setWordWrap(True)
+            form.addRow("Environment Interaction", self.environment_interaction_edit)
+            form.addRow("Incoming Environment State", self.incoming_environment_state_edit)
+            form.addRow("Outgoing Environment State", self.outgoing_environment_state_edit)
+            form.addRow("Crowd Reaction", self.crowd_reaction_edit)
+            form.addRow("Location Transition", self.location_transition_edit)
+            form.addRow("Environment State", self.environment_state_label)
+            self.combat_action_chain_edit = QPlainTextEdit(cue.combat_action_chain)
+            self.combat_action_chain_edit.setPlaceholderText(
+                "Auto: two chronological attack/defence beats executed inside this Shot"
+            )
+            self.combat_action_chain_edit.setFixedHeight(74)
+            self.incoming_combat_state_edit = QPlainTextEdit(cue.incoming_combat_state)
+            self.incoming_combat_state_edit.setPlaceholderText(
+                "Auto: inherited positions, facing, velocity, support and guard/grip state"
+            )
+            self.incoming_combat_state_edit.setFixedHeight(58)
+            self.outgoing_combat_state_edit = QPlainTextEdit(cue.outgoing_combat_state)
+            self.outgoing_combat_state_edit.setPlaceholderText(
+                "Auto: exact fighter state handed to the following Shot"
+            )
+            self.outgoing_combat_state_edit.setFixedHeight(58)
+            self.next_action_trigger_edit = QPlainTextEdit(cue.next_action_trigger)
+            self.next_action_trigger_edit.setPlaceholderText(
+                "Auto: contact, recoil or displacement that triggers the next Beat"
+            )
+            self.next_action_trigger_edit.setFixedHeight(58)
+            combat_status = cue.combat_continuity_status or "Not tracked"
+            self.combat_continuity_label = QLabel(
+                combat_status.replace("_", " ").title()
+                + ((" · " + cue.combat_continuity_notes) if cue.combat_continuity_notes else "")
+            )
+            self.combat_continuity_label.setWordWrap(True)
+            ledger_text = cue.combat_fact_context or "Not tracked"
+            self.combat_fact_label = QLabel(ledger_text)
+            self.combat_fact_label.setWordWrap(True)
+            self.combat_duty_label = QLabel(
+                (cue.combat_story_duty or "Not tracked")
+                + (f" · {cue.combat_story_duty_instruction}" if cue.combat_story_duty_instruction else "")
+            )
+            self.combat_duty_label.setWordWrap(True)
+            self.combat_route_label = QLabel(
+                f"Carrier: {cue.combat_action_carrier or 'not tracked'} · "
+                f"Force: {(cue.combat_force_vector or {}).get('label', 'not tracked')} · "
+                f"Camera: {cue.camera_position_sector or 'not tracked'}"
+            )
+            self.combat_route_label.setWordWrap(True)
+            form.addRow("Combat Fact Ledger", self.combat_fact_label)
+            form.addRow("Five-Duty Role", self.combat_duty_label)
+            form.addRow("Action / Force / Camera", self.combat_route_label)
+            form.addRow("Combat Action Chain", self.combat_action_chain_edit)
+            form.addRow("Incoming Combat State", self.incoming_combat_state_edit)
+            form.addRow("Outgoing Combat State", self.outgoing_combat_state_edit)
+            form.addRow("Next Action Trigger", self.next_action_trigger_edit)
+            form.addRow("Combat Continuity", self.combat_continuity_label)
+            self.native_audio_direction_edit = QPlainTextEdit(cue.native_audio_direction)
+            self.native_audio_direction_edit.setPlaceholderText(
+                "Auto: acoustic space, camera distance, position, speaking state, ambience, Foley and diegetic-source rules"
+            )
+            self.native_audio_direction_edit.setFixedHeight(88)
+            self.environment_continuity_edit = QPlainTextEdit(cue.environment_continuity)
+            self.environment_continuity_edit.setPlaceholderText(
+                "Auto: same-space continuity, distance change, or interior/exterior acoustic transition"
+            )
+            self.environment_continuity_edit.setFixedHeight(68)
+            self.audio_reference_intent_edit = QPlainTextEdit(cue.audio_reference_intent)
+            self.audio_reference_intent_edit.setPlaceholderText(
+                "Auto: Audio/Video references guide location acoustics only; never copy words or voice identity"
+            )
+            self.audio_reference_intent_edit.setFixedHeight(68)
+            self.native_audio_qc_edit = QPlainTextEdit(cue.native_audio_qc_status)
+            self.native_audio_qc_edit.setPlaceholderText(
+                "Automatic read-only analysis result; editing protects this note from later QC updates"
+            )
+            self.native_audio_qc_edit.setFixedHeight(58)
+            form.addRow("Native Audio Direction", self.native_audio_direction_edit)
+            form.addRow("Environment Continuity", self.environment_continuity_edit)
+            form.addRow("Audio Reference Intent", self.audio_reference_intent_edit)
+            form.addRow("Native Audio QC status", self.native_audio_qc_edit)
             budget_text = cue.action_budget_status.replace("_", " ").title()
             if cue.action_budget_notes:
                 budget_text += " · " + cue.action_budget_notes
@@ -3957,7 +6018,14 @@ class DirectorCueDialog(QDialog):
         )
         self._apply_recommendation(force=False)
         self._refresh_action_budget_preview()
-        layout.addLayout(form)
+        form_host = QWidget()
+        form_host.setLayout(form)
+        form_scroll = QScrollArea()
+        form_scroll.setObjectName("directorCueScroll")
+        form_scroll.setWidgetResizable(True)
+        form_scroll.setFrameShape(QFrame.NoFrame)
+        form_scroll.setWidget(form_host)
+        layout.addWidget(form_scroll, 1)
         buttons = QDialogButtonBox(QDialogButtonBox.Save | QDialogButtonBox.Cancel)
         buttons.accepted.connect(self._validate)
         buttons.rejected.connect(self.reject)
@@ -4050,7 +6118,127 @@ class DirectorCueDialog(QDialog):
                 continuity_state=self.continuity_state_edit.toPlainText().strip(),
                 optional_flourish=self.optional_flourish_edit.toPlainText().strip(),
                 continuity_mode=self.continuity_combo.currentText(),
+                native_audio_direction=self.native_audio_direction_edit.toPlainText().strip(),
+                environment_continuity=self.environment_continuity_edit.toPlainText().strip(),
+                audio_reference_intent=self.audio_reference_intent_edit.toPlainText().strip(),
+                native_audio_qc_status=self.native_audio_qc_edit.toPlainText().strip(),
+                environment_interaction=self.environment_interaction_edit.toPlainText().strip(),
+                incoming_environment_state=self.incoming_environment_state_edit.toPlainText().strip(),
+                outgoing_environment_state=self.outgoing_environment_state_edit.toPlainText().strip(),
+                crowd_reaction=self.crowd_reaction_edit.toPlainText().strip(),
+                location_transition=self.location_transition_edit.toPlainText().strip(),
+                combat_action_chain=self.combat_action_chain_edit.toPlainText().strip(),
+                incoming_combat_state=self.incoming_combat_state_edit.toPlainText().strip(),
+                outgoing_combat_state=self.outgoing_combat_state_edit.toPlainText().strip(),
+                next_action_trigger=self.next_action_trigger_edit.toPlainText().strip(),
+                combat_continuity_status=self._combat_continuity_status_original,
+                combat_continuity_notes=self._combat_continuity_notes_original,
+                combat_action_schema_version=self._combat_action_schema_version,
+                environment_state_status=(
+                    "warning"
+                    if not self.environment_interaction_edit.toPlainText().strip()
+                    and bool(self._environment_physics_schema_version)
+                    else self._environment_state_original
+                ),
+                environment_physics_schema_version=self._environment_physics_schema_version,
+                environment_interaction_user_edited=(
+                    self._environment_physics_override_flags["environment_interaction"]
+                    or self.environment_interaction_edit.toPlainText().strip()
+                    != self._environment_physics_originals["environment_interaction"].strip()
+                ),
+                incoming_environment_state_user_edited=(
+                    self._environment_physics_override_flags["incoming_environment_state"]
+                    or self.incoming_environment_state_edit.toPlainText().strip()
+                    != self._environment_physics_originals["incoming_environment_state"].strip()
+                ),
+                outgoing_environment_state_user_edited=(
+                    self._environment_physics_override_flags["outgoing_environment_state"]
+                    or self.outgoing_environment_state_edit.toPlainText().strip()
+                    != self._environment_physics_originals["outgoing_environment_state"].strip()
+                ),
+                crowd_reaction_user_edited=(
+                    self._environment_physics_override_flags["crowd_reaction"]
+                    or self.crowd_reaction_edit.toPlainText().strip()
+                    != self._environment_physics_originals["crowd_reaction"].strip()
+                ),
+                location_transition_user_edited=(
+                    self._environment_physics_override_flags["location_transition"]
+                    or self.location_transition_edit.toPlainText().strip()
+                    != self._environment_physics_originals["location_transition"].strip()
+                ),
+                combat_action_chain_user_edited=(
+                    self._combat_action_override_flags["combat_action_chain"]
+                    or self.combat_action_chain_edit.toPlainText().strip()
+                    != self._combat_action_originals["combat_action_chain"].strip()
+                ),
+                incoming_combat_state_user_edited=(
+                    self._combat_action_override_flags["incoming_combat_state"]
+                    or self.incoming_combat_state_edit.toPlainText().strip()
+                    != self._combat_action_originals["incoming_combat_state"].strip()
+                ),
+                outgoing_combat_state_user_edited=(
+                    self._combat_action_override_flags["outgoing_combat_state"]
+                    or self.outgoing_combat_state_edit.toPlainText().strip()
+                    != self._combat_action_originals["outgoing_combat_state"].strip()
+                ),
+                next_action_trigger_user_edited=(
+                    self._combat_action_override_flags["next_action_trigger"]
+                    or self.next_action_trigger_edit.toPlainText().strip()
+                    != self._combat_action_originals["next_action_trigger"].strip()
+                ),
+                native_audio_direction_user_edited=(
+                    self._native_audio_override_flags["native_audio_direction"]
+                    or self.native_audio_direction_edit.toPlainText().strip()
+                    != self._native_audio_original.strip()
+                ),
+                environment_continuity_user_edited=(
+                    self._native_audio_override_flags["environment_continuity"]
+                    or self.environment_continuity_edit.toPlainText().strip()
+                    != self._environment_continuity_original.strip()
+                ),
+                audio_reference_intent_user_edited=(
+                    self._native_audio_override_flags["audio_reference_intent"]
+                    or self.audio_reference_intent_edit.toPlainText().strip()
+                    != self._audio_reference_intent_original.strip()
+                ),
+                native_audio_qc_user_edited=(
+                    self._native_audio_override_flags["native_audio_qc_status"]
+                    or self.native_audio_qc_edit.toPlainText().strip()
+                    != self._native_audio_qc_original.strip()
+                ),
             )
+            if self._environment_physics_schema_version:
+                def replace_engine_line(value: str, marker: str, content: str) -> str:
+                    prefix = f"[{marker}]"
+                    rows = [
+                        row.rstrip() for row in str(value or "").splitlines()
+                        if not row.strip().startswith(prefix)
+                    ]
+                    if content.strip():
+                        rows.append(prefix + " " + content.strip())
+                    return "\n".join(row for row in rows if row.strip()).strip()
+
+                state["environment_response"] = replace_engine_line(
+                    state["environment_response"],
+                    "ENV-PHYSICS",
+                    state["environment_interaction"]
+                    + (" CROWD RESPONSE - " + state["crowd_reaction"] if state["crowd_reaction"] else ""),
+                )
+                state["continuity_state"] = replace_engine_line(
+                    state["continuity_state"], "ENV-IN", state["incoming_environment_state"]
+                )
+                state["continuity_state"] = replace_engine_line(
+                    state["continuity_state"], "ENV-OUT", state["outgoing_environment_state"]
+                )
+                state["detail"] = replace_engine_line(
+                    state["detail"], "LOCATION", state["location_transition"]
+                )
+            if (
+                self._combat_action_schema_version
+                and state["combat_action_chain_user_edited"]
+                and state["combat_action_chain"]
+            ):
+                state["subject_action"] = state["combat_action_chain"]
             budgeted = normalize_shot_action_budget({
                 "start_seconds": start,
                 "end_seconds": end,
@@ -4075,8 +6263,14 @@ class DirectorCueDialog(QDialog):
 
 
 class WorkspaceDesignCommand(QUndoCommand):
-    def __init__(self, before: dict, after: dict, restore) -> None:
-        super().__init__("Apply AI Director Design")
+    def __init__(
+        self,
+        before: dict,
+        after: dict,
+        restore,
+        label: str = "Apply AI Director Design",
+    ) -> None:
+        super().__init__(label)
         self.before = before
         self.after = after
         self.restore = restore
@@ -4126,10 +6320,16 @@ class DesignPageDialog(QDialog):
         self.concept_blip_runner.finished.connect(self._concept_blip_finished)
         self.pending_action = ""
         self.validated_plan: dict | None = None
+        self.apply_in_progress = False
+        self.apply_preflight_blockers: list[str] = []
+        self.apply_preflight_warnings: list[str] = []
         self.pipeline_stage = ""
         self.pending_requirement = ""
         self.required_text_layers: list[dict] = []
         self.duration_contract_retry_count = 0
+        self.dialogue_language_retry_count = 0
+        self.speech_layer_retry_count = 0
+        self.design_json_retry_count = 0
         self.concept_image_path: Path | None = None
         self.concept_blip_caption = ""
         self.concept_media_result: dict = {}
@@ -4270,6 +6470,10 @@ class DesignPageDialog(QDialog):
                 "VoxCPM2 Local · create an exact local authored-speech WAV",
             ),
             (
+                "qwen3_tts_local", "Qwen",
+                "Qwen3-TTS Local · fast offline CustomVoice authored-speech WAV",
+            ),
+            (
                 "edge_tts", "Etts",
                 "Edge TTS · create an exact online neural authored-speech WAV",
             ),
@@ -4294,6 +6498,69 @@ class DesignPageDialog(QDialog):
             self.dialogue_mode_group.addButton(button)
             self.dialogue_mode_buttons[engine] = button
             requirement_header.addWidget(button)
+        requirement_header.addWidget(QLabel("LANG"))
+        self.dialogue_language_combo = QComboBox()
+        self.dialogue_language_combo.setObjectName("designDialogueLanguage")
+        self.dialogue_language_combo.setToolTip(
+            "Dialogue language for AI-authored Dialogue, Voice-over and Lyrics. "
+            "Auto deterministically follows the Design Requirement language."
+        )
+        self.dialogue_language_combo.addItem("Auto", "auto")
+        dialogue_language_labels = {
+            "Arabic": "Arabic",
+            "Chinese": "中文",
+            "English": "English",
+            "French": "Français",
+            "German": "Deutsch",
+            "Italian": "Italiano",
+            "Japanese": "日本語",
+            "Korean": "한국어",
+            "Portuguese": "Português",
+            "Russian": "Русский",
+            "Spanish": "Español",
+        }
+        for language in H3_STABLE_DIALOGUE_LANGUAGES:
+            self.dialogue_language_combo.addItem(
+                dialogue_language_labels.get(language, language), language
+            )
+        language_index = self.dialogue_language_combo.findData(
+            self.settings.dialogue_language
+        )
+        self.dialogue_language_combo.setCurrentIndex(max(0, language_index))
+        self.dialogue_language_combo.setMaximumWidth(118)
+        self.dialogue_language_combo.currentIndexChanged.connect(
+            self._dialogue_language_changed
+        )
+        requirement_header.addWidget(self.dialogue_language_combo)
+        self.subtitles_button = QPushButton()
+        self.subtitles_button.setObjectName("designSubtitlesToggle")
+        self.subtitles_button.setCheckable(True)
+        self.subtitles_button.setChecked(bool(self.settings.subtitles_enabled))
+        self.subtitles_button.setMaximumWidth(76)
+        self.subtitles_button.setToolTip(
+            "Subtitle switch. OFF keeps Dialogue/Voice-over editable on audio Text Layers "
+            "without visible captions. ON adds synchronized editable subtitle layers."
+        )
+        self.subtitles_button.toggled.connect(self._subtitles_toggled)
+        self._refresh_subtitles_button()
+        requirement_header.addWidget(self.subtitles_button)
+        requirement_header.addWidget(QLabel("MUSIC"))
+        self.music_mode_combo = QComboBox()
+        self.music_mode_combo.setObjectName("designMusicMode")
+        self.music_mode_combo.addItem("AUTO", "auto")
+        self.music_mode_combo.addItem("OFF", "off")
+        self.music_mode_combo.addItem("TIMELINE", "timeline")
+        self.music_mode_combo.setToolTip(
+            "AUTO lets Qwen plan scene-appropriate music for H3. OFF forbids non-diegetic "
+            "music. TIMELINE enables music only inside authored Timeline Music Cues."
+        )
+        music_mode_index = self.music_mode_combo.findData(
+            normalize_design_music_mode(self.context.get("music_mode", "auto"))
+        )
+        self.music_mode_combo.setCurrentIndex(max(0, music_mode_index))
+        self.music_mode_combo.setMaximumWidth(108)
+        self.music_mode_combo.currentIndexChanged.connect(self._music_mode_changed)
+        requirement_header.addWidget(self.music_mode_combo)
         concept_layout.addLayout(requirement_header)
         self.dialogue_model_warning = QLabel()
         self.dialogue_model_warning.setWordWrap(True)
@@ -4305,6 +6572,20 @@ class DesignPageDialog(QDialog):
             "then slowly zoom out to reveal a woman drinking it."
         )
         self.requirement_edit.setMinimumHeight(180)
+        initial_requirement = str(self.context.get("design_requirement", "")).strip()
+        special_skill_context = (
+            (self.context.get("bound_h3_skills") or {}).get("special") or {}
+        )
+        requirement_template = str(
+            special_skill_context.get("design_requirement_template", "")
+        ).strip()
+        if initial_requirement:
+            self.requirement_edit.setPlainText(initial_requirement)
+        elif requirement_template:
+            self.requirement_edit.setPlainText(requirement_template)
+            self.requirement_edit.setToolTip(
+                "Starter template loaded from the selected Special Skill. You can edit or replace it."
+            )
         concept_layout.addWidget(self.requirement_edit)
 
         media_intelligence = QGroupBox("MEDIA POOL INTELLIGENCE")
@@ -4582,6 +6863,21 @@ class DesignPageDialog(QDialog):
         context["selected_existing_media_ids"] = [
             self._inventory_media_id(row) for row in selected
         ]
+        context["character_reference_bindings"] = (
+            street_fighter_character_bindings(selected)
+            if _bound_special_skill_key(context) == "street-fighter-live-action-h3"
+            else []
+        )
+        selected_language = self.dialogue_language_combo.currentData()
+        requirement = self.requirement_edit.toPlainText().strip()
+        context["dialogue_language_policy"] = str(selected_language or "auto")
+        context["dialogue_language"] = infer_design_dialogue_language(
+            requirement, selected_language
+        )
+        context["subtitles_enabled"] = self.subtitles_button.isChecked()
+        context["music_mode"] = normalize_design_music_mode(
+            self.music_mode_combo.currentData()
+        )
         return context
 
     @staticmethod
@@ -4603,11 +6899,10 @@ class DesignPageDialog(QDialog):
                 known[self._inventory_media_id(row)] = item
         missing = sorted(requested.difference(known))
         if missing:
-            QMessageBox.warning(
-                self,
-                "Unknown Media Pool reference",
+            self._show_preflight_failure(
                 "These references are not loaded in the Media Pool: "
                 + ", ".join("@" + item for item in missing),
+                category="Explicit Media Pool reference",
             )
             return False
         for media_id in requested:
@@ -4656,6 +6951,10 @@ class DesignPageDialog(QDialog):
         self._save_current_provider_fields(provider)
         self.settings.provider = provider
         self.settings.timeout = self.timeout_spin.value()
+        self.settings.dialogue_language = str(
+            self.dialogue_language_combo.currentData() or "auto"
+        )
+        self.settings.subtitles_enabled = self.subtitles_button.isChecked()
         self.settings.generate_comfy_images = self.generate_images_check.isChecked()
         self.settings.image_checkpoint = self.image_checkpoint_combo.currentText().strip()
         self.settings.image_width = self.image_width_spin.value()
@@ -4671,7 +6970,10 @@ class DesignPageDialog(QDialog):
             if not self.runner.start(
                 str(self.runtime.python), [str(PROJECT_ROOT / "design_ai_service.py")]
             ):
-                QMessageBox.warning(self, "AI Design", "AI design service is still stopping")
+                self._show_preflight_failure(
+                    "AI design service is still stopping; retry when the worker exits.",
+                    category="Execution state",
+                )
                 return
         self.pending_action = action
         self.test_button.setEnabled(False)
@@ -4909,6 +7211,20 @@ class DesignPageDialog(QDialog):
         self._request_lm_unload()
 
     def _start_plan_images(self, plan: dict) -> None:
+        try:
+            validate_drone_image_request_budget(
+                plan,
+                _bound_special_skill_key(
+                    self.active_design_context or self._selected_design_context()
+                ),
+            )
+        except ValueError as exc:
+            # Keep the JSON editable, but never let a malformed duration or
+            # reference chain launch dozens of expensive Z-Image tasks.
+            self.design_image_warnings.append(str(exc))
+            plan.setdefault("design_warnings", []).append(str(exc))
+            self._finish_design_pipeline(plan)
+            return
         image_requests = [
             item for item in plan.get("media_requests") or []
             if item.get("media_type") == "image"
@@ -4926,6 +7242,10 @@ class DesignPageDialog(QDialog):
                 "request_index": image_index,
                 "local_path": str(concept_root / f"picture_{image_index + 1:02d}.png"),
             })
+        bind_design_source_plate_paths(
+            materials,
+            (self.active_design_context or self.context).get("existing_media") or [],
+        )
         job_path = CACHE_ROOT / f"z_image_design_job_{time.time_ns()}.json"
         job_path.write_text(json.dumps({
             "server": str(self.context.get("comfyui_server", "")).strip(),
@@ -5170,9 +7490,32 @@ class DesignPageDialog(QDialog):
             if requested_duration is not None
             else ""
         )
+        dialogue_language = infer_design_dialogue_language(
+            self.pending_requirement,
+            planning_context.get("dialogue_language_policy", "auto"),
+        )
+        planning_context["dialogue_language"] = dialogue_language
+        dialogue_language_rule = (
+            "\n\nMANDATORY DIALOGUE LANGUAGE CONTRACT: The selected language is "
+            f"{dialogue_language}. Any Dialogue, Voice-over or Lyrics that you write must use "
+            f"natural {dialogue_language} words, and its text_layers.language must be exactly "
+            f"'{dialogue_language}'. Never default to English. Do not translate or rewrite exact "
+            "verbatim lines already supplied by the user."
+        )
+        requested_roles = requested_speech_roles(self.pending_requirement)
+        speech_layer_rule = (
+            "\n\nMANDATORY EDITABLE SPEECH TRACK CONTRACT: The user requested "
+            + ", ".join(sorted(role.replace("_", "-") for role in requested_roles))
+            + ". Author every spoken line as a separate timed text_layers row, set "
+              "explicit_user_requested=true, use an A track, and keep the spoken words out "
+              "of all Shot prompt fields. Returning zero matching speech layers is invalid."
+            if requested_roles else ""
+        )
         prompt = (
             self.pending_requirement
             + duration_rule
+            + dialogue_language_rule
+            + speech_layer_rule
             + "\n\nMEDIA POOL RULE: @P1, @V1 and @A1 are stable references to the "
               "selected workspace assets, not generated placeholders. An explicit @ID in the "
               "requirement is mandatory: include it in existing_media_uses and preserve its "
@@ -5198,6 +7541,7 @@ class DesignPageDialog(QDialog):
             "system_prompt": build_design_system_prompt(planning_context),
             "user_prompt": prompt,
             "schema": DESIGN_JSON_SCHEMA,
+            "max_output_tokens": 32768,
         })
         self._set_design_stage(
             "Stage 1/4 · LM Studio is planning shots and requested image count…",
@@ -5206,13 +7550,20 @@ class DesignPageDialog(QDialog):
 
     def _handle_design_generated(self, payload: dict) -> None:
         try:
+            planning_context = (
+                self.active_design_context or self._selected_design_context()
+            )
             plan = normalize_design_plan(
                 payload.get("text", ""),
                 self.capacities,
-                existing_media=self.context.get("existing_media") or [],
+                existing_media=planning_context.get("existing_media") or [],
                 strict_t2i_prompts=True,
                 repair_media_plan=True,
                 authored_requirement=self.pending_requirement,
+                special_skill_key=_bound_special_skill_key(
+                    planning_context
+                ),
+                selected_media_ids=planning_context.get("selected_existing_media_ids"),
             )
             if self.pipeline_stage == "lm_refine" and self.planned_plan:
                 # Refinement may improve generated-image prompts and shot language,
@@ -5234,6 +7585,27 @@ class DesignPageDialog(QDialog):
             validate_explicit_timed_text_contract(
                 self.pending_requirement, plan
             )
+            dialogue_language = (
+                self.active_design_context or self._selected_design_context()
+            ).get("dialogue_language", "")
+            plan = enforce_design_dialogue_language(
+                plan,
+                dialogue_language,
+                authored_requirement=self.pending_requirement,
+            )
+            plan = enforce_design_subtitle_policy(
+                plan,
+                bool((self.active_design_context or self._selected_design_context()).get(
+                    "subtitles_enabled", False
+                )),
+                authored_requirement=self.pending_requirement,
+            )
+            plan = enforce_design_music_mode(
+                plan,
+                (self.active_design_context or self._selected_design_context()).get(
+                    "music_mode", "auto"
+                ),
+            )
             required_media_ids = self._explicit_media_ids(self.pending_requirement)
             planned_media_ids = {
                 str(item.get("media_id", "")).upper()
@@ -5247,8 +7619,20 @@ class DesignPageDialog(QDialog):
             }
             unselected_ids = sorted(planned_media_ids.difference(selected_media_ids))
             if unselected_ids:
-                raise ValueError(
-                    "AI selected Media Pool assets that were not enabled for this Design: "
+                missing_explicit = sorted(
+                    set(unselected_ids).intersection(required_media_ids)
+                )
+                if missing_explicit:
+                    raise ValueError(
+                        "Explicit Media Pool references are not enabled for this Design: "
+                        + ", ".join("@" + item for item in missing_explicit)
+                    )
+                plan["existing_media_uses"] = [
+                    item for item in plan.get("existing_media_uses") or []
+                    if str(item.get("media_id", "")).upper() not in unselected_ids
+                ]
+                self.design_image_warnings.append(
+                    "Removed model-selected Media Pool references that were not enabled: "
                     + ", ".join("@" + item for item in unselected_ids)
                 )
             ignored_ids = sorted(required_media_ids.difference(planned_media_ids))
@@ -5258,6 +7642,51 @@ class DesignPageDialog(QDialog):
                     + ", ".join("@" + item for item in ignored_ids)
                     + ". Regenerate or add them to existing_media_uses."
                 )
+            validate_requested_speech_layer_contract(
+                self.pending_requirement, plan
+            )
+        except DesignJSONDecodeError as exc:
+            finish_reason = str(payload.get("finish_reason", "")).strip() or "not reported"
+            output_characters = int(payload.get("output_characters", 0) or 0)
+            if self.pipeline_stage == "lm_refine" and self.planned_plan:
+                self.design_image_warnings.append(
+                    "LM refinement returned incomplete JSON; retained the validated first "
+                    f"Design Plan. finish_reason={finish_reason}, output={output_characters:,} "
+                    f"characters, error line {exc.line}, column {exc.column}."
+                )
+                self._finish_design_pipeline(self.planned_plan)
+                return
+            if self.pipeline_stage == "lm_plan" and self.design_json_retry_count < 1:
+                self.design_json_retry_count += 1
+                self._set_design_stage(
+                    "Stage 1/4 · JSON was incomplete · automatically retrying a compact complete Plan…"
+                )
+                self._start_lm_design(
+                    fallback_note=(
+                        "JSON COMPLETION RECOVERY: The previous response could not be parsed "
+                        f"at line {exc.line}, column {exc.column}; finish_reason={finish_reason}, "
+                        f"output_characters={output_characters}. Rebuild the entire plan from the "
+                        "original requirement. Return exactly one compact schema-valid JSON object "
+                        "with no markdown or commentary. Preserve every required Shot, Dialogue, "
+                        "Voice-over, continuity state and media range, but remove redundant prose. "
+                        "Close every string, array and object and include the final Shot and Final Hold."
+                    )
+                )
+                return
+            self._set_pipeline_busy(False)
+            self.design_busy_overlay.stop()
+            self.json_edit.setPlainText(str(payload.get("text", "")))
+            self._show_preflight_failure(
+                (
+                    f"{exc}. The model returned invalid JSON after one automatic retry. "
+                    "This is not the Design Requirement text-box limit. "
+                    f"finish_reason={finish_reason}; output={output_characters:,} characters; "
+                    "completion budget=32,768 tokens. Try a structured-output-capable model or "
+                    "reduce unusually repetitive Skill instructions."
+                ),
+                category="Design JSON completion",
+            )
+            return
         except DesignDurationContractError as exc:
             if self.pipeline_stage == "lm_refine" and self.planned_plan:
                 self.design_image_warnings.append(
@@ -5283,15 +7712,86 @@ class DesignPageDialog(QDialog):
             self._set_pipeline_busy(False)
             self.design_busy_overlay.stop()
             self.json_edit.setPlainText(str(payload.get("text", "")))
-            self.status_label.setText("AI returned the wrong explicit duration")
-            QMessageBox.warning(self, "Invalid AI Design duration", str(exc))
+            self._show_preflight_failure(str(exc), category="Duration contract")
             return
+        except DesignDialogueLanguageContractError as exc:
+            if self.pipeline_stage == "lm_refine" and self.planned_plan:
+                self.design_image_warnings.append(
+                    "LM refinement changed the protected dialogue language; retained the "
+                    "validated first Design Plan instead. " + str(exc)
+                )
+                self._finish_design_pipeline(self.planned_plan)
+                return
+            if self.pipeline_stage == "lm_plan" and self.dialogue_language_retry_count < 1:
+                self.dialogue_language_retry_count += 1
+                selected = (
+                    self.active_design_context or self._selected_design_context()
+                ).get("dialogue_language", "Chinese")
+                self._start_lm_design(
+                    fallback_note=(
+                        "DIALOGUE LANGUAGE CORRECTION: The previous response was rejected. "
+                        f"Rewrite every AI-authored Dialogue, Voice-over and Lyrics line in "
+                        f"{selected}, set text_layers.language to '{selected}', and do not "
+                        "return English dialogue under another language label."
+                    )
+                )
+                return
+            self._set_pipeline_busy(False)
+            self.design_busy_overlay.stop()
+            warning = (
+                "Dialogue language mismatch remains editable on the Timeline; the plan was "
+                "preserved after one LM correction attempt. " + str(exc)
+            )
+            plan.setdefault("design_warnings", []).append(warning)
+            self.design_image_warnings.append(warning)
+            self.status_label.setText(
+                "Dialogue language warning · editable Text Layers preserved"
+            )
+        except DesignSpeechLayerContractError as exc:
+            if self.pipeline_stage == "lm_refine" and self.planned_plan:
+                fallback_plan = reconcile_requested_speech_layer_contract(
+                    self.pending_requirement, self.planned_plan
+                )
+                self.design_image_warnings.append(
+                    f"{SPEECH_TIMELINE_REMINDER_PREFIX} LM refinement returned no editable "
+                    "speech words; retained the first Design Plan and added a red Timeline reminder."
+                )
+                self._finish_design_pipeline(fallback_plan)
+                return
+            if self.pipeline_stage == "lm_plan" and self.speech_layer_retry_count < 1:
+                self.speech_layer_retry_count += 1
+                selected = (
+                    self.active_design_context or self._selected_design_context()
+                ).get("dialogue_language", "Chinese")
+                self._start_lm_design(
+                    fallback_note=(
+                        "EDITABLE SPEECH TRACK CORRECTION: The previous response was rejected. "
+                        "Do not describe speech inside Shot prompts. Create every requested "
+                        "Dialogue/Voice-over/Lyrics line as a timed text_layers row on an A "
+                        f"track in {selected}, with explicit_user_requested=true."
+                    )
+                )
+                return
+            # A generic request such as "add suitable dialogue" has no exact
+            # user wording to restore. After one LM retry, preserve the visual
+            # Design, add a red Timeline reminder and continue to Workspace.
+            # Exact time-coded authored lines were validated above and remain
+            # blocking if they cannot be recovered.
+            plan = reconcile_requested_speech_layer_contract(
+                self.pending_requirement, plan
+            )
+            self.design_image_warnings.append(
+                f"{SPEECH_TIMELINE_REMINDER_PREFIX} AI returned no editable speech words after "
+                "retry; Workspace Apply remains available and the Timeline is highlighted."
+            )
+            self.status_label.setText(
+                "Speech track missing · continuing with a red Timeline reminder"
+            )
         except ValueError as exc:
             self._set_pipeline_busy(False)
             self.design_busy_overlay.stop()
             self.json_edit.setPlainText(str(payload.get("text", "")))
-            self.status_label.setText("AI returned JSON that needs correction")
-            QMessageBox.warning(self, "Invalid AI Design JSON", str(exc))
+            self._show_preflight_failure(str(exc), category="Design JSON")
             return
         if self.pipeline_stage == "lm_refine" and self.planned_plan:
             refined_images = [
@@ -5360,10 +7860,14 @@ class DesignPageDialog(QDialog):
     def generate_design(self) -> None:
         requirement = self.requirement_edit.toPlainText().strip()
         if not requirement:
-            QMessageBox.information(self, "Design requirement", "Describe the video you want to create.")
+            self._show_preflight_failure(
+                "Describe the video you want to create.", category="Design requirement"
+            )
             return
         if not self.model_combo.currentText().strip():
-            QMessageBox.information(self, "Model required", "Enter or select a model name first.")
+            self._show_preflight_failure(
+                "Enter or select a model name first.", category="AI model"
+            )
             return
         self.refresh_media_inventory()
         if not self._select_explicit_media_references(requirement):
@@ -5377,6 +7881,9 @@ class DesignPageDialog(QDialog):
         self.pending_requirement = requirement
         self.required_text_layers = extract_explicit_timed_text_layers(requirement)
         self.duration_contract_retry_count = 0
+        self.dialogue_language_retry_count = 0
+        self.speech_layer_retry_count = 0
+        self.design_json_retry_count = 0
         self.planned_plan = None
         self.generated_references = []
         self.design_image_warnings = []
@@ -5389,13 +7896,51 @@ class DesignPageDialog(QDialog):
         self._start_lm_design()
 
     def _select_design_dialogue_mode(self, engine: str) -> None:
-        if engine not in {"h3_native", "voxcpm2_local", "edge_tts"}:
+        if engine not in {
+            "h3_native", "voxcpm2_local", "qwen3_tts_local", "edge_tts"
+        }:
             return
         self.design_tts_engine = engine
         button = self.dialogue_mode_buttons.get(engine)
         if button and not button.isChecked():
             button.setChecked(True)
         self._refresh_design_voxcpm_model_status()
+        self._invalidate_json()
+
+    def _dialogue_language_changed(self, _index: int) -> None:
+        resolved = infer_design_dialogue_language(
+            self.requirement_edit.toPlainText().strip(),
+            self.dialogue_language_combo.currentData(),
+        )
+        self.dialogue_language_combo.setToolTip(
+            "H3 stable dialogue language. Current resolved language: " + resolved
+        )
+        self._invalidate_json()
+
+    def _refresh_subtitles_button(self) -> None:
+        enabled = self.subtitles_button.isChecked()
+        self.subtitles_button.setText("SUB ON" if enabled else "SUB OFF")
+        self.subtitles_button.setStyleSheet(
+            "background:#155e75; border:1px solid #55cfdf;" if enabled else ""
+        )
+
+    def _subtitles_toggled(self, _checked: bool) -> None:
+        self._refresh_subtitles_button()
+        self._invalidate_json()
+
+    def _music_mode_changed(self, _index: int) -> None:
+        self.music_mode_combo.setToolTip({
+            "off": (
+                "MUSIC OFF: H3 receives no non-diegetic score; only dialogue, ambience and Foley."
+            ),
+            "auto": (
+                "MUSIC AUTO: Qwen plans scene-appropriate instrumentation and dramatic development; "
+                "H3 generates it natively and keeps it below dialogue."
+            ),
+            "timeline": (
+                "MUSIC TIMELINE: H3 receives music only where a Timeline Music Cue is active."
+            ),
+        }[normalize_design_music_mode(self.music_mode_combo.currentData())])
         self._invalidate_json()
 
     def _refresh_design_voxcpm_model_status(self) -> None:
@@ -5416,12 +7961,51 @@ class DesignPageDialog(QDialog):
                 button.setToolTip(
                     "VoxCPM2 Local · model ready in " + str(VOXCPM_MODEL_DIR)
                 )
-        selected_missing = bool(missing) and self.design_tts_engine == "voxcpm2_local"
+        qwen_runtime_missing = qwen3_tts_runtime_missing()
+        qwen_support_missing = qwen3_tts_support_missing()
+        qwen_model_missing = qwen3_tts_model_missing()
+        qwen_missing = [
+            *(f"runtime/{item}" for item in qwen_runtime_missing),
+            *(f"support/{item}" for item in qwen_support_missing),
+            *(f"model/{item}" for item in qwen_model_missing),
+        ]
+        qwen_button = self.dialogue_mode_buttons.get("qwen3_tts_local")
+        if qwen_button is not None:
+            if qwen_missing:
+                qwen_button.setStyleSheet(
+                    "background:#6b321f; border:1px solid #ffad42; "
+                    "color:#fff2dc; font-weight:700;"
+                )
+                qwen_button.setToolTip(
+                    "QWEN3-TTS MISSING · runtime: "
+                    + str(QWEN3_TTS_RUNTIME_DIR)
+                    + " · model: "
+                    + str(QWEN3_TTS_MODEL_DIR)
+                )
+            else:
+                qwen_button.setStyleSheet("")
+                qwen_button.setToolTip(
+                    "Qwen3-TTS Local · model ready in " + str(QWEN3_TTS_MODEL_DIR)
+                )
+        selected_missing = (
+            (bool(missing) and self.design_tts_engine == "voxcpm2_local")
+            or (bool(qwen_missing) and self.design_tts_engine == "qwen3_tts_local")
+        )
         self.dialogue_model_warning.setVisible(selected_missing)
-        if selected_missing:
+        if selected_missing and self.design_tts_engine == "voxcpm2_local":
             self.dialogue_model_warning.setText(
                 "⚠ VOXCPM2 MODEL MISSING · Download openbmb/VoxCPM2 to "
                 f"{VOXCPM_MODEL_DIR}\nMissing: {', '.join(missing)}"
+            )
+            self.dialogue_model_warning.setStyleSheet(
+                "background:#4a251a; color:#ffd28b; border:1px solid #ff9d38; "
+                "padding:5px; font-weight:700;"
+            )
+        elif selected_missing:
+            self.dialogue_model_warning.setText(
+                "⚠ QWEN3-TTS MISSING · Run install_qwen3_tts_runtime.bat and "
+                "download Qwen/Qwen3-TTS-12Hz-0.6B-CustomVoice to "
+                f"{QWEN3_TTS_MODEL_DIR}\nMissing: {', '.join(qwen_missing)}"
             )
             self.dialogue_model_warning.setStyleSheet(
                 "background:#4a251a; color:#ffd28b; border:1px solid #ff9d38; "
@@ -5505,8 +8089,9 @@ class DesignPageDialog(QDialog):
                 return
             self.design_busy_overlay.stop()
             self._set_pipeline_busy(False)
-            self.status_label.setText("AI Design error")
-            QMessageBox.warning(self, "AI Design", str(payload["error"]))
+            self._show_preflight_failure(
+                str(payload["error"]), category="AI Design service"
+            )
             return
         if payload.get("connected"):
             self._set_pipeline_busy(False)
@@ -5552,15 +8137,22 @@ class DesignPageDialog(QDialog):
                 plan = normalize_design_plan(
                     payload.get("text", ""),
                     self.capacities,
-                    existing_media=self.context.get("existing_media") or [],
+                    existing_media=(
+                        self.active_design_context or self._selected_design_context()
+                    ).get("existing_media") or [],
                     strict_t2i_prompts=True,
                     repair_media_plan=True,
                     authored_requirement=self.pending_requirement,
+                    special_skill_key=_bound_special_skill_key(
+                        self.active_design_context or self._selected_design_context()
+                    ),
+                    selected_media_ids=(
+                        self.active_design_context or self._selected_design_context()
+                    ).get("selected_existing_media_ids"),
                 )
             except ValueError as exc:
                 self.json_edit.setPlainText(str(payload.get("text", "")))
-                self.status_label.setText("AI returned JSON that needs correction")
-                QMessageBox.warning(self, "Invalid AI Design JSON", str(exc))
+                self._show_preflight_failure(str(exc), category="Design JSON")
                 return
             self.json_edit.blockSignals(True)
             self.json_edit.setPlainText(json.dumps(plan, ensure_ascii=False, indent=2))
@@ -5596,7 +8188,66 @@ class DesignPageDialog(QDialog):
 
     def _invalidate_json(self) -> None:
         self.validated_plan = None
+        self.apply_preflight_blockers = []
+        self.apply_preflight_warnings = []
         self.apply_button.setEnabled(False)
+
+    @staticmethod
+    def _preflight_lines(
+        *,
+        repairs: list[str] | None = None,
+        warnings: list[str] | None = None,
+        blockers: list[str] | None = None,
+    ) -> list[str]:
+        repairs = [str(item) for item in repairs or [] if str(item).strip()]
+        warnings = [str(item) for item in warnings or [] if str(item).strip()]
+        blockers = [str(item) for item in blockers or [] if str(item).strip()]
+        lines = [
+            "APPLY PREFLIGHT REPORT",
+            "STATUS: " + ("HARD BLOCK" if blockers else "READY"),
+            f"AUTO-FIX: {len(repairs)} · WARNING: {len(warnings)} · HARD BLOCK: {len(blockers)}",
+        ]
+        if repairs:
+            lines.extend(["", "AUTO-FIXED", *(f"  ✓ {item}" for item in repairs)])
+        if warnings:
+            lines.extend(["", "WARNINGS · Apply remains available", *(f"  ⚠ {item}" for item in warnings)])
+        if blockers:
+            lines.extend(["", "HARD BLOCKERS · correct these before Apply", *(f"  ✕ {item}" for item in blockers)])
+        return lines
+
+    def _show_preflight_failure(self, message: str, *, category: str = "Validation") -> None:
+        self.apply_in_progress = False
+        self.design_busy_overlay.stop()
+        self._set_pipeline_busy(False)
+        self.apply_preflight_blockers = [f"{category}: {message}"]
+        self.summary_edit.setPlainText("\n".join(self._preflight_lines(
+            blockers=self.apply_preflight_blockers,
+        )))
+        self.apply_button.setEnabled(False)
+        self.status_label.setText(
+            "Apply stopped by one actionable Hard Block · Design remains open"
+        )
+
+    def mark_apply_failed(self, message: str, *, category: str = "Workspace") -> None:
+        """Return an unsuccessful downstream Apply to the editable Design page."""
+
+        self._show_preflight_failure(message, category=category)
+        self.apply_button.setEnabled(self.validated_plan is not None)
+
+    def mark_apply_succeeded(self, warnings: list[str] | None = None) -> None:
+        """Close only after the Timeline/Workspace commit is actually durable."""
+
+        self.apply_in_progress = False
+        self.design_busy_overlay.stop()
+        if warnings:
+            self.apply_preflight_warnings.extend(str(item) for item in warnings)
+        self.status_label.setText("Apply complete · H3 Workspace committed")
+        self.concept_preview_frame.hide()
+        self.concept_thumbnail.clear()
+        self.concept_caption_label.clear()
+        self.generated_references.clear()
+        self.concept_blip_jobs.clear()
+        self.accept()
 
     def load_design_json(self) -> None:
         filename, _ = QFileDialog.getOpenFileName(
@@ -5610,7 +8261,7 @@ class DesignPageDialog(QDialog):
         try:
             text = Path(filename).read_text(encoding="utf-8-sig")
         except OSError as exc:
-            QMessageBox.warning(self, "Load Director Design JSON", str(exc))
+            self._show_preflight_failure(str(exc), category="Load Design JSON")
             return
         self.generated_references = []
         self.design_image_warnings = []
@@ -5622,21 +8273,64 @@ class DesignPageDialog(QDialog):
             )
 
     def validate_json(self) -> bool:
+        preflight_warnings: list[str] = []
         try:
             context = self._selected_design_context()
             requirement = (
                 self.pending_requirement
                 or self.requirement_edit.toPlainText().strip()
             )
-            plan = normalize_design_plan(
+            blockers = collect_design_preflight_blockers(
                 self.json_edit.toPlainText(),
                 self.capacities,
                 existing_media=self.context.get("existing_media") or [],
+                authored_requirement=requirement,
+                selected_media_ids=context.get("selected_existing_media_ids") or [],
+            )
+            if blockers:
+                self.apply_in_progress = False
+                self.design_busy_overlay.stop()
+                self._set_pipeline_busy(False)
+                self.apply_preflight_blockers = blockers
+                self.summary_edit.setPlainText("\n".join(self._preflight_lines(
+                    blockers=blockers,
+                )))
+                self.apply_button.setEnabled(False)
+                self.status_label.setText(
+                    f"Apply Preflight found {len(blockers)} Hard Block(s) · Design remains open"
+                )
+                return False
+            plan = normalize_design_plan(
+                self.json_edit.toPlainText(),
+                self.capacities,
+                existing_media=context.get("existing_media") or [],
                 repair_media_plan=True,
                 authored_requirement=requirement,
+                special_skill_key=_bound_special_skill_key(context),
+                selected_media_ids=context.get("selected_existing_media_ids"),
             )
             plan = protect_explicit_timed_text_layers(plan, requirement)
             validate_explicit_timed_text_contract(requirement, plan)
+            try:
+                plan = enforce_design_dialogue_language(
+                    plan,
+                    context.get("dialogue_language", ""),
+                    authored_requirement=requirement,
+                )
+            except DesignDialogueLanguageContractError as exc:
+                preflight_warnings.append(
+                    "Dialogue language could not be deterministically rewritten locally; "
+                    "the editable Text Layers were preserved for correction. " + str(exc)
+                )
+            plan = enforce_design_subtitle_policy(
+                plan,
+                context.get("subtitles_enabled", False),
+                authored_requirement=requirement,
+            )
+            plan = enforce_design_music_mode(
+                plan, context.get("music_mode", "auto")
+            )
+            plan = reconcile_requested_speech_layer_contract(requirement, plan)
             selected_ids = {
                 str(item).upper()
                 for item in context.get("selected_existing_media_ids") or []
@@ -5647,15 +8341,58 @@ class DesignPageDialog(QDialog):
             }
             unselected = sorted(planned_ids.difference(selected_ids))
             if unselected:
-                raise ValueError(
-                    "Enable these Media Pool assets before Apply: "
+                explicit_ids = self._explicit_media_ids(requirement)
+                missing_explicit = sorted(set(unselected).intersection(explicit_ids))
+                if missing_explicit:
+                    raise ValueError(
+                        "Explicit Media Pool references are not enabled: "
+                        + ", ".join("@" + item for item in missing_explicit)
+                    )
+                plan["existing_media_uses"] = [
+                    item for item in plan.get("existing_media_uses") or []
+                    if str(item.get("media_id", "")).upper() not in unselected
+                ]
+                preflight_warnings.append(
+                    "Removed model-selected Media Pool references that were not enabled: "
                     + ", ".join("@" + item for item in unselected)
                 )
         except ValueError as exc:
-            self.summary_edit.setPlainText("INVALID\n\n" + str(exc))
-            self.apply_button.setEnabled(False)
+            self._show_preflight_failure(str(exc))
             return False
+        plan.setdefault("design_warnings", []).extend(preflight_warnings)
+        if (
+            self.design_tts_engine == "voxcpm2_local"
+            and voxcpm_model_missing()
+            and any(
+                str(item.get("role", "")).strip().lower()
+                in {"dialogue", "voice_over", "lyrics"}
+                for item in plan.get("text_layers") or []
+            )
+        ):
+            plan["design_warnings"].append(
+                "VoxCPM2 model is missing. Apply will preserve editable speech Text Layers, "
+                "defer WAV generation and highlight dialogue as pending instead of stopping."
+            )
+        if (
+            self.design_tts_engine == "qwen3_tts_local"
+            and (
+                qwen3_tts_runtime_missing()
+                or qwen3_tts_support_missing()
+                or qwen3_tts_model_missing()
+            )
+            and any(
+                str(item.get("role", "")).strip().lower()
+                in {"dialogue", "voice_over", "lyrics"}
+                for item in plan.get("text_layers") or []
+            )
+        ):
+            plan["design_warnings"].append(
+                "Qwen3-TTS runtime/model is missing. Apply will preserve editable speech "
+                "Text Layers, defer WAV generation and highlight dialogue as pending."
+            )
         self.validated_plan = plan
+        self.apply_preflight_blockers = []
+        self.apply_preflight_warnings = preflight_warnings
         self._show_summary(plan)
         self.apply_button.setEnabled(True)
         return True
@@ -5666,7 +8403,11 @@ class DesignPageDialog(QDialog):
             counts[request["media_type"]] += 1
         reused = {kind: 0 for kind in ("image", "video", "audio")}
         reused_ids: list[str] = []
+        analysis_only_ids: list[str] = []
         for use in plan.get("existing_media_uses") or []:
+            if is_analysis_only_media_use(use):
+                analysis_only_ids.append(str(use.get("media_id", "")))
+                continue
             media_type = str(use.get("media_type", ""))
             if media_type in reused:
                 reused[media_type] += 1
@@ -5682,8 +8423,26 @@ class DesignPageDialog(QDialog):
         budget_warnings = [
             str(item) for item in plan.get("design_warnings") or [] if str(item).strip()
         ]
+        auto_fix_prefixes = (
+            "Auto-", "Inserted ", "Rebuilt ", "Renamed ", "Added ",
+        )
+        repairs = [
+            warning for warning in budget_warnings
+            if warning.startswith(auto_fix_prefixes)
+        ]
+        warnings = [
+            warning for warning in budget_warnings
+            if warning not in repairs
+        ]
         self.summary_edit.setPlainText(
             "\n".join((
+                *self._preflight_lines(
+                    repairs=repairs,
+                    warnings=warnings,
+                    blockers=self.apply_preflight_blockers,
+                ),
+                "",
+                "PLAN SUMMARY",
                 f"TITLE: {plan['title']}",
                 f"DURATION: {plan['duration_seconds']:.2f}s",
                 f"SHOTS: {len(plan['shots'])}",
@@ -5691,6 +8450,9 @@ class DesignPageDialog(QDialog):
                 f"TRANSITIONS: {len(plan['transitions'])}",
                 f"MARKERS: {len(plan['markers'])}",
                 "MEDIA POOL REUSE: " + (", ".join(reused_ids) if reused_ids else "none"),
+                "ANALYSIS-ONLY CONTROL: " + (
+                    ", ".join(analysis_only_ids) if analysis_only_ids else "none"
+                ),
                 f"REUSED: {reused['image']} image / {reused['video']} video / {reused['audio']} audio",
                 f"TO GENERATE: {counts['image']} image / {counts['video']} video / {counts['audio']} audio",
                 (
@@ -5699,7 +8461,6 @@ class DesignPageDialog(QDialog):
                     f"{budget_statuses.get('optional_trimmed', 0)} optional trimmed / "
                     f"{budget_statuses.get('priority_compressed', 0)} priority compressed"
                 ),
-                *("BUDGET WARNING: " + warning for warning in budget_warnings),
                 f"MEDIA: {counts['image']} image · {counts['video']} video · {counts['audio']} audio",
                 "",
                 "LM Studio reuses matching Media Pool intelligence first; Z-Image creates only missing requests.",
@@ -5710,24 +8471,6 @@ class DesignPageDialog(QDialog):
         if self.validated_plan is None and not self.validate_json():
             return
         plan = dict(self.validated_plan)
-        has_authored_speech = any(
-            str(item.get("role", "")).strip().lower()
-            in {"dialogue", "voice_over", "lyrics"}
-            and str(item.get("content", "")).strip()
-            for item in plan.get("text_layers") or []
-        )
-        if (
-            self.design_tts_engine == "voxcpm2_local"
-            and has_authored_speech
-            and voxcpm_model_missing()
-        ):
-            self._refresh_design_voxcpm_model_status()
-            QMessageBox.warning(
-                self,
-                "VoxCPM2 model missing",
-                voxcpm_missing_message(),
-            )
-            return
         requirement = (
             self.pending_requirement
             or self.requirement_edit.toPlainText().strip()
@@ -5735,10 +8478,19 @@ class DesignPageDialog(QDialog):
         try:
             validate_explicit_timed_text_contract(requirement, plan)
         except ValueError as exc:
-            QMessageBox.critical(self, "Authored text is missing", str(exc))
+            self._show_preflight_failure(str(exc), category="Authored text")
             return
+        plan = reconcile_requested_speech_layer_contract(requirement, plan)
         plan["_authored_requirement"] = requirement
         plan["_dialogue_tts_engine"] = self.design_tts_engine
+        plan["_dialogue_language"] = infer_design_dialogue_language(
+            requirement,
+            self.dialogue_language_combo.currentData(),
+        )
+        plan["_subtitles_enabled"] = self.subtitles_button.isChecked()
+        plan["_music_mode"] = normalize_design_music_mode(
+            self.music_mode_combo.currentData()
+        )
         plan["_required_text_layers"] = authored_text_layers_with_plan_assignments(
             requirement,
             plan,
@@ -5754,14 +8506,16 @@ class DesignPageDialog(QDialog):
             "comfyui_server": str(self.context.get("comfyui_server", "")).strip(),
             "timeout": min(120, self.timeout_spin.value()),
         }
-        self.apply_requested.emit(plan, self.replace_check.isChecked())
-        self.concept_preview_frame.hide()
-        self.concept_thumbnail.clear()
-        self.concept_caption_label.clear()
-        self.generated_references.clear()
-        self.concept_blip_jobs.clear()
+        self.apply_in_progress = True
+        self._set_pipeline_busy(True)
+        self.design_busy_overlay.start(
+            "Apply preflight passed · committing Timeline and Workspace…"
+        )
+        self.status_label.setText(
+            "Apply preflight passed · waiting for durable Workspace commit"
+        )
         self.cleanup_requested.emit(cleanup)
-        self.accept()
+        self.apply_requested.emit(plan, self.replace_check.isChecked())
 
     def closeEvent(self, event) -> None:  # noqa: N802
         self._persist_settings()
@@ -5804,6 +8558,7 @@ class DirectorCutStudio(QMainWindow):
         self.blip_cpu_mode = self.render_settings.blip_device == "cpu"
         self.blip_restart_after_jobs = False
         self.audio_jobs: dict[str, MediaAsset] = {}
+        self.native_audio_qc_jobs: dict[str, dict] = {}
         self.audio_runner = JsonLineProcess(self, "audio")
         self.audio_runner.message.connect(self._handle_audio_payload)
         self.audio_runner.finished.connect(self._audio_service_finished)
@@ -5815,6 +8570,14 @@ class DirectorCutStudio(QMainWindow):
         self.semantic_runner = JsonLineProcess(self, "media-semantic-enrichment")
         self.semantic_runner.message.connect(self._handle_semantic_payload)
         self.semantic_runner.finished.connect(self._semantic_service_finished)
+        self.smart_cut_runner = JsonLineProcess(self, "smart-cut-semantic")
+        self.smart_cut_runner.message.connect(self._handle_smart_cut_payload)
+        self.smart_cut_runner.finished.connect(self._smart_cut_service_finished)
+        self.smart_cut_job_id = ""
+        self.smart_cut_unload_job_id = ""
+        self.smart_cut_active_request: dict = {}
+        self.smart_cut_dialog: SmartCutDialog | None = None
+        self.smart_cut_last_plan: dict = {}
         self.design_ai_settings = load_design_settings(DESIGN_SETTINGS_ENV)
         # API keys remain memory-only for the lifetime of this Studio window.
         self.semantic_openai_api_key = ""
@@ -5830,9 +8593,13 @@ class DirectorCutStudio(QMainWindow):
         self.design_media_runner: JsonLineProcess | None = None
         self.design_media_result: dict = {}
         self.pending_ai_design: dict | None = None
+        self.media_regeneration_runner: JsonLineProcess | None = None
+        self.media_regeneration_result: dict = {}
+        self.pending_media_regeneration: dict | None = None
         self.design_tts_runner: JsonLineProcess | None = None
         self.design_tts_result: dict = {}
         self.pending_design_tts: dict | None = None
+        self.active_design_apply_dialog: DesignPageDialog | None = None
         self.pending_generation_after_tts: dict | None = None
         self.timeline_tts_stale = False
         self.timeline_tts_refresh_timer = QTimer(self)
@@ -5843,8 +8610,27 @@ class DirectorCutStudio(QMainWindow):
         )
         self.design_cleanup_runner: JsonLineProcess | None = None
         self.design_cleanup_result: dict = {}
+        self.pending_design_cleanup_job: dict = {}
+        self.design_cleanup_job_path: Path | None = None
         self.preview_seed: int | None = None
         self.preview_ready = False
+        # Long productions can remain a normal one-shot Work Area render or
+        # advance through explicit approval horizons.  Incremental mode only
+        # previews the new batch; Accept then assembles a cumulative master so
+        # previously approved Segment outputs remain cache-reusable.
+        self.production_strategy = "full_range"
+        self.production_batch_seconds = 30.0
+        self.incremental_approved_horizon = 0.0
+        self.incremental_pending_start = 0.0
+        self.incremental_pending_end = 0.0
+        self.incremental_batch_phase = ""
+        self.quality_profile = "approved_final"
+        self.shot_take_states: dict[str, dict] = {}
+        self.segment_take_states: dict[str, dict] = {}
+        self.active_generation_started_at = 0.0
+        self.active_generation_profile = ""
+        self.active_generation_duration_seconds = 0.0
+        self.active_generation_job_path: Path | None = None
         self.smart_render_manifest: dict = {}
         self.smart_render_manifests: dict[str, dict] = {}
         self.render_dirty_segment_ids: set[str] = set()
@@ -5852,14 +8638,21 @@ class DirectorCutStudio(QMainWindow):
         self.generated_output_path: Path | None = None
         self.generated_playback_path: Path | None = None
         self.generated_output_locked = False
+        self.storyboard_preview_active = False
+        self.storyboard_trim_active = False
+        self.storyboard_target_duration_seconds = 45.0
+        self.storyboard_view_mode = "large_icons"
         self.generated_output_timeline_start = 0.0
         self.generated_pending_position_ms = 0
         self._syncing_generated_position = False
         self.generated_proxy_runner: JsonLineProcess | None = None
         self.generated_proxy_source: Path | None = None
         self.generated_proxy_target: Path | None = None
+        self.generated_proxy_working: Path | None = None
         self.generated_proxy_autoplay_pending = False
         self.example_work_dir: Path | None = None
+        self.project_workspace_id = ""
+        self.legacy_project_source: Path | None = None
         self.generation_previous_monitor: QWidget | None = None
         self.connection_runner: JsonLineProcess | None = None
         self.connection_result: dict = {}
@@ -5932,11 +8725,55 @@ class DirectorCutStudio(QMainWindow):
         save_project = QPushButton("SAVE PROJECT")
         save_project.clicked.connect(self.save_project)
         bar.addWidget(save_project)
-        undo_action = self.undo_stack.createUndoAction(self, "UNDO")
-        undo_action.setShortcut(QKeySequence.Undo)
+        self.project_storage_button = QPushButton("STORAGE")
+        self.project_storage_button.setToolTip(
+            "Project Storage Report · verified Safe Cleanup · portable Archive Project"
+        )
+        self.project_storage_button.clicked.connect(self.open_project_storage)
+        bar.addWidget(self.project_storage_button)
+        self.unload_all_button = QPushButton("UNLOAD ALL")
+        self.unload_all_button.setObjectName("unloadAllButton")
+        self.unload_all_button.setToolTip(
+            "Clear Studio runtime cache and DRAM · release ComfyUI VRAM/cache and models · "
+            "unload every model currently loaded by LM Studio. Project media, Takes and "
+            "Segment render caches are not deleted."
+        )
+        self.unload_all_button.clicked.connect(self.unload_all_resources)
+        bar.addWidget(self.unload_all_button)
+        # QUndoStack.createUndoAction() appends the current command text to
+        # its prefix (for example, "UNDO Apply Storyboard Editor").  The main
+        # toolbar deliberately uses a compact, stable label instead.
+        self.undo_action = QAction("UNDO", self)
+        self.undo_action.setShortcut(QKeySequence.Undo)
+        self.undo_action.triggered.connect(self.undo_stack.undo)
+
+        def refresh_undo_action_status(*_args) -> None:
+            # QUndoStack can emit a final state change while Qt is tearing its
+            # C++ children down.  The compact toolbar help must not dereference
+            # an object that has already been deleted during test/app shutdown.
+            try:
+                can_undo = self.undo_stack.canUndo()
+                self.undo_action.setEnabled(can_undo)
+                shortcut = self.undo_action.shortcut().toString(QKeySequence.NativeText) or "Ctrl+Z"
+                command = self.undo_stack.undoText().strip()
+            except RuntimeError:
+                return
+            if can_undo and command:
+                state = f"Ready to undo: {command}"
+            elif can_undo:
+                state = "Ready to undo the latest edit"
+            else:
+                state = "No action is currently available to undo"
+            help_text = f"Undo the latest Timeline or workspace edit · Shortcut: {shortcut} · {state}"
+            self.undo_action.setToolTip(help_text)
+            self.undo_action.setStatusTip(help_text)
+
+        self.undo_stack.canUndoChanged.connect(refresh_undo_action_status)
+        self.undo_stack.undoTextChanged.connect(refresh_undo_action_status)
+        refresh_undo_action_status()
         redo_action = self.undo_stack.createRedoAction(self, "REDO")
         redo_action.setShortcut(QKeySequence.Redo)
-        bar.addAction(undo_action)
+        bar.addAction(self.undo_action)
         bar.addAction(redo_action)
         bar.addSeparator()
         self.default_skill_label = QLabel("Default Skill")
@@ -5955,7 +8792,7 @@ class DirectorCutStudio(QMainWindow):
                 self.special_combo.addItem(profile.display_name, key)
         self.special_combo.setMinimumWidth(240)
         bar.addWidget(self.special_combo)
-        self.special_skill_creator_button = QPushButton("SPECIAL SKILL CREATOR")
+        self.special_skill_creator_button = QPushButton("CREATOR")
         self.special_skill_creator_button.setObjectName("specialSkillCreatorButton")
         self.special_skill_creator_button.setToolTip(
             "Create or edit a Studio Special Skill, its Chinese version and binding mode"
@@ -5963,26 +8800,38 @@ class DirectorCutStudio(QMainWindow):
         self.special_skill_creator_button.clicked.connect(self.open_special_skill_creator)
         bar.addWidget(self.special_skill_creator_button)
         generation_bar = QToolBar("Generation Controls")
+        generation_bar.setObjectName("generationToolbar")
+        self.generation_toolbar = generation_bar
         generation_bar.setMovable(False)
+        generation_bar.setStyleSheet(
+            "QToolBar { spacing:3px; padding:3px 5px; }"
+        )
         self.addToolBarBreak()
         self.addToolBar(generation_bar)
-        generation_bar.addWidget(QLabel("GENERATION WORK AREA"))
-        self.clip_start = QDoubleSpinBox()
-        self.clip_start.setSuffix(" s")
+        self.generation_work_area_label = QLabel("GENERATION WORK AREA")
+        self.generation_work_area_label.setFixedWidth(180)
+        generation_bar.addWidget(self.generation_work_area_label)
+        self.clip_start = CompactSecondsSpinBox()
         self.clip_start.setDecimals(2)
         self.clip_start.setSingleStep(TIMELINE_SNAP_SECONDS)
+        self.clip_start.setFixedWidth(70)
         self.clip_start.valueChanged.connect(self.refresh_activation)
-        self.clip_end = QDoubleSpinBox()
-        self.clip_end.setSuffix(" s")
+        self.clip_end = CompactSecondsSpinBox()
         self.clip_end.setDecimals(2)
         self.clip_end.setSingleStep(TIMELINE_SNAP_SECONDS)
-        self.clip_end.valueChanged.connect(self.refresh_activation)
+        self.clip_end.setFixedWidth(70)
+        self.clip_end.setToolTip(
+            "Generation Work Area end. Type or click beyond the current Timeline endpoint "
+            "to extend the project; new projects default to 12s."
+        )
+        self.clip_end.valueChanged.connect(self._generation_work_area_end_changed)
         generation_bar.addWidget(self.clip_start)
         generation_bar.addWidget(QLabel("→"))
         generation_bar.addWidget(self.clip_end)
         generation_bar.addSeparator()
         generation_bar.addWidget(QLabel("ASPECT"))
         self.aspect_ratio_combo = QComboBox()
+        self.aspect_ratio_combo.setFixedWidth(68)
         for ratio in ("16:9", "9:16", "1:1", "4:3", "3:4", "21:9"):
             self.aspect_ratio_combo.addItem(ratio, ratio)
         ratio_index = self.aspect_ratio_combo.findData(self.render_settings.aspect_ratio)
@@ -5991,41 +8840,584 @@ class DirectorCutStudio(QMainWindow):
         self.aspect_ratio_combo.currentIndexChanged.connect(self._aspect_ratio_changed)
         generation_bar.addWidget(self.aspect_ratio_combo)
         generation_bar.addSeparator()
-        export = QPushButton("EXPORT ACTIVE API")
-        export.clicked.connect(self.export_active_api)
-        generation_bar.addWidget(export)
+        generation_bar.addWidget(QLabel("MODE"))
+        self.production_strategy_combo = QComboBox()
+        self.production_strategy_combo.setObjectName("productionStrategyCombo")
+        self.production_strategy_combo.addItem("FULL", "full_range")
+        self.production_strategy_combo.addItem("BATCH", "incremental")
+        self.production_strategy_combo.setFixedWidth(72)
+        self.production_strategy_combo.setToolTip(
+            "Full Range renders the selected Work Area normally. Incremental previews only "
+            "the next batch, then Accept assembles a cumulative master while reusing approved Segments."
+        )
+        self.production_strategy_combo.currentIndexChanged.connect(
+            self._production_strategy_changed
+        )
+        generation_bar.addWidget(self.production_strategy_combo)
+        self.production_batch_spin = QDoubleSpinBox()
+        self.production_batch_spin.setObjectName("productionBatchSeconds")
+        self.production_batch_spin.setRange(MIN_PRODUCTION_BATCH_SECONDS, 600.0)
+        self.production_batch_spin.setDecimals(1)
+        self.production_batch_spin.setSingleStep(0.5)
+        self.production_batch_spin.setSuffix("s")
+        self.production_batch_spin.setFixedWidth(55)
+        self.production_batch_spin.setValue(self.production_batch_seconds)
+        self.production_batch_spin.setToolTip(
+            "Target size of each approval batch. Explicit speech is never split at the approval horizon."
+        )
+        self.production_batch_spin.valueChanged.connect(
+            self._production_batch_seconds_changed
+        )
+        generation_bar.addWidget(self.production_batch_spin)
+        self.next_batch_button = QPushButton("NEXT")
+        self.next_batch_button.setFixedWidth(60)
+        self.next_batch_button.setObjectName("nextProductionBatchButton")
+        self.next_batch_button.setToolTip(
+            "Preview only the next unapproved range. Accept promotes it into the cumulative final master."
+        )
+        self.next_batch_button.clicked.connect(self.start_next_incremental_batch)
+        generation_bar.addWidget(self.next_batch_button)
+        self.production_progress_label = QLabel("0/0s")
+        self.production_progress_label.setObjectName("productionProgressLabel")
+        self.production_progress_label.setStyleSheet("color:#65d3df; padding:0 3px;")
+        self.production_progress_label.setFixedWidth(100)
+        generation_bar.addWidget(self.production_progress_label)
         generation_bar.addSeparator()
+        # The three quality profiles are direct toolbar actions. Keep this
+        # hidden combo as the persisted state model for project compatibility.
+        self.quality_profile_combo = QComboBox(self)
+        self.quality_profile_combo.setObjectName("qualityProfileCombo")
+        for key in ("storyboard", "motion_preview", "approved_final"):
+            profile = QUALITY_PROFILES[key]
+            self.quality_profile_combo.addItem(profile.label, key)
+        self.quality_profile_combo.setCurrentIndex(
+            self.quality_profile_combo.findData(self.quality_profile)
+        )
+        self.quality_profile_combo.setToolTip(
+            "Storyboard uses no H3; Motion Preview uses 0.2MP; Approved Final reuses the accepted seed at 1.0MP"
+        )
+        self.quality_profile_combo.currentIndexChanged.connect(
+            self._quality_profile_changed
+        )
+        self.quality_profile_combo.hide()
+        self.export_api_button = QPushButton("EXPORT API")
+        self.export_api_button.setFixedWidth(95)
+        self.export_api_button.setObjectName("exportApiButton")
+        self.export_api_button.setToolTip(
+            "Export Active API: save the currently compiled ComfyUI API workflow"
+        )
+        self.export_api_button.clicked.connect(self.export_active_api)
+        generation_bar.addWidget(self.export_api_button)
         self.server_url = QLineEdit(self.render_settings.server_url)
-        self.server_url.setMinimumWidth(205)
+        self.server_url.setFixedWidth(220)
         self.server_url.setPlaceholderText("ComfyUI server")
+        self.server_url.setToolTip("ComfyUI server IP address and port")
         generation_bar.addWidget(self.server_url)
-        self.test_connection_button = QPushButton("TEST CONNECTION")
+        self.test_connection_button = QPushButton("TEST")
+        self.test_connection_button.setFixedWidth(55)
+        self.test_connection_button.setToolTip(
+            "Test Connection: verify that the configured ComfyUI server is reachable"
+        )
         self.test_connection_button.clicked.connect(self.test_comfyui_connection)
         generation_bar.addWidget(self.test_connection_button)
-        self.queue_button = QPushButton("UPLOAD + QUEUE")
+        self.queue_button = QPushButton("RUN+QUEUE")
+        self.queue_button.setFixedWidth(100)
+        self.queue_button.setToolTip(
+            "Upload active Segment media and queue the selected generation quality"
+        )
         self.queue_button.clicked.connect(self.queue_to_comfyui)
         generation_bar.addWidget(self.queue_button)
-        generation_bar.addSeparator()
-        self.preview_button = QPushButton("PREVIEW 0.2MP")
-        self.preview_button.setToolTip("Generate a low-resolution preview without RTX upscaling")
+        self.storyboard_button = QPushButton("STORYBOARD")
+        self.storyboard_button.setFixedWidth(105)
+        self.storyboard_button.setObjectName("storyboardButton")
+        self.storyboard_button.setToolTip(
+            "Open the Shot-card Storyboard Editor; drag, add, delete or resize blocks before Apply"
+        )
+        self.storyboard_button.clicked.connect(self.open_storyboard_editor)
+        generation_bar.addWidget(self.storyboard_button)
+        self.storyboard_target_spin = QDoubleSpinBox()
+        self.storyboard_target_spin.setObjectName("storyboardTargetDuration")
+        self.storyboard_target_spin.setRange(0.5, 3600.0)
+        self.storyboard_target_spin.setDecimals(1)
+        self.storyboard_target_spin.setSingleStep(0.5)
+        self.storyboard_target_spin.setSuffix("s")
+        self.storyboard_target_spin.setFixedWidth(65)
+        self.storyboard_target_spin.setValue(self.storyboard_target_duration_seconds)
+        self.storyboard_target_spin.setToolTip(
+            "Desired edited Storyboard duration. Delete unwanted purple Shot Blocks in Story Cut mode; later Timeline content ripples left."
+        )
+        self.storyboard_target_spin.valueChanged.connect(
+            self._storyboard_target_changed
+        )
+        generation_bar.addWidget(self.storyboard_target_spin)
+        self.storyboard_trim_button = QToolButton()
+        self.storyboard_trim_button.setObjectName("storyboardTrimButton")
+        self.storyboard_trim_button.setText("AUTO CUT")
+        self.storyboard_trim_button.setFixedWidth(106)
+        self.storyboard_trim_button.setPopupMode(QToolButton.MenuButtonPopup)
+        self.storyboard_trim_button.setToolTip(
+            "Build a protected 0.5-second Smart Cut plan. The main button uses Balanced mode; "
+            "the arrow also offers Safe, Aggressive and the original Manual Ripple Cut."
+        )
+        self.storyboard_trim_menu = QMenu(self.storyboard_trim_button)
+        self.smart_cut_safe_action = self.storyboard_trim_menu.addAction("AUTO CUT · SAFE")
+        self.smart_cut_balanced_action = self.storyboard_trim_menu.addAction("AUTO CUT · BALANCED")
+        self.smart_cut_aggressive_action = self.storyboard_trim_menu.addAction("AUTO CUT · AGGRESSIVE")
+        self.storyboard_trim_menu.addSeparator()
+        self.manual_ripple_action = self.storyboard_trim_menu.addAction("MANUAL RIPPLE CUT")
+        self.manual_ripple_action.setCheckable(True)
+        self.storyboard_trim_menu.addAction("OPEN STORYBOARD EDITOR", self.open_storyboard_editor)
+        self.storyboard_trim_button.setMenu(self.storyboard_trim_menu)
+        self.storyboard_trim_button.clicked.connect(
+            lambda: self.open_smart_cut("balanced")
+        )
+        self.smart_cut_safe_action.triggered.connect(lambda: self.open_smart_cut("safe"))
+        self.smart_cut_balanced_action.triggered.connect(lambda: self.open_smart_cut("balanced"))
+        self.smart_cut_aggressive_action.triggered.connect(lambda: self.open_smart_cut("aggressive"))
+        self.manual_ripple_action.toggled.connect(self._toggle_storyboard_trim_mode)
+        generation_bar.addWidget(self.storyboard_trim_button)
+        self.preview_button = QPushButton("PREVIEW 0.2M")
+        self.preview_button.setFixedWidth(115)
+        self.preview_button.setToolTip(
+            "Motion Preview 0.2MP - generate a low-resolution motion test without RTX upscaling"
+        )
         self.preview_button.clicked.connect(self.generate_pre_run_preview)
         generation_bar.addWidget(self.preview_button)
-        self.accept_preview_button = QPushButton("ACCEPT → 1.0MP")
-        self.accept_preview_button.setToolTip("Generate at 1.0MP with exactly the accepted preview seed")
+        self.accept_preview_button = QPushButton("ACCEPT 1.0M")
+        self.accept_preview_button.setFixedWidth(110)
+        self.accept_preview_button.setToolTip(
+            "Approved Final 1.0MP - render with exactly the accepted Motion Preview seed"
+        )
         self.accept_preview_button.setEnabled(False)
         self.accept_preview_button.clicked.connect(self.accept_pre_run_preview)
         generation_bar.addWidget(self.accept_preview_button)
-        self.reject_preview_button = QPushButton("REJECT ↻")
-        self.reject_preview_button.setToolTip("Discard the current preview seed and generate a new 0.2MP preview")
+        self.reject_preview_button = QPushButton("REJECT")
+        self.reject_preview_button.setFixedWidth(70)
+        self.reject_preview_button.setToolTip(
+            "Reject Preview - discard the current preview seed and generate a new 0.2MP motion test"
+        )
         self.reject_preview_button.setEnabled(False)
         self.reject_preview_button.clicked.connect(self.reject_pre_run_preview)
         generation_bar.addWidget(self.reject_preview_button)
+        self.resource_estimate_button = QPushButton("ESTIMATE")
+        self.resource_estimate_button.setFixedWidth(85)
+        self.resource_estimate_button.setObjectName("resourceEstimateButton")
+        self.resource_estimate_button.setToolTip(
+            "Estimate render duration, GPU time and additional Workspace disk use"
+        )
+        self.resource_estimate_button.clicked.connect(self.show_resource_estimate)
+        generation_bar.addWidget(self.resource_estimate_button)
+        self._configure_generation_hover_help()
+        self._build_generation_overflow_toolbar()
+        self._refresh_incremental_controls()
+
+    def _configure_generation_hover_help(self) -> None:
+        """Show the full control name and effect immediately on pointer hover."""
+        help_rows = (
+            (
+                self.clip_start,
+                "Generation Work Area Start",
+                "First Timeline time included by Preview, Final, Export and Segment planning.",
+            ),
+            (
+                self.clip_end,
+                "Generation Work Area End",
+                "Last Timeline time included. Long ranges are split into resumable native H3 Segments.",
+            ),
+            (
+                self.aspect_ratio_combo,
+                "Output Aspect Ratio",
+                "Sets the generated frame shape used by the active ResolutionSelector.",
+            ),
+            (
+                self.production_strategy_combo,
+                "Production Mode · Full Range / Incremental Batch",
+                "FULL processes the current complete Work Area in one operation. BATCH previews only the next unapproved range and builds a cumulative Master after Accept.",
+            ),
+            (
+                self.production_batch_spin,
+                "Incremental Approval Batch Duration",
+                "Target seconds per batch. Studio extends a boundary when required to keep authored speech intact.",
+            ),
+            (
+                self.next_batch_button,
+                "Preview Next Incremental Batch",
+                "Moves Work Area to the next unapproved range and starts its 0.2MP motion Preview.",
+            ),
+            (
+                self.production_progress_label,
+                "Incremental Approval Progress",
+                "Shows approved seconds versus complete Timeline duration and the pending batch state.",
+            ),
+            (
+                self.export_api_button,
+                "Export Active API · ComfyUI Workflow",
+                "Saves the currently compiled Segment workflow with active mapping and generation parameters.",
+            ),
+            (
+                self.server_url,
+                "ComfyUI Server Address",
+                "HTTP address used for connection tests, media upload and queued generation.",
+            ),
+            (
+                self.test_connection_button,
+                "Test Connection · ComfyUI Server",
+                "Checks that the configured server is reachable before a render is submitted.",
+            ),
+            (
+                self.queue_button,
+                "Run and Queue Current Work Area",
+                "Uploads Segment-local media and starts a direct render using the current Settings quality.",
+            ),
+            (
+                self.storyboard_button,
+                "Storyboard Editor · Shot Structure",
+                "Review, reorder, add, delete and resize Shot cards before applying them to Timeline.",
+            ),
+            (
+                self.storyboard_target_spin,
+                "Storyboard Target Duration",
+                "Target edited story length used by Storyboard and Smart Cut planning.",
+            ),
+            (
+                self.storyboard_trim_button,
+                "Smart Cut and Manual Ripple Cut",
+                "Opens protected Safe, Balanced or Aggressive compression; the arrow also contains Manual Ripple Cut.",
+            ),
+            (
+                self.preview_button,
+                "Motion Preview 0.2MP",
+                "Generates a low-cost motion test without RTX upscaling and records its seed.",
+            ),
+            (
+                self.accept_preview_button,
+                "Accept Preview · Approved Final 1.0MP",
+                "Renders with exactly the accepted Preview seed and promotes the result to the cumulative Final Master.",
+            ),
+            (
+                self.reject_preview_button,
+                "Reject Preview and Generate Another Take",
+                "Keeps approved results, advances the Preview seed and creates a replacement motion test.",
+            ),
+            (
+                self.resource_estimate_button,
+                "Estimate Time, GPU Work and Disk Use",
+                "Calculates new versus reusable duration and checks the protected Workspace disk reserve.",
+            ),
+        )
+        for widget, title, description in help_rows:
+            widget.setToolTip(f"<b>{title}</b><br>{description}")
+            widget.setProperty("generation_hover_help", True)
+            widget.installEventFilter(self)
+
+    def _build_generation_overflow_toolbar(self) -> None:
+        """Wrap the ordered Generation controls onto an automatic second row."""
+        self.generation_overflow_toolbar = QToolBar("Generation Controls · Row 2")
+        self.generation_overflow_toolbar.setObjectName("generationOverflowToolbar")
+        self.generation_overflow_toolbar.setMovable(False)
+        self.generation_overflow_toolbar.setFloatable(False)
+        self.generation_overflow_toolbar.setStyleSheet(
+            "QToolBar { background:#1b1e21; border-top:1px solid #343a40; "
+            "border-bottom:1px solid #050607; spacing:3px; padding:3px 5px; }"
+        )
+        self.addToolBarBreak(Qt.TopToolBarArea)
+        self.addToolBar(Qt.TopToolBarArea, self.generation_overflow_toolbar)
+        self.generation_overflow_toolbar.hide()
+        self.generation_toolbar.installEventFilter(self)
+        self._generation_toolbar_original_actions = list(
+            self.generation_toolbar.actions()
+        )
+        self._generation_widget_actions = {
+            widget: action
+            for action in self._generation_toolbar_original_actions
+            if (widget := self.generation_toolbar.widgetForAction(action)) is not None
+        }
+        self._generation_overflow_actions: list[QWidgetAction] = []
+        self._generation_reflowing = False
+        QTimer.singleShot(0, self._reflow_generation_toolbar)
+
+    def _generation_action_width(self, action, toolbar: QToolBar) -> int:
+        if action.isSeparator():
+            return 10
+        widget = toolbar.widgetForAction(action)
+        if widget is None:
+            return 0
+        hint = max(widget.minimumSizeHint().width(), widget.sizeHint().width())
+        if widget.maximumWidth() < 16777215:
+            hint = min(hint, widget.maximumWidth())
+        hint = max(widget.minimumWidth(), hint)
+        return hint + 4
+
+    def _restore_generation_actions_to_primary(self) -> None:
+        for action in self._generation_toolbar_original_actions:
+            self.generation_toolbar.removeAction(action)
+            self.generation_overflow_toolbar.removeAction(action)
+            self.generation_toolbar.addAction(action)
+        self._generation_overflow_actions = []
+
+    def _reflow_generation_toolbar(self) -> None:
+        if (
+            not hasattr(self, "generation_overflow_toolbar")
+            or self._generation_reflowing
+            or not self.isVisible()
+        ):
+            return
+        self._generation_reflowing = True
+        try:
+            self._restore_generation_actions_to_primary()
+            self._refresh_incremental_controls()
+            self.generation_overflow_toolbar.hide()
+            available = max(0, self.generation_toolbar.width() - 24)
+            used = 0
+            overflow_started = False
+            overflow_actions = []
+            for action in self._generation_toolbar_original_actions:
+                width = self._generation_action_width(action, self.generation_toolbar)
+                if not overflow_started and (width <= 0 or used + width <= available):
+                    used += width
+                    continue
+                overflow_started = True
+                overflow_actions.append(action)
+            if not overflow_actions:
+                return
+            for action in overflow_actions:
+                self.generation_toolbar.removeAction(action)
+                self.generation_overflow_toolbar.addAction(action)
+            self._generation_overflow_actions = overflow_actions
+            self._refresh_incremental_controls()
+            self.generation_overflow_toolbar.show()
+            self.generation_overflow_toolbar.raise_()
+        finally:
+            self._generation_reflowing = False
+
+    def _show_generation_overflow(self) -> None:
+        if not getattr(self, "_generation_overflow_actions", []):
+            return
+        self.generation_overflow_toolbar.show()
+        self.generation_overflow_toolbar.raise_()
 
     def _aspect_ratio_changed(self, *_args) -> None:
         self.render_settings.aspect_ratio = str(self.aspect_ratio_combo.currentData())
         self.preview_ready = False
         self.accept_preview_button.setEnabled(False)
         self._mark_dirty()
+
+    def _timeline_duration_seconds(self) -> float:
+        return max(0.0, float(self.scan.duration_seconds)) if self.scan else 0.0
+
+    def _generation_work_area_end_changed(self, value: float) -> None:
+        """Keep Work Area End editable and grow, but never destructively shrink, Timeline.
+
+        The old control maximum was the current Timeline duration.  That made a
+        default 12-second project impossible to extend from the toolbar.  A
+        larger End now becomes an explicit Timeline extension; a smaller End
+        remains a non-destructive render-range selection.
+        """
+        if not self.scan:
+            return
+        requested_end = max(0.01, float(value))
+        minimum_end = min(
+            MAX_MANUAL_TIMELINE_SECONDS,
+            float(self.clip_start.value()) + TIMELINE_SNAP_SECONDS,
+        )
+        if requested_end < minimum_end - 1e-6:
+            self.clip_end.blockSignals(True)
+            self.clip_end.setValue(minimum_end)
+            self.clip_end.blockSignals(False)
+            requested_end = minimum_end
+            self.statusBar().showMessage(
+                f"Work Area End adjusted to {minimum_end:.1f}s so it remains later than Start"
+            )
+        current_duration = self._timeline_duration_seconds()
+        if requested_end > current_duration + 1e-6:
+            previous_start = float(self.clip_start.value())
+            self._set_design_duration(requested_end)
+            self.clip_start.setValue(min(previous_start, requested_end))
+            self.clip_end.setValue(requested_end)
+            self._mark_all_render_segments_dirty()
+            self._mark_dirty()
+            self.statusBar().showMessage(
+                f"Timeline extended from {current_duration:.1f}s to {requested_end:.1f}s · "
+                "add or extend Shot and media blocks for the new range"
+            )
+        self.refresh_activation()
+
+    def _production_strategy_changed(self, *_args) -> None:
+        strategy = str(self.production_strategy_combo.currentData() or "full_range")
+        if strategy not in {"full_range", "incremental"}:
+            strategy = "full_range"
+        self.production_strategy = strategy
+        if strategy == "full_range" and self.scan:
+            self.clip_start.setValue(0.0)
+            self.clip_end.setValue(self._timeline_duration_seconds())
+        elif strategy == "incremental" and self.incremental_approved_horizon <= 0.0:
+            manifest = self.smart_render_manifests.get("production", {})
+            rows = list(manifest.get("segments") or []) if isinstance(manifest, dict) else []
+            if rows and all(
+                str(row.get("status", "")).lower()
+                in {"cached", "complete", "completed", "reusable"}
+                for row in rows if isinstance(row, dict)
+            ):
+                self.incremental_approved_horizon = min(
+                    self._timeline_duration_seconds(),
+                    max(
+                        0.0,
+                        float(
+                            manifest.get("timeline_end_seconds")
+                            or manifest.get("target_duration_seconds")
+                            or 0.0
+                        ),
+                    ),
+                )
+        self._refresh_incremental_controls()
+        self._mark_dirty()
+
+    def _production_batch_seconds_changed(self, value: float) -> None:
+        self.production_batch_seconds = max(MIN_PRODUCTION_BATCH_SECONDS, float(value))
+        self._refresh_incremental_controls()
+        self._mark_dirty()
+
+    def _special_skill_production_strategy_changed(self, *_args) -> None:
+        """Long-form Special selects safe batching; every other Skill stays one-shot."""
+        desired = (
+            "incremental"
+            if str(self.special_combo.currentData() or "") == "long-form-h3-director"
+            else "full_range"
+        )
+        index = self.production_strategy_combo.findData(desired)
+        if index >= 0 and self.production_strategy_combo.currentIndex() != index:
+            self.production_strategy_combo.setCurrentIndex(index)
+
+    def _next_incremental_batch_end(self) -> float:
+        """Return a 0.5s approval horizon without cutting explicit speech."""
+        duration = self._timeline_duration_seconds()
+        start = min(duration, max(0.0, self.incremental_approved_horizon))
+        boundary = snap_timeline_seconds(
+            min(duration, start + self.production_batch_seconds), duration
+        )
+        if boundary >= duration - 1e-6:
+            return duration
+
+        # Authored speech is protected even if this makes one batch longer
+        # than its target.  Shot boundaries may extend the batch by up to eight
+        # seconds so a very long Shot does not defeat incremental production.
+        for _pass in range(4):
+            extended = boundary
+            for layer in self.text_layers:
+                if (
+                    layer.content_role in {"dialogue", "voice_over", "lyrics"}
+                    and layer.start_seconds < boundary < layer.end_seconds
+                ):
+                    extended = max(extended, layer.end_seconds)
+            for cue in self.director_cues:
+                if (
+                    cue.cue_type == "shot"
+                    and cue.start_seconds < boundary < cue.end_seconds
+                    and cue.end_seconds <= boundary + 8.0
+                ):
+                    extended = max(extended, cue.end_seconds)
+            extended = snap_timeline_seconds(min(duration, extended), duration)
+            if extended <= boundary + 1e-6:
+                break
+            boundary = extended
+        return min(duration, boundary)
+
+    def _refresh_incremental_controls(self) -> None:
+        if not hasattr(self, "next_batch_button"):
+            return
+        duration = self._timeline_duration_seconds()
+        approved = min(duration, max(0.0, self.incremental_approved_horizon))
+        pending_start = min(duration, max(0.0, self.incremental_pending_start))
+        pending_end = min(duration, max(pending_start, self.incremental_pending_end))
+        incremental = self.production_strategy == "incremental"
+        running = bool(self.submit_runner and self.submit_runner.is_running())
+        self.production_batch_spin.setEnabled(incremental and not running)
+        for widget in (
+            self.production_batch_spin,
+            self.production_progress_label,
+            self.next_batch_button,
+        ):
+            action = getattr(self, "_generation_widget_actions", {}).get(widget)
+            if action is not None:
+                action.setVisible(True)
+            widget.setVisible(True)
+        if not incremental:
+            self.next_batch_button.setEnabled(False)
+            self.next_batch_button.setText("NEXT")
+            self.production_progress_label.setText(
+                f"✓{approved:.1f}/{duration:.1f}s"
+            )
+            self.production_progress_label.setToolTip(
+                f"Approved {approved:.1f} of {duration:.1f} seconds · switch MODE to BATCH to continue incrementally"
+            )
+            return
+        if approved >= duration - 1e-6 and duration > 0.0:
+            self.next_batch_button.setText("DONE")
+            self.next_batch_button.setEnabled(False)
+            detail = "complete"
+        elif self.incremental_batch_phase == "preview_ready":
+            self.next_batch_button.setText("ACCEPT")
+            self.next_batch_button.setEnabled(False)
+            detail = f"preview {pending_start:.1f}–{pending_end:.1f}s ready"
+        elif self.incremental_batch_phase == "accepting":
+            self.next_batch_button.setText("RESUME")
+            self.next_batch_button.setEnabled(
+                not running and self.preview_seed is not None
+            )
+            detail = f"accepting 0–{pending_end:.1f}s"
+        else:
+            self.next_batch_button.setText("NEXT")
+            self.next_batch_button.setEnabled(not running and duration > approved + 1e-6)
+            next_end = self._next_incremental_batch_end() if duration else 0.0
+            detail = f"next {approved:.1f}–{next_end:.1f}s" if next_end > approved else "ready"
+        self.production_progress_label.setText(f"✓{approved:.1f}/{duration:.1f}s")
+        self.production_progress_label.setToolTip(
+            f"Approved {approved:.1f} of {duration:.1f} seconds · {detail}"
+        )
+
+    def start_next_incremental_batch(self) -> None:
+        if not self.scan:
+            QMessageBox.information(self, "Incremental production", "Load or create a project first.")
+            return
+        if self.production_strategy != "incremental":
+            QMessageBox.information(
+                self,
+                "Incremental production",
+                "Select INCREMENTAL or choose the Long-form H3 Director Special Skill first.",
+            )
+            return
+        if self.incremental_batch_phase == "accepting":
+            if self.preview_seed is None:
+                self.incremental_batch_phase = ""
+                self._refresh_incremental_controls()
+                return
+            self.clip_start.setValue(0.0)
+            self.clip_end.setValue(self.incremental_pending_end)
+            self.accept_pre_run_preview()
+            return
+        if self.incremental_batch_phase == "preview_ready":
+            QMessageBox.information(
+                self,
+                "Batch preview ready",
+                "Use ACCEPT 1.0M to approve this batch, or REJECT to create another motion take.",
+            )
+            return
+        start = min(
+            self._timeline_duration_seconds(),
+            max(0.0, self.incremental_approved_horizon),
+        )
+        end = self._next_incremental_batch_end()
+        if end <= start + 1e-6:
+            self._refresh_incremental_controls()
+            return
+        self.incremental_pending_start = start
+        self.incremental_pending_end = end
+        self.incremental_batch_phase = "previewing"
+        self.clip_start.setValue(start)
+        self.clip_end.setValue(end)
+        self._mark_dirty()
+        self._refresh_incremental_controls()
+        self.generate_pre_run_preview()
 
     def _build_settings_page(self) -> QWidget:
         page = QWidget()
@@ -6052,6 +9444,22 @@ class DirectorCutStudio(QMainWindow):
         self.settings_http_timeout = QSpinBox()
         self.settings_http_timeout.setRange(1, 600)
         self.settings_http_timeout.setSuffix(" s")
+        self.settings_connection_recovery_timeout = QSpinBox()
+        self.settings_connection_recovery_timeout.setRange(30, 86400)
+        self.settings_connection_recovery_timeout.setSuffix(" s")
+        self.settings_connection_recovery_timeout.setToolTip(
+            "After ComfyUI has accepted a prompt_id, Studio keeps reconnecting for this "
+            "long without re-queuing the same server Job. Default: 3600 seconds."
+        )
+        self.settings_workspace_disk_reserve = QDoubleSpinBox()
+        self.settings_workspace_disk_reserve.setRange(0.0, 2000.0)
+        self.settings_workspace_disk_reserve.setDecimals(1)
+        self.settings_workspace_disk_reserve.setSingleStep(5.0)
+        self.settings_workspace_disk_reserve.setSuffix(" GB")
+        self.settings_workspace_disk_reserve.setToolTip(
+            "Generation is blocked when estimated new files would leave less "
+            "free space than this reserve. Approved Shot Takes are preserved."
+        )
         self.settings_dialogue_tts = QComboBox()
         self.settings_dialogue_tts.addItem(
             "MiniMax H3 Native Dialogue · no authored WAV",
@@ -6059,14 +9467,21 @@ class DirectorCutStudio(QMainWindow):
         )
         self.settings_dialogue_tts.addItem("Edge TTS · online neural voices", "edge_tts")
         self.settings_dialogue_tts.addItem("VoxCPM2 Local · offline model", "voxcpm2_local")
+        self.settings_dialogue_tts.addItem(
+            "Qwen3-TTS Local · offline CustomVoice model",
+            "qwen3_tts_local",
+        )
         self.settings_dialogue_tts.setToolTip(
             "Speech mode used for Dialogue, Voice-over and Lyrics text layers. "
             "H3 Native sends exact Timeline text without creating a WAV. "
             "VoxCPM2 loads only from project models/VoxCPM2, prefers CUDA, and "
-            "automatically retries on CPU if CUDA fails."
+            "automatically retries on CPU if CUDA fails. Qwen3-TTS uses its isolated "
+            "runtime plus project models/Qwen3-TTS-12Hz-0.6B-CustomVoice."
         )
         self.settings_voxcpm_model_status = QLabel()
         self.settings_voxcpm_model_status.setWordWrap(True)
+        self.settings_qwen3_tts_model_status = QLabel()
+        self.settings_qwen3_tts_model_status.setWordWrap(True)
         self.settings_blip_device = QComboBox()
         self.settings_blip_device.addItem(
             "Auto · CPU-safe start, verified CUDA when available",
@@ -6091,8 +9506,14 @@ class DirectorCutStudio(QMainWindow):
         form.addRow("History poll interval", self.settings_history_poll)
         form.addRow("Generation timeout", self.settings_generation_timeout)
         form.addRow("HTTP request timeout", self.settings_http_timeout)
+        form.addRow(
+            "Connection recovery window",
+            self.settings_connection_recovery_timeout,
+        )
+        form.addRow("Workspace free disk reserve", self.settings_workspace_disk_reserve)
         form.addRow("Dialogue Text Layer TTS", self.settings_dialogue_tts)
         form.addRow("VoxCPM2 model", self.settings_voxcpm_model_status)
+        form.addRow("Qwen3-TTS runtime/model", self.settings_qwen3_tts_model_status)
         form.addRow("BLIP inference device", self.settings_blip_device)
         form.addRow("Mapped API nodes", self.settings_node_map)
         buttons = QHBoxLayout()
@@ -6111,6 +9532,8 @@ class DirectorCutStudio(QMainWindow):
             self.settings_history_poll,
             self.settings_generation_timeout,
             self.settings_http_timeout,
+            self.settings_connection_recovery_timeout,
+            self.settings_workspace_disk_reserve,
         ):
             widget.valueChanged.connect(self._settings_ui_changed)
         self.settings_rtx_vsr.toggled.connect(self._settings_ui_changed)
@@ -6129,6 +9552,12 @@ class DirectorCutStudio(QMainWindow):
         self.settings_history_poll.setValue(settings.history_poll_interval)
         self.settings_generation_timeout.setValue(settings.generation_timeout)
         self.settings_http_timeout.setValue(settings.http_request_timeout)
+        self.settings_connection_recovery_timeout.setValue(
+            settings.connection_recovery_timeout
+        )
+        self.settings_workspace_disk_reserve.setValue(
+            settings.workspace_free_disk_reserve_gb
+        )
         tts_index = self.settings_dialogue_tts.findData(settings.dialogue_tts_engine)
         self.settings_dialogue_tts.setCurrentIndex(max(0, tts_index))
         blip_index = self.settings_blip_device.findData(settings.blip_device)
@@ -6161,7 +9590,45 @@ class DirectorCutStudio(QMainWindow):
                 )
             else:
                 self.settings_dialogue_tts.setStyleSheet("")
-        return ready
+        qwen_runtime_missing = qwen3_tts_runtime_missing()
+        qwen_support_missing = qwen3_tts_support_missing()
+        qwen_model_missing = qwen3_tts_model_missing()
+        qwen_ready = (
+            not qwen_runtime_missing
+            and not qwen_support_missing
+            and not qwen_model_missing
+        )
+        if qwen_ready:
+            self.settings_qwen3_tts_model_status.setText(
+                "READY · runtime "
+                + str(QWEN3_TTS_RUNTIME_DIR)
+                + " · model "
+                + str(QWEN3_TTS_MODEL_DIR)
+            )
+            self.settings_qwen3_tts_model_status.setStyleSheet(
+                "color:#72d69a; font-weight:700; padding:3px;"
+            )
+        else:
+            missing = [
+                *(f"runtime/{item}" for item in qwen_runtime_missing),
+                *(f"support/{item}" for item in qwen_support_missing),
+                *(f"model/{item}" for item in qwen_model_missing),
+            ]
+            self.settings_qwen3_tts_model_status.setText(
+                "⚠ MISSING · Run install_qwen3_tts_runtime.bat; download "
+                "Qwen/Qwen3-TTS-12Hz-0.6B-CustomVoice to "
+                f"{QWEN3_TTS_MODEL_DIR}\nMissing: {', '.join(missing)}"
+            )
+            self.settings_qwen3_tts_model_status.setStyleSheet(
+                "background:#4a251a; color:#ffd28b; border:1px solid #ff9d38; "
+                "padding:4px; font-weight:700;"
+            )
+        if self.settings_dialogue_tts.currentData() == "qwen3_tts_local":
+            self.settings_dialogue_tts.setStyleSheet(
+                "" if qwen_ready else
+                "border:2px solid #ff9d38; background:#3f261d; color:#ffe0ad;"
+            )
+        return ready if self.settings_dialogue_tts.currentData() != "qwen3_tts_local" else qwen_ready
 
     def _settings_ui_changed(self, *_args) -> None:
         self._read_settings_ui()
@@ -6216,9 +9683,16 @@ class DirectorCutStudio(QMainWindow):
                 15000,
             )
             return
+        if selected == "qwen3_tts_local" and not model_ready:
+            self.statusBar().showMessage(qwen3_tts_missing_message(), 15000)
+            return
         if self._speech_layers_for_tts():
             self.timeline_tts_stale = True
-        label = "VoxCPM2 Local" if selected == "voxcpm2_local" else "Edge TTS"
+        label = {
+            "voxcpm2_local": "VoxCPM2 Local",
+            "qwen3_tts_local": "Qwen3-TTS Local",
+            "edge_tts": "Edge TTS",
+        }.get(selected, selected)
         self.statusBar().showMessage(
             f"Dialogue mode changed to {label} · WAV will rebuild before Preview/Run",
             10000,
@@ -6235,6 +9709,21 @@ class DirectorCutStudio(QMainWindow):
             QMessageBox.warning(self, "VoxCPM2 model missing", message)
         return False
 
+    def _require_qwen3_tts_model(self, *, notify: bool = False) -> bool:
+        missing = (
+            qwen3_tts_runtime_missing()
+            or qwen3_tts_support_missing()
+            or qwen3_tts_model_missing()
+        )
+        self._refresh_voxcpm_model_status_ui()
+        if not missing:
+            return True
+        message = qwen3_tts_missing_message()
+        self.statusBar().showMessage(message, 15000)
+        if notify:
+            QMessageBox.warning(self, "Qwen3-TTS runtime/model missing", message)
+        return False
+
     def _read_settings_ui(self) -> None:
         self.render_settings = RenderSettings.from_mapping(
             {
@@ -6248,6 +9737,12 @@ class DirectorCutStudio(QMainWindow):
                 "history_poll_interval": self.settings_history_poll.value(),
                 "generation_timeout": self.settings_generation_timeout.value(),
                 "http_request_timeout": self.settings_http_timeout.value(),
+                "connection_recovery_timeout": (
+                    self.settings_connection_recovery_timeout.value()
+                ),
+                "workspace_free_disk_reserve_gb": (
+                    self.settings_workspace_disk_reserve.value()
+                ),
                 "dialogue_tts_engine": self.settings_dialogue_tts.currentData(),
                 "blip_device": self.settings_blip_device.currentData(),
             }
@@ -6877,6 +10372,7 @@ class DirectorCutStudio(QMainWindow):
                     "media_type": asset.media_type,
                     "type": asset.media_type,
                     "filename": Path(local_path).name,
+                    "local_path": str(Path(local_path).resolve()),
                     "loaded": True,
                     "locally_available": True,
                     "timeline_placed": bool(timeline_uses),
@@ -6910,13 +10406,32 @@ class DirectorCutStudio(QMainWindow):
             None if special_key == NONE_SPECIAL else self.profiles.get(special_key)
         )
         standalone_special = bool(special_profile and special_profile.standalone)
+        special_character_bindings = (
+            street_fighter_character_bindings(media)
+            if special_profile is not None
+            and special_profile.key == "street-fighter-live-action-h3"
+            else []
+        )
+        rendered_requirement_template = (
+            render_special_design_requirement_template(
+                special_profile.design_requirement_template,
+                special_profile.key,
+                media,
+            )
+            if special_profile is not None
+            else ""
+        )
         return {
             "current_duration_seconds": scan.duration_seconds if scan else 5.0,
             "comfyui_server": self.server_url.text().strip(),
             "comfyui_history_poll_interval": self.render_settings.history_poll_interval,
             "comfyui_generation_timeout": self.render_settings.generation_timeout,
             "comfyui_http_timeout": self.render_settings.http_request_timeout,
+            "comfyui_connection_recovery_timeout": (
+                self.render_settings.connection_recovery_timeout
+            ),
             "dialogue_tts_engine": self.render_settings.dialogue_tts_engine,
+            "music_mode": self.render_settings.music_mode,
             "aspect_ratio": self.aspect_ratio_combo.currentData(),
             "available_tracks": [track.track_id for track in self.tracks],
             "media_capacity": total_capacity,
@@ -6924,6 +10439,7 @@ class DirectorCutStudio(QMainWindow):
             "loaded_media_counts": loaded_counts,
             "available_new_media_capacity": free_capacity,
             "existing_media": media,
+            "character_reference_bindings": special_character_bindings,
             "existing_shots_and_cues": [asdict(cue) for cue in self.director_cues],
             "existing_text_layers": [asdict(layer) for layer in self.text_layers],
             "current_prompt_fields": {
@@ -6952,6 +10468,9 @@ class DirectorCutStudio(QMainWindow):
                     "key": special_profile.key,
                     "instruction": special_profile.instruction,
                     "standalone": special_profile.standalone,
+                    "design_requirement_template": (
+                        rendered_requirement_template
+                    ),
                 },
             },
         }
@@ -6969,11 +10488,14 @@ class DirectorCutStudio(QMainWindow):
         )
         if self.semantic_openai_api_key and dialog.provider_combo.currentData() == "openai":
             dialog.api_key_edit.setText(self.semantic_openai_api_key)
+        self.active_design_apply_dialog = dialog
         dialog.apply_requested.connect(self.apply_ai_design)
-        dialog.cleanup_requested.connect(self.start_design_cleanup)
+        dialog.cleanup_requested.connect(self.queue_design_cleanup)
         dialog.exec()
         if dialog.provider_combo.currentData() == "openai":
             self.semantic_openai_api_key = dialog.api_key_edit.text().strip()
+        if self.active_design_apply_dialog is dialog:
+            self.active_design_apply_dialog = None
         dialog.deleteLater()
         # Design owns the shared provider/model settings.  Reflect any changes
         # immediately in the normal Media Pool semantic controls.
@@ -6999,6 +10521,19 @@ class DirectorCutStudio(QMainWindow):
         )
         return {
             "duration_seconds": self.scan.duration_seconds,
+            "storyboard_target_duration_seconds": self.storyboard_target_duration_seconds,
+            "storyboard_view_mode": self.storyboard_view_mode,
+            "smart_cut_last_plan": deepcopy(self.smart_cut_last_plan),
+            "production_strategy": self.production_strategy,
+            "production_batch_seconds": self.production_batch_seconds,
+            "incremental_production": {
+                "approved_horizon_seconds": self.incremental_approved_horizon,
+                "pending_start_seconds": self.incremental_pending_start,
+                "pending_end_seconds": self.incremental_pending_end,
+                "phase": self.incremental_batch_phase,
+                "preview_seed": self.preview_seed,
+                "preview_ready": self.preview_ready,
+            },
             "duration_nodes": duration_nodes,
             # AI Design may create V4/V5... and A4/A5... dynamically.  Track
             # geometry is part of the workspace state: without it Undo/Redo
@@ -7024,12 +10559,50 @@ class DirectorCutStudio(QMainWindow):
             },
             "work_area": [self.clip_start.value(), self.clip_end.value()],
             "preview_paths": {key: str(value) for key, value in self.preview_paths.items()},
+            "render_dirty_segment_ids": sorted(self.render_dirty_segment_ids),
         }
 
     def _restore_design_workspace_state(self, state: dict) -> None:
         if not self.scan or not state:
             return
         duration = max(0.5, float(state["duration_seconds"]))
+        self.storyboard_target_duration_seconds = max(
+            0.5,
+            float(state.get("storyboard_target_duration_seconds", duration)),
+        )
+        saved_view_mode = str(
+            state.get("storyboard_view_mode", self.storyboard_view_mode)
+        )
+        self.storyboard_view_mode = (
+            saved_view_mode
+            if saved_view_mode in StoryboardBlockList.DISPLAY_MODES
+            else "large_icons"
+        )
+        self.smart_cut_last_plan = deepcopy(state.get("smart_cut_last_plan") or {})
+        self.production_strategy = str(
+            state.get("production_strategy") or "full_range"
+        )
+        if self.production_strategy not in {"full_range", "incremental"}:
+            self.production_strategy = "full_range"
+        self.production_batch_seconds = max(
+            MIN_PRODUCTION_BATCH_SECONDS,
+            float(state.get("production_batch_seconds", 30.0)),
+        )
+        incremental = state.get("incremental_production") or {}
+        self.incremental_approved_horizon = max(
+            0.0, float(incremental.get("approved_horizon_seconds", 0.0))
+        )
+        self.incremental_pending_start = max(
+            0.0, float(incremental.get("pending_start_seconds", 0.0))
+        )
+        self.incremental_pending_end = max(
+            self.incremental_pending_start,
+            float(incremental.get("pending_end_seconds", 0.0)),
+        )
+        self.incremental_batch_phase = str(incremental.get("phase") or "")
+        raw_preview_seed = incremental.get("preview_seed")
+        self.preview_seed = int(raw_preview_seed) if raw_preview_seed is not None else None
+        self.preview_ready = bool(incremental.get("preview_ready", False))
         track_rows = state.get("tracks") or []
         if track_rows:
             self.tracks = [TimelineTrack(**values) for values in track_rows]
@@ -7066,12 +10639,20 @@ class DirectorCutStudio(QMainWindow):
             MediaAsset(**values) for values in state.get("timeline_clips", [])
         ]
         self._sync_timeline_clip_sources()
-        self.text_layers = [TextLayer(**values) for values in state.get("text_layers", [])]
+        self.text_layers = [
+            text_layer_from_mapping(values)
+            for values in state.get("text_layers", [])
+            if isinstance(values, dict)
+        ]
         self._normalize_text_layer_tracks()
         self.authored_text_requirements = deepcopy(
             state.get("authored_text_requirements") or []
         )
-        self.director_cues = [DirectorCue(**values) for values in state.get("director_cues", [])]
+        self.director_cues = [
+            director_cue_from_mapping(values)
+            for values in state.get("director_cues", [])
+            if isinstance(values, dict)
+        ]
         self.preview_paths = {
             key: Path(value) for key, value in state.get("preview_paths", {}).items()
             if Path(value).is_file()
@@ -7079,15 +10660,22 @@ class DirectorCutStudio(QMainWindow):
         self.clip_start.blockSignals(True)
         self.clip_end.blockSignals(True)
         self.clip_start.setRange(0.0, duration)
-        self.clip_end.setRange(0.01, duration)
+        self.clip_end.setRange(0.01, MAX_MANUAL_TIMELINE_SECONDS)
         work_area = state.get("work_area", [0.0, duration])
         self.clip_start.setValue(min(duration, float(work_area[0])))
-        self.clip_end.setValue(min(duration, max(0.01, float(work_area[1]))))
+        self.clip_end.setValue(max(0.01, float(work_area[1])))
         self.clip_start.blockSignals(False)
         self.clip_end.blockSignals(False)
         self.asset_start.setRange(0.0, duration)
         self.asset_end.setRange(0.0, duration)
         self.position_slider.setRange(0, max(1, round(duration * 1000)))
+        if hasattr(self, "storyboard_target_spin"):
+            self.storyboard_target_spin.blockSignals(True)
+            self.storyboard_target_spin.setValue(
+                self.storyboard_target_duration_seconds
+            )
+            self.storyboard_target_spin.blockSignals(False)
+            self._refresh_storyboard_trim_controls()
         for name, value in state.get("prompt", {}).items():
             field = getattr(self.prompt_panel, name, None)
             if isinstance(field, QPlainTextEdit):
@@ -7111,6 +10699,32 @@ class DirectorCutStudio(QMainWindow):
         self._sync_prompt_panel_from_timeline()
         self.refresh_activation()
         self.render_timeline_at(self.playhead_seconds, force_seek=True)
+        strategy_index = self.production_strategy_combo.findData(
+            self.production_strategy
+        )
+        self.production_strategy_combo.blockSignals(True)
+        self.production_strategy_combo.setCurrentIndex(max(0, strategy_index))
+        self.production_strategy_combo.blockSignals(False)
+        self.production_batch_spin.blockSignals(True)
+        self.production_batch_spin.setValue(self.production_batch_seconds)
+        self.production_batch_spin.blockSignals(False)
+        self.accept_preview_button.setEnabled(
+            self.preview_ready and self.preview_seed is not None
+        )
+        self.reject_preview_button.setEnabled(
+            self.preview_ready and self.preview_seed is not None
+        )
+        self._refresh_incremental_controls()
+        # Prompt/media widgets emit conservative dirty signals while an
+        # Undo/Redo snapshot is restored. The snapshot's audited Segment set
+        # is authoritative and reinstated only after all UI refreshes finish.
+        self.render_dirty_segment_ids = {
+            str(value)
+            for value in state.get("render_dirty_segment_ids", [])
+            if str(value).strip()
+        }
+        self.render_runtime_status.clear()
+        self._refresh_render_status_bar()
 
     def _set_design_duration(self, duration: float) -> None:
         if not self.scan:
@@ -7123,7 +10737,7 @@ class DirectorCutStudio(QMainWindow):
             ):
                 node.setdefault("inputs", {})["value"] = duration
         self.clip_start.setRange(0.0, duration)
-        self.clip_end.setRange(0.01, duration)
+        self.clip_end.setRange(0.01, MAX_MANUAL_TIMELINE_SECONDS)
         self.clip_start.setValue(0.0)
         self.clip_end.setValue(duration)
         self.asset_start.setRange(0.0, duration)
@@ -7131,6 +10745,17 @@ class DirectorCutStudio(QMainWindow):
         self.position_slider.setRange(0, max(1, round(duration * 1000)))
         self.timeline.set_duration(duration)
         self._refresh_render_status_bar()
+        self._refresh_storyboard_trim_controls()
+        self.incremental_approved_horizon = min(
+            duration, self.incremental_approved_horizon
+        )
+        self.incremental_pending_start = min(
+            duration, self.incremental_pending_start
+        )
+        self.incremental_pending_end = min(
+            duration, max(self.incremental_pending_start, self.incremental_pending_end)
+        )
+        self._refresh_incremental_controls()
 
     def _design_track(self, track_id: str, kind: str) -> TimelineTrack:
         normalized = str(track_id or "").strip().upper()
@@ -7169,13 +10794,33 @@ class DirectorCutStudio(QMainWindow):
         if not self.scan:
             return ["No workflow loaded"]
         duration = float(plan["duration_seconds"])
+        target_duration = float(
+            plan.get("_speech_timing_base_duration", duration) or duration
+        )
+        self.storyboard_target_duration_seconds = min(
+            duration, max(0.5, target_duration)
+        )
+        if hasattr(self, "storyboard_target_spin"):
+            self.storyboard_target_spin.blockSignals(True)
+            self.storyboard_target_spin.setValue(
+                self.storyboard_target_duration_seconds
+            )
+            self.storyboard_target_spin.blockSignals(False)
         self._set_design_duration(duration)
         if replace:
+            # A replacement Design is a new edit decision list.  Prior final
+            # files remain on disk, but no old approval horizon is claimed for
+            # the new Timeline.
+            self.incremental_approved_horizon = 0.0
+            self.incremental_pending_start = 0.0
+            self.incremental_pending_end = 0.0
+            self.incremental_batch_phase = ""
             for asset in self.scan.timeline_assets():
                 asset.timeline_placed = False
             self.scan.timeline_clips.clear()
             self.text_layers = []
             self.director_cues = []
+            self._refresh_incremental_controls()
 
         required_rows = deepcopy(plan.get("_required_text_layers") or [])
         if replace:
@@ -7201,7 +10846,10 @@ class DirectorCutStudio(QMainWindow):
                     self.authored_text_requirements.append(item)
                     identities.add(identity)
 
-        warnings: list[str] = []
+        warnings: list[str] = [
+            str(item) for item in plan.get("design_warnings") or []
+            if str(item).startswith(SPEECH_TIMELINE_REMINDER_PREFIX)
+        ]
         used_nodes: set[str] = set()
         visual_occupancy: dict[str, list[tuple[float, float]]] = {}
 
@@ -7262,10 +10910,14 @@ class DirectorCutStudio(QMainWindow):
         assets_by_media_id = {
             media_shortcut(asset).upper(): asset for asset in self.scan.assets
         }
-        reuse_rows = [dict(item) for item in plan.get("existing_media_uses") or []]
+        all_reuse_rows = [dict(item) for item in plan.get("existing_media_uses") or []]
+        reuse_rows = [
+            item for item in all_reuse_rows
+            if not is_analysis_only_media_use(item)
+        ]
         reused_node_ids = {
             assets_by_media_id[media_id].node_id
-            for item in reuse_rows
+            for item in all_reuse_rows
             if (media_id := str(item.get("media_id", "")).upper()) in assets_by_media_id
         }
         if reused_node_ids:
@@ -7325,7 +10977,9 @@ class DirectorCutStudio(QMainWindow):
                     ]
             if not candidates:
                 virtual = create_virtual_media_asset(
-                    self.scan, str(request["media_type"])
+                    self.scan,
+                    str(request["media_type"]),
+                    reference_id=(preferred_media_id or None),
                 )
                 self._append_media_card(virtual)
                 assets_by_media_id[stable_reference_id(virtual).upper()] = virtual
@@ -7333,6 +10987,7 @@ class DirectorCutStudio(QMainWindow):
             asset = candidates[0]
             used_nodes.add(asset.node_id)
             assign_local_media(self.scan, asset, request["local_path"])
+            self._show_immediate_image_preview(asset)
             place_asset(asset, request, "prompt")
             if request.get("generated_by_tts"):
                 source_heading = "AI DESIGN AUTHORED SPEECH TTS\n"
@@ -7400,6 +11055,79 @@ class DirectorCutStudio(QMainWindow):
                         shot.get("environment_response", ""),
                     )
                 ),
+                environment_interaction=str(shot.get("environment_interaction", "")),
+                incoming_environment_state=str(shot.get("incoming_environment_state", "")),
+                outgoing_environment_state=str(shot.get("outgoing_environment_state", "")),
+                crowd_reaction=str(shot.get("crowd_reaction", "")),
+                location_transition=str(shot.get("location_transition", "")),
+                environment_state_status=str(shot.get("environment_state_status", "")),
+                environment_physics_schema_version=int(
+                    shot.get("environment_physics_schema_version", 0) or 0
+                ),
+                combat_action_chain=str(shot.get("combat_action_chain", "")),
+                incoming_combat_state=str(shot.get("incoming_combat_state", "")),
+                outgoing_combat_state=str(shot.get("outgoing_combat_state", "")),
+                next_action_trigger=str(shot.get("next_action_trigger", "")),
+                event_causality_chain=str(shot.get("event_causality_chain", "")),
+                physical_feedback_chain=str(shot.get("physical_feedback_chain", "")),
+                causal_risk_original_action=str(shot.get("causal_risk_original_action", "")),
+                causal_risk_repair_status=str(shot.get("causal_risk_repair_status", "")),
+                causal_risk_repair_notes=str(shot.get("causal_risk_repair_notes", "")),
+                causal_validation_status=str(shot.get("causal_validation_status", "")),
+                causal_validation_issues=list(shot.get("causal_validation_issues") or []),
+                causal_validation_inherited_fields=list(
+                    shot.get("causal_validation_inherited_fields") or []
+                ),
+                final_action_resolution=str(shot.get("final_action_resolution", "")),
+                final_camera_resolution=str(shot.get("final_camera_resolution", "")),
+                final_action_stable=bool(shot.get("final_action_stable", False)),
+                combat_continuity_status=str(shot.get("combat_continuity_status", "")),
+                combat_continuity_notes=str(shot.get("combat_continuity_notes", "")),
+                combat_action_schema_version=int(
+                    shot.get("combat_action_schema_version", 0) or 0
+                ),
+                combat_fact_context=str(shot.get("combat_fact_context", "")),
+                combat_story_duty_index=int(shot.get("combat_story_duty_index", 0) or 0),
+                combat_story_duty=str(shot.get("combat_story_duty", "")),
+                combat_story_duty_instruction=str(shot.get("combat_story_duty_instruction", "")),
+                combat_action_beats=list(shot.get("combat_action_beats") or []),
+                combat_action_carrier=str(shot.get("combat_action_carrier", "")),
+                combat_force_vector=dict(shot.get("combat_force_vector") or {}),
+                incoming_combat_state_vector=dict(shot.get("incoming_combat_state_vector") or {}),
+                outgoing_combat_state_vector=dict(shot.get("outgoing_combat_state_vector") or {}),
+                camera_position_sector=str(shot.get("camera_position_sector", "")),
+                camera_motion_relation=str(shot.get("camera_motion_relation", "")),
+                camera_action_trigger=str(shot.get("camera_action_trigger", "")),
+                dynamic_camera_direction=str(shot.get("dynamic_camera_direction", "")),
+                contact_material=str(shot.get("contact_material", "")),
+                environment_force_vector=dict(shot.get("environment_force_vector") or {}),
+                combat_action_chain_user_edited=bool(
+                    shot.get("combat_action_chain_user_edited", False)
+                ),
+                incoming_combat_state_user_edited=bool(
+                    shot.get("incoming_combat_state_user_edited", False)
+                ),
+                outgoing_combat_state_user_edited=bool(
+                    shot.get("outgoing_combat_state_user_edited", False)
+                ),
+                next_action_trigger_user_edited=bool(
+                    shot.get("next_action_trigger_user_edited", False)
+                ),
+                environment_interaction_user_edited=bool(
+                    shot.get("environment_interaction_user_edited", False)
+                ),
+                incoming_environment_state_user_edited=bool(
+                    shot.get("incoming_environment_state_user_edited", False)
+                ),
+                outgoing_environment_state_user_edited=bool(
+                    shot.get("outgoing_environment_state_user_edited", False)
+                ),
+                crowd_reaction_user_edited=bool(
+                    shot.get("crowd_reaction_user_edited", False)
+                ),
+                location_transition_user_edited=bool(
+                    shot.get("location_transition_user_edited", False)
+                ),
             ))
         for index, transition in enumerate(plan["transitions"], 1):
             start = float(transition["time_seconds"])
@@ -7424,20 +11152,34 @@ class DirectorCutStudio(QMainWindow):
             track = self._design_track(requested_track, track_kind)
             if track.name == track.track_id or role != "on_screen_text":
                 track.name = text_layer_track_name(track.track_id, role)
-            midpoint = (item["start_seconds"] + item["end_seconds"]) / 2
-            shot_id = next(
-                (
-                    cue.cue_id for cue in self.director_cues
-                    if cue.cue_type == "shot" and cue.start_seconds <= midpoint <= cue.end_seconds
-                ),
-                "",
-            )
+            # Normalization already owns the authoritative Text-to-Shot
+            # relationship, including lines whose duration extended the final
+            # Shot.  Preserve it instead of re-guessing at an inclusive
+            # boundary where either adjacent Shot could win.
+            planned_shot_id = str(item.get("shot_id", "")).strip()
+            valid_shot_ids = {
+                cue.cue_id for cue in self.director_cues if cue.cue_type == "shot"
+            }
+            if planned_shot_id in valid_shot_ids:
+                shot_id = planned_shot_id
+            else:
+                midpoint = (item["start_seconds"] + item["end_seconds"]) / 2
+                shot_id = next(
+                    (
+                        cue.cue_id for cue in self.director_cues
+                        if cue.cue_type == "shot"
+                        and cue.start_seconds <= midpoint < cue.end_seconds
+                    ),
+                    "",
+                )
             self.text_layers.append(TextLayer(
                 f"T{index}", item["content"], item["start_seconds"], item["end_seconds"],
                 track.track_id, content_role=item["role"], speaker=item["speaker"],
                 language=item["language"], delivery=item["delivery"],
                 lip_sync=item["lip_sync"], shot_id=shot_id,
+                overlap_policy=item.get("overlap_policy", "auto"),
             ))
+        self._normalize_text_layer_tracks()
         if (
             plan.get("theme_text")
             and plan.get("theme_text_explicit_user_requested", False)
@@ -7464,6 +11206,26 @@ class DirectorCutStudio(QMainWindow):
         )
         return warnings
 
+    def _notify_design_apply_failed(
+        self, message: str, *, category: str = "Workspace"
+    ) -> None:
+        # Cleanup is transactional: never unload resources while a failed or
+        # incomplete Apply may still need them for correction/retry.
+        self.pending_design_cleanup_job = {}
+        dialog = self.active_design_apply_dialog
+        if dialog is not None:
+            dialog.mark_apply_failed(str(message), category=category)
+        self.statusBar().showMessage(
+            f"AI Design Apply stopped · {category}: {message}", 15000
+        )
+
+    def _notify_design_apply_succeeded(
+        self, warnings: list[str] | None = None
+    ) -> None:
+        dialog = self.active_design_apply_dialog
+        if dialog is not None:
+            dialog.mark_apply_succeeded(warnings)
+
     def _commit_ai_design(
         self,
         plan: dict,
@@ -7482,15 +11244,17 @@ class DirectorCutStudio(QMainWindow):
         self.undo_stack.push(
             WorkspaceDesignCommand(before, after, self._restore_design_workspace_state)
         )
-        self.example_work_dir = design_dir.resolve()
+        workspace = self._ensure_project_workspace(project_display_name_for_plan(plan))
         self.timeline_tts_stale = bool(timeline_tts_stale)
+        self._sync_shot_take_states()
+        self._write_shot_state_manifests()
         self._mark_dirty()
         message = f"AI Design applied · {plan['duration_seconds']:.2f}s · {design_dir}"
         if warnings:
             message += f" · {len(warnings)} warning(s)"
         self.statusBar().showMessage(message, 12000)
-        if warnings:
-            QMessageBox.warning(self, "AI Design applied with warnings", "\n".join(warnings))
+        self._notify_design_apply_succeeded(warnings)
+        self.start_queued_design_cleanup()
 
     def _start_design_tts_generation(
         self,
@@ -7511,6 +11275,11 @@ class DirectorCutStudio(QMainWindow):
             and not self._require_voxcpm_model()
         ):
             raise RuntimeError(voxcpm_missing_message())
+        if (
+            self.render_settings.dialogue_tts_engine == "qwen3_tts_local"
+            and not self._require_qwen3_tts_model()
+        ):
+            raise RuntimeError(qwen3_tts_missing_message())
         CACHE_ROOT.mkdir(parents=True, exist_ok=True)
         job_path = CACHE_ROOT / f"design_tts_{time.time_ns()}.json"
         job_path.write_text(json.dumps({
@@ -7523,6 +11292,10 @@ class DirectorCutStudio(QMainWindow):
             "voxcpm_model": str(VOXCPM_MODEL_DIR),
             "voxcpm_device": "auto",
             "voxcpm_local_files_only": True,
+            "qwen3_tts_model": str(QWEN3_TTS_MODEL_DIR),
+            "qwen3_tts_runtime": str(QWEN3_TTS_RUNTIME_DIR),
+            "qwen3_tts_device": "auto",
+            "qwen3_tts_local_files_only": True,
         }, ensure_ascii=False), encoding="utf-8")
         self.pending_design_tts = {
             "plan": plan,
@@ -7542,11 +11315,11 @@ class DirectorCutStudio(QMainWindow):
         self.design_tts_runner = runner
         self.design_button.setEnabled(False)
         self.generation_previous_monitor = self.monitor_display_stack.currentWidget()
-        engine_label = (
-            "VoxCPM2 Local"
-            if self.render_settings.dialogue_tts_engine == "voxcpm2_local"
-            else "Edge TTS"
-        )
+        engine_label = {
+            "voxcpm2_local": "VoxCPM2 Local",
+            "qwen3_tts_local": "Qwen3-TTS Local",
+            "edge_tts": "Edge TTS",
+        }.get(self.render_settings.dialogue_tts_engine, "TTS")
         self.generation_overlay.start(
             f"{engine_label} · generating exact authored Mandarin speech"
         )
@@ -7570,6 +11343,8 @@ class DirectorCutStudio(QMainWindow):
                 "language": layer.language,
                 "delivery": layer.delivery,
                 "lip_sync": layer.lip_sync,
+                "track_id": layer.track_id,
+                "overlap_policy": layer.overlap_policy,
             }
             for layer in sorted(
                 self.text_layers,
@@ -7743,6 +11518,11 @@ class DirectorCutStudio(QMainWindow):
             and not self._require_voxcpm_model(notify=bool(resume))
         ):
             return False
+        if (
+            self.render_settings.dialogue_tts_engine == "qwen3_tts_local"
+            and not self._require_qwen3_tts_model(notify=bool(resume))
+        ):
+            return False
         layers = self._speech_layers_for_tts()
         if not layers:
             latest_signature = self._timeline_tts_signature()
@@ -7779,6 +11559,10 @@ class DirectorCutStudio(QMainWindow):
             "voxcpm_model": str(VOXCPM_MODEL_DIR),
             "voxcpm_device": "auto",
             "voxcpm_local_files_only": True,
+            "qwen3_tts_model": str(QWEN3_TTS_MODEL_DIR),
+            "qwen3_tts_runtime": str(QWEN3_TTS_RUNTIME_DIR),
+            "qwen3_tts_device": "auto",
+            "qwen3_tts_local_files_only": True,
         }, ensure_ascii=False), encoding="utf-8")
         self.pending_design_tts = {
             "mode": "timeline_refresh",
@@ -7792,11 +11576,11 @@ class DirectorCutStudio(QMainWindow):
         runner.finished.connect(self._design_tts_finished)
         self.design_tts_runner = runner
         self.generation_previous_monitor = self.monitor_display_stack.currentWidget()
-        engine_label = (
-            "VoxCPM2 Local"
-            if self.render_settings.dialogue_tts_engine == "voxcpm2_local"
-            else "Edge TTS"
-        )
+        engine_label = {
+            "voxcpm2_local": "VoxCPM2 Local",
+            "qwen3_tts_local": "Qwen3-TTS Local",
+            "edge_tts": "Edge TTS",
+        }.get(self.render_settings.dialogue_tts_engine, "TTS")
         self.generation_overlay.start(
             f"{engine_label} · rebuilding edited Timeline dialogue"
         )
@@ -7924,10 +11708,11 @@ class DirectorCutStudio(QMainWindow):
                 if item.get("requirement_id") != "authored_speech_tts"
             ]
             warnings = list(pending["warnings"])
-            failed_engine = (
-                "VoxCPM2" if self.render_settings.dialogue_tts_engine == "voxcpm2_local"
-                else "Edge TTS"
-            )
+            failed_engine = {
+                "voxcpm2_local": "VoxCPM2",
+                "qwen3_tts_local": "Qwen3-TTS",
+                "edge_tts": "Edge TTS",
+            }.get(self.render_settings.dialogue_tts_engine, "TTS")
             warnings.append(
                 f"{failed_engine} authored speech failed, but the Design Timeline, Shots and exact "
                 "Text Layers were preserved. The failed/silent Audio placeholder was not "
@@ -8116,23 +11901,36 @@ class DirectorCutStudio(QMainWindow):
 
     def apply_ai_design(self, plan: dict, replace: bool = True) -> None:
         if not self.scan:
+            self._notify_design_apply_failed(
+                "No executable ComfyUI workflow is loaded.", category="Workflow"
+            )
             return
         if (
             (self.design_media_runner and self.design_media_runner.is_running())
+            or (
+                self.media_regeneration_runner
+                and self.media_regeneration_runner.is_running()
+            )
             or (self.design_tts_runner and self.design_tts_runner.is_running())
             or (self.submit_runner and self.submit_runner.is_running())
         ):
-            QMessageBox.information(
-                self, "Generation running", "Wait for the current ComfyUI job to finish first."
+            self._notify_design_apply_failed(
+                "A ComfyUI, TTS or image-generation task is still running. "
+                "Wait for it to finish, then retry Apply.",
+                category="Execution state",
             )
             return
         try:
             selected_tts_engine = str(
                 plan.pop("_dialogue_tts_engine", self.render_settings.dialogue_tts_engine)
             ).strip().lower()
+            selected_music_mode = normalize_design_music_mode(
+                plan.pop("_music_mode", self.render_settings.music_mode)
+            )
             self.render_settings = RenderSettings.from_mapping({
                 **asdict(self.render_settings),
                 "dialogue_tts_engine": selected_tts_engine,
+                "music_mode": selected_music_mode,
             })
             tts_index = self.settings_dialogue_tts.findData(
                 self.render_settings.dialogue_tts_engine
@@ -8142,6 +11940,8 @@ class DirectorCutStudio(QMainWindow):
             self.settings_dialogue_tts.blockSignals(False)
             save_settings(SETTINGS_ENV, self.render_settings)
             authored_requirement = str(plan.get("_authored_requirement", ""))
+            subtitles_enabled = bool(plan.get("_subtitles_enabled", False))
+            dialogue_language = str(plan.get("_dialogue_language", "") or "")
             required_text_layers = deepcopy(
                 plan.get("_required_text_layers") or []
             )
@@ -8158,7 +11958,9 @@ class DirectorCutStudio(QMainWindow):
                 existing_media=self._design_context().get("existing_media") or [],
                 repair_media_plan=True,
                 authored_requirement=authored_requirement,
+                special_skill_key=str(self.special_combo.currentData() or ""),
             )
+            plan = enforce_design_music_mode(plan, selected_music_mode)
             plan = protect_explicit_timed_text_layers(
                 plan, authored_requirement
             )
@@ -8171,16 +11973,78 @@ class DirectorCutStudio(QMainWindow):
             tts_required = self._ensure_authored_tts_request(
                 plan, authored_requirement
             )
+            deferred_tts_reason = str(plan.pop("_tts_deferred_reason", "")).strip()
+            if deferred_tts_reason:
+                pipeline_warnings.append(deferred_tts_reason)
             self._validate_design_segment_capacity(plan)
             if (
                 tts_required
                 and self.render_settings.dialogue_tts_engine == "voxcpm2_local"
                 and not self._require_voxcpm_model()
             ):
-                raise ValueError(voxcpm_missing_message())
-            DESIGN_EXAMPLE_ROOT.mkdir(exist_ok=True)
+                plan["media_requests"] = [
+                    item for item in plan.get("media_requests") or []
+                    if item.get("requirement_id") != "authored_speech_tts"
+                ]
+                tts_required = False
+                deferred_tts_reason = (
+                    "VoxCPM2 model is missing. Exact editable Text Layers were preserved; "
+                    "WAV generation is deferred and the Timeline dialogue remains pending. "
+                    + voxcpm_missing_message()
+                )
+                pipeline_warnings.append(deferred_tts_reason)
+            if (
+                tts_required
+                and self.render_settings.dialogue_tts_engine == "qwen3_tts_local"
+                and not self._require_qwen3_tts_model()
+            ):
+                plan["media_requests"] = [
+                    item for item in plan.get("media_requests") or []
+                    if item.get("requirement_id") != "authored_speech_tts"
+                ]
+                tts_required = False
+                deferred_tts_reason = (
+                    "Qwen3-TTS runtime/model is missing. Exact editable Text Layers were "
+                    "preserved; WAV generation is deferred and Timeline dialogue remains "
+                    "pending. " + qwen3_tts_missing_message()
+                )
+                pipeline_warnings.append(deferred_tts_reason)
+            try:
+                plan = enforce_design_dialogue_language(
+                    plan,
+                    dialogue_language,
+                    authored_requirement=authored_requirement,
+                )
+            except DesignDialogueLanguageContractError as exc:
+                pipeline_warnings.append(
+                    "Dialogue language mismatch remains editable on the Timeline; Apply "
+                    "continued without silently rewriting authored words. " + str(exc)
+                )
+            plan = enforce_design_subtitle_policy(
+                plan,
+                subtitles_enabled,
+                authored_requirement=authored_requirement,
+            )
+            plan = reconcile_requested_speech_layer_contract(
+                authored_requirement, plan
+            )
+            workspace = self._ensure_project_workspace(
+                self._preferred_workspace_display_name(plan, authored_requirement)
+            )
+            design_revision, media_revision, audio_revision = next_design_revision(
+                workspace
+            )
             design_dir, materials = materialize_design_media(
-                plan, DESIGN_EXAMPLE_ROOT, self.runtime.ffmpeg
+                plan,
+                workspace,
+                self.runtime.ffmpeg,
+                design_dir=design_revision,
+                media_dir=media_revision,
+                audio_dir=audio_revision,
+            )
+            bind_design_source_plate_paths(
+                materials,
+                self._design_context().get("existing_media") or [],
             )
             before = self._design_workspace_state()
             settings = load_design_settings(DESIGN_SETTINGS_ENV)
@@ -8246,10 +12110,12 @@ class DirectorCutStudio(QMainWindow):
                 self._start_design_media_generation(
                     plan, materials, replace, before, design_dir, settings,
                     initial_warnings=warnings,
+                    timeline_tts_stale=bool(deferred_tts_reason),
                 )
             else:
                 self._commit_ai_design(
-                    plan, materials, replace, before, design_dir, warnings
+                    plan, materials, replace, before, design_dir, warnings,
+                    timeline_tts_stale=bool(deferred_tts_reason),
                 )
         except Exception as exc:
             self.generation_overlay.stop()
@@ -8260,15 +12126,21 @@ class DirectorCutStudio(QMainWindow):
                 self.design_media_runner = None
             self.pending_ai_design = None
             self.pending_design_tts = None
-            QMessageBox.critical(self, "Apply AI Design failed", str(exc))
+            self._notify_design_apply_failed(str(exc))
 
     def _validate_design_segment_capacity(self, plan: dict) -> None:
         """Fail before generation when one time range cannot fit H3 9/3/3."""
+        validate_drone_image_request_budget(
+            plan,
+            str(self.special_combo.currentData() or ""),
+        )
         if not self.scan:
             return
         duration = float(plan.get("duration_seconds", self.scan.duration_seconds))
         rows: list[tuple[str, str, float, float]] = []
         for index, item in enumerate(plan.get("existing_media_uses") or [], 1):
+            if is_analysis_only_media_use(item):
+                continue
             media_type = str(item.get("media_type", "")).lower()
             identity = str(item.get("media_id") or f"existing-{index}").upper()
             rows.append((
@@ -8359,11 +12231,13 @@ class DirectorCutStudio(QMainWindow):
                 None,
             )
             if replaceable is None:
-                raise ValueError(
+                plan["_tts_deferred_reason"] = (
                     "Exact authored speech needs one empty Audio reference slot for Mandarin TTS, "
-                    "but all Audio slots are occupied or already reserved. Clear one A slot, or "
-                    "explicitly reference a real speech asset such as @A1 in the Design requirement."
+                    "but all three physical Audio slots are occupied or reserved. Apply continued "
+                    "with exact editable Text Layers; clear one A slot or use H3 Native Dialogue "
+                    "before Preview/Run to build speech audio."
                 )
+                return False
             requests.remove(replaceable)
         transcript = "\n".join(
             f"[{float(item['start_seconds']):.2f}-{float(item['end_seconds']):.2f}s] "
@@ -8398,24 +12272,65 @@ class DirectorCutStudio(QMainWindow):
         plan["media_requests"] = requests
         return True
 
+    def queue_design_cleanup(self, job: dict) -> None:
+        """Remember cleanup intent without racing the durable Apply commit."""
+
+        self.pending_design_cleanup_job = dict(job or {})
+
+    def start_queued_design_cleanup(self) -> None:
+        """Run the queued cleanup only after a successful Workspace commit."""
+
+        job = dict(self.pending_design_cleanup_job)
+        self.pending_design_cleanup_job = {}
+        if job:
+            self.start_design_cleanup(job)
+
     def start_design_cleanup(self, job: dict) -> None:
-        """Unload Design-only ComfyUI and LM Studio models after Apply."""
+        """Release local RAM and remote ComfyUI/LM memory after Apply."""
         if self.design_cleanup_runner and self.design_cleanup_runner.is_running():
             self.design_cleanup_runner.stop()
+        # Release cyclic Python/Qt-side objects first. CUDA allocations owned
+        # by ComfyUI cannot be released from this process; its /free endpoint
+        # below is the authoritative model unload and VRAM-cache operation.
+        job = dict(job or {})
+        operation = str(job.get("operation", "post_apply"))
+        if job.get("clear_local_cache", operation == "manual_unload_all"):
+            QPixmapCache.clear()
+            self.monitor_source_pixmaps.clear()
+            job["local_cache_cleared"] = True
+        local_collected = gc.collect()
+        job["local_gc_collected"] = int(local_collected)
         CACHE_ROOT.mkdir(parents=True, exist_ok=True)
         job_path = CACHE_ROOT / f"design_cleanup_{time.time_ns()}.json"
         job_path.write_text(json.dumps(job, ensure_ascii=False), encoding="utf-8")
+        self.design_cleanup_job_path = job_path
         runner = JsonLineProcess(self, "design-model-cleanup")
         runner.message.connect(self._design_cleanup_message)
         runner.finished.connect(self._design_cleanup_finished)
         self.design_cleanup_runner = runner
         self.design_cleanup_result = {}
-        self.statusBar().showMessage("AI Design applied · releasing ComfyUI and LM Studio models…")
+        if operation == "manual_unload_all":
+            self.statusBar().showMessage(
+                "UNLOAD ALL · clearing runtime cache/DRAM and unloading ComfyUI + LM Studio…"
+            )
+        else:
+            self.statusBar().showMessage(
+                "AI Design applied · clearing RAM and unloading ComfyUI VRAM/cache…"
+            )
         if not runner.start(
             str(self.runtime.python),
             [str(PROJECT_ROOT / "design_cleanup_service.py"), str(job_path)],
         ):
-            self.statusBar().showMessage("AI Design applied · model cleanup worker unavailable")
+            self.statusBar().showMessage(
+                "AI Design applied · RAM collected · ComfyUI cleanup worker unavailable"
+            )
+            try:
+                job_path.unlink(missing_ok=True)
+            except OSError:
+                pass
+            self.design_cleanup_job_path = None
+            if operation == "manual_unload_all":
+                self.unload_all_button.setEnabled(True)
 
     def _design_cleanup_message(self, payload: dict) -> None:
         if payload.get("completed") or payload.get("error"):
@@ -8423,25 +12338,73 @@ class DirectorCutStudio(QMainWindow):
 
     def _design_cleanup_finished(self, exit_code: int, log: str) -> None:
         result = self.design_cleanup_result
+        manual = result.get("operation") == "manual_unload_all"
+        prefix = "UNLOAD ALL" if manual else "AI Design applied"
         warnings = list(result.get("warnings") or [])
         if exit_code or result.get("error"):
             warnings.append(str(result.get("error") or log[-400:] or f"worker exit {exit_code}"))
         if warnings:
             self.statusBar().showMessage(
-                "AI Design applied · model cleanup warning: " + " | ".join(warnings),
+                prefix + " · cleanup warning: " + " | ".join(warnings),
                 15000,
             )
         else:
             lm_count = len(result.get("lm_unloaded") or [])
             self.statusBar().showMessage(
-                f"AI Design applied · ComfyUI image model released · "
+                f"{prefix} · runtime cache/DRAM cleared · ComfyUI model/VRAM/cache released · "
                 f"LM Studio model released ({lm_count} instance(s))",
                 12000,
             )
+        # Let Qt dispose of any deferred dialog/media objects, then collect a
+        # second time. This is local application RAM only and never changes
+        # Timeline, mapping, generated files or the committed Workspace.
+        QTimer.singleShot(0, gc.collect)
+        if self.design_cleanup_job_path:
+            try:
+                self.design_cleanup_job_path.unlink(missing_ok=True)
+            except OSError:
+                pass
+        self.design_cleanup_job_path = None
         if self.design_cleanup_runner:
             self.design_cleanup_runner.deleteLater()
         self.design_cleanup_runner = None
         self.design_cleanup_result = {}
+        self.unload_all_button.setEnabled(True)
+
+    def unload_all_resources(self) -> None:
+        """Manually release idle Studio, ComfyUI and LM Studio runtime memory."""
+
+        active_runners = (
+            self.submit_runner,
+            self.design_media_runner,
+            self.media_regeneration_runner,
+            self.design_tts_runner,
+        )
+        if any(runner and runner.is_running() for runner in active_runners):
+            QMessageBox.warning(
+                self,
+                "UNLOAD ALL unavailable",
+                "A render, reference-image or TTS job is still running. Wait for it to finish "
+                "before unloading models and runtime memory.",
+            )
+            return
+        if self.design_cleanup_runner and self.design_cleanup_runner.is_running():
+            self.statusBar().showMessage("UNLOAD ALL · cleanup is already running", 5000)
+            return
+        self.design_ai_settings = load_design_settings(DESIGN_SETTINGS_ENV)
+        self.unload_all_button.setEnabled(False)
+        self.start_design_cleanup({
+            "operation": "manual_unload_all",
+            "clear_local_cache": True,
+            "provider": "lm_studio",
+            "base_url": self.design_ai_settings.lm_studio_base_url,
+            # An empty selection deliberately targets every loaded instance
+            # returned by LM Studio instead of guessing names from settings.
+            "model": "",
+            "unload_all_lm_models": True,
+            "comfyui_server": self.server_url.text().strip(),
+            "timeout": min(120, max(10, self.design_ai_settings.timeout)),
+        })
 
     def choose_workflow(self) -> None:
         filename, _ = QFileDialog.getOpenFileName(self, "Open ComfyUI API workflow", str(PROJECT_ROOT), "JSON (*.json)")
@@ -8468,14 +12431,67 @@ class DirectorCutStudio(QMainWindow):
             self.scan = None
         self.project_path = None
         self.example_work_dir = None
+        self.project_workspace_id = ""
+        self.legacy_project_source = None
+        self.shot_take_states = {}
+        self.segment_take_states = {}
+        self.quality_profile = "approved_final"
+        self.storyboard_target_duration_seconds = 45.0
+        self.storyboard_view_mode = "large_icons"
+        self.smart_cut_last_plan = {}
+        self.smart_cut_job_id = ""
+        self.smart_cut_unload_job_id = ""
+        self.smart_cut_dialog = None
+        self.smart_cut_runner.stop()
+        self.storyboard_trim_active = False
+        self.production_strategy = "full_range"
+        self.production_batch_seconds = 30.0
+        self.incremental_approved_horizon = 0.0
+        self.incremental_pending_start = 0.0
+        self.incremental_pending_end = 0.0
+        self.incremental_batch_phase = ""
+        self.preview_seed = None
+        self.preview_ready = False
+        if hasattr(self, "production_strategy_combo"):
+            index = self.production_strategy_combo.findData("full_range")
+            self.production_strategy_combo.blockSignals(True)
+            self.production_strategy_combo.setCurrentIndex(max(0, index))
+            self.production_strategy_combo.blockSignals(False)
+            self.production_batch_spin.blockSignals(True)
+            self.production_batch_spin.setValue(self.production_batch_seconds)
+            self.production_batch_spin.blockSignals(False)
+            self._refresh_incremental_controls()
+        if hasattr(self, "storyboard_target_spin"):
+            self.storyboard_target_spin.blockSignals(True)
+            self.storyboard_target_spin.setValue(
+                self.storyboard_target_duration_seconds
+            )
+            self.storyboard_target_spin.blockSignals(False)
+        if hasattr(self, "storyboard_trim_button"):
+            if hasattr(self, "manual_ripple_action"):
+                self.manual_ripple_action.setChecked(False)
+            self._refresh_storyboard_trim_controls()
+        if hasattr(self, "quality_profile_combo"):
+            index = self.quality_profile_combo.findData(self.quality_profile)
+            self.quality_profile_combo.blockSignals(True)
+            self.quality_profile_combo.setCurrentIndex(max(0, index))
+            self.quality_profile_combo.blockSignals(False)
         self.project_dirty = False
         self.undo_stack.clear()
         self.undo_stack.setClean()
         self._update_window_title()
         self.statusBar().showMessage("New Director project ready")
 
-    def _clear_generated_output(self) -> None:
+    def _clear_generated_output(self, *, preserve_segment_cache: bool = False) -> None:
+        """Detach the displayed Master, optionally retaining reusable Segment Takes.
+
+        Structural Timeline editors invalidate the assembled Master immediately,
+        but their unchanged Segment checkpoints remain valuable.  Callers that
+        remap and explicitly dirty old/new ranges use ``preserve_segment_cache``;
+        full project/design resets keep the original destructive behavior.
+        """
         self.generated_output_locked = False
+        self.storyboard_preview_active = False
         self.generated_output_path = None
         self.generated_playback_path = None
         self.generated_output_timeline_start = 0.0
@@ -8485,12 +12501,20 @@ class DirectorCutStudio(QMainWindow):
         self.generated_proxy_runner = None
         self.generated_proxy_source = None
         self.generated_proxy_target = None
+        proxy_working = self.generated_proxy_working
+        self.generated_proxy_working = None
         if proxy_runner:
             proxy_runner.stop()
             proxy_runner.deleteLater()
-        self.smart_render_manifest = {}
-        self.smart_render_manifests = {}
-        self.render_dirty_segment_ids.clear()
+        if proxy_working:
+            try:
+                proxy_working.unlink(missing_ok=True)
+            except OSError:
+                pass
+        if not preserve_segment_cache:
+            self.smart_render_manifest = {}
+            self.smart_render_manifests = {}
+            self.render_dirty_segment_ids.clear()
         self.render_runtime_status.clear()
         self.submit_request_kind = "final"
         self._refresh_render_status_bar()
@@ -8546,24 +12570,1334 @@ class DirectorCutStudio(QMainWindow):
         except OSError as exc:
             QMessageBox.critical(self, "Export failed", str(exc))
 
-    def _ensure_example_work_dir(self) -> Path:
+    def _first_loaded_picture(self) -> MediaAsset | None:
+        if not self.scan:
+            return None
+        pictures = [
+            asset for asset in self.scan.assets
+            if asset.media_type == "image" and str(asset.local_path).strip()
+        ]
+
+        def order(asset: MediaAsset) -> tuple[int, str]:
+            match = re.search(r"(\d+)$", stable_reference_id(asset))
+            return (int(match.group(1)) if match else 10_000, stable_reference_id(asset))
+
+        return min(pictures, key=order) if pictures else None
+
+    def _preferred_workspace_display_name(
+        self,
+        plan: dict | None = None,
+        authored_requirement: str = "",
+    ) -> str:
+        """Name projects from P1 visual evidence, then from authored story text."""
+        first_picture = self._first_loaded_picture()
+        if first_picture is not None:
+            overview = picture_overview_project_name(first_picture.recognition)
+            if overview:
+                return overview
+            # When BLIP only says that P1 is a page/poster/screenshot, it has
+            # supplied no useful scene subject for naming.  Prefer an authored
+            # Design title (including a Unicode title) before falling back to
+            # generic reference keywords.
+            if plan:
+                authored_title = str(plan.get("title", "")).strip()
+                if authored_title and not project_name_is_provisional(authored_title):
+                    return authored_title
+            media_id = stable_reference_id(first_picture)
+            for row in (plan or {}).get("existing_media_uses") or []:
+                if not isinstance(row, dict) or str(row.get("media_id", "")) != media_id:
+                    continue
+                keywords = [
+                    workspace_folder_name(str(value), "")
+                    for value in row.get("subject_keywords") or []
+                ]
+                keywords = [value for value in keywords if value]
+                if keywords:
+                    return "_".join(keywords)[:80].strip(" ._")
+            # Never fall back to an opaque imported filename: the user asked
+            # for visual meaning, not a camera/download filename. Design will
+            # supply subject keywords if BLIP has not completed yet.
+        if plan:
+            planned_name = project_display_name_for_plan(plan)
+            if planned_name and not planned_name.startswith("h3_project"):
+                return planned_name
+        if str(authored_requirement).strip():
+            return design_requirement_project_name(authored_requirement)
+        if plan:
+            return project_display_name_for_plan(plan)
+        return "h3_project"
+
+    @staticmethod
+    def _storyboard_target_from_workspace(
+        workspace_root: Path,
+        fallback_duration: float,
+    ) -> float:
+        """Recover the original requested duration from the latest Design revision."""
+        revision_root = workspace_root / "design" / "revisions"
+        candidates = sorted(
+            revision_root.glob("R*/design_plan.json"),
+            key=lambda path: path.parent.name,
+            reverse=True,
+        )
+        for candidate in candidates:
+            try:
+                payload = json.loads(candidate.read_text(encoding="utf-8-sig"))
+                target = float(
+                    payload.get("_speech_timing_base_duration", 0.0) or 0.0
+                )
+            except (OSError, ValueError, TypeError, json.JSONDecodeError):
+                continue
+            if target >= 0.5:
+                return min(max(0.5, target), max(0.5, fallback_duration))
+        return max(0.5, float(fallback_duration))
+
+    def _rebase_runtime_workspace_paths(self, old_root: Path, new_root: Path) -> None:
+        if not self.scan or old_root == new_root:
+            return
+        for asset in self.scan.timeline_assets():
+            if not str(asset.local_path).strip():
+                continue
+            try:
+                relative = Path(asset.local_path).resolve().relative_to(old_root)
+            except (OSError, ValueError):
+                continue
+            asset.local_path = str((new_root / relative).resolve())
+
+    def _ensure_project_workspace(self, display_name: str = "") -> Path:
+        """Return the single durable Workspace for the current project.
+
+        Legacy projects adopt the folder containing the opened project but the
+        old JSON is never rewritten: subsequent saves go to ``project/``.
+        """
         if self.example_work_dir:
-            self.example_work_dir.mkdir(parents=True, exist_ok=True)
-            return self.example_work_dir.resolve()
-        stem = self.project_path.stem if self.project_path else "h3_generated_project"
-        stem = re.sub(r"[^A-Za-z0-9._-]+", "_", stem).strip("._-") or "h3_project"
-        folder = DESIGN_EXAMPLE_ROOT / f"{stem}_{time.strftime('%Y%m%d_%H%M%S')}"
-        folder.mkdir(parents=True, exist_ok=True)
-        self.example_work_dir = folder.resolve()
+            root = Path(self.example_work_dir).resolve()
+            if str(display_name).strip() and not self.project_path:
+                old_root = root
+                root = refine_provisional_workspace_root(
+                    root,
+                    DESIGN_EXAMPLE_ROOT,
+                    str(display_name).strip(),
+                )
+                self._rebase_runtime_workspace_paths(old_root, root)
+        elif self.project_path:
+            root = locate_workspace_for_project(self.project_path, {})
+        else:
+            title = str(display_name).strip() or "h3_project"
+            root = allocate_workspace_root(DESIGN_EXAMPLE_ROOT, title)
+        manifest = ensure_workspace_layout(
+            root,
+            display_name=str(display_name).strip() or root.name,
+            workspace_id=self.project_workspace_id,
+            legacy_project_path=self.legacy_project_source,
+        )
+        self.example_work_dir = root.resolve()
+        self.project_workspace_id = str(manifest.get("workspace_id") or "")
         return self.example_work_dir
+
+    def _ensure_example_work_dir(self) -> Path:
+        """Compatibility alias retained for older Studio call sites/tests."""
+        return self._ensure_project_workspace()
+
+    def _shot_ids(self) -> list[str]:
+        return [
+            str(cue.cue_id)
+            for cue in self.director_cues
+            if cue.cue_type == "shot" and str(cue.cue_id).strip()
+        ]
+
+    def _sync_shot_take_states(self) -> None:
+        self.shot_take_states = normalize_shot_take_states(
+            self.shot_take_states,
+            self._shot_ids(),
+        )
+        self.segment_take_states = normalize_segment_take_states(
+            self.segment_take_states
+        )
+
+    def _write_shot_state_manifests(self) -> None:
+        if not self.example_work_dir:
+            return
+        shot_ranges = {
+            str(cue.cue_id): (float(cue.start_seconds), float(cue.end_seconds))
+            for cue in self.director_cues
+            if cue.cue_type == "shot"
+        }
+        write_shot_manifests(
+            self.example_work_dir,
+            self.shot_take_states,
+            shot_ranges,
+        )
+
+    def _quality_profile_changed(self, *_args) -> None:
+        selected = str(self.quality_profile_combo.currentData() or "approved_final")
+        self.quality_profile = (
+            selected if selected in QUALITY_PROFILES else "approved_final"
+        )
+        if self.quality_profile == "storyboard":
+            self.statusBar().showMessage(
+                "Storyboard quality selected - Timeline preview only; ComfyUI is not run."
+            )
+        self._mark_dirty()
+
+    def _resource_estimate(self, profile: str | None = None):
+        root = self._ensure_project_workspace()
+        selected = profile or self.quality_profile
+        duration = max(0.0, self.clip_end.value() - self.clip_start.value())
+        shots = [
+            cue for cue in self.director_cues
+            if cue.cue_type == "shot"
+            and cue.end_seconds > self.clip_start.value()
+            and cue.start_seconds < self.clip_end.value()
+        ]
+        try:
+            planned = self._planned_render_segments()
+            segment_count = len(planned)
+        except Exception:
+            planned = []
+            segment_count = max(1, int((duration + MAX_NATIVE_SECONDS - 1e-6) // MAX_NATIVE_SECONDS))
+        cache_key = "preview" if selected == "motion_preview" else "production"
+        cached_manifest = self.smart_render_manifests.get(cache_key, {})
+        cached_by_id = {
+            str(row.get("segment_id", "")): row
+            for row in cached_manifest.get("segments", [])
+            if isinstance(row, dict)
+            and Path(str(row.get("output_path", ""))).is_file()
+            and str(row.get("status", "")).lower()
+            in {"cached", "complete", "completed", "reusable"}
+        }
+        reusable_duration = sum(
+            max(
+                0.0,
+                float(
+                    segment.core_end_seconds
+                    if segment.core_end_seconds is not None
+                    else segment.end_seconds
+                )
+                - float(
+                    segment.core_start_seconds
+                    if segment.core_start_seconds is not None
+                    else segment.start_seconds
+                ),
+            )
+            for segment in planned
+            if segment.segment_id in cached_by_id
+            and segment.segment_id not in self.render_dirty_segment_ids
+        )
+        return estimate_resources(
+            root,
+            profile=selected,
+            total_duration_seconds=duration,
+            reusable_duration_seconds=reusable_duration,
+            shot_count=len(shots),
+            segment_count=segment_count,
+            reserve_disk_gb=self.render_settings.workspace_free_disk_reserve_gb,
+        )
+
+    def show_resource_estimate(self) -> None:
+        self._read_settings_ui()
+        estimate = self._resource_estimate()
+        calibration = "calibrated from this Workspace" if estimate.calibrated else "first-run estimate"
+        QMessageBox.information(
+            self,
+            "Generation resource estimate",
+            f"Quality: {QUALITY_PROFILES[estimate.profile].label}\n"
+            f"Timeline: {estimate.total_duration_seconds:.2f}s, "
+            f"{estimate.shot_count} Shot(s), {estimate.segment_count} Segment(s)\n"
+            f"New / reusable duration: {estimate.render_duration_seconds:.2f}s / "
+            f"{estimate.reusable_duration_seconds:.2f}s\n"
+            f"Estimated processing: {estimate.gpu_minutes:.1f} minutes ({calibration})\n"
+            f"Estimated additional disk: {estimate.additional_disk_bytes / 1024**3:.2f} GB\n"
+            f"Free / protected reserve: {estimate.free_disk_bytes / 1024**3:.1f} / "
+            f"{estimate.reserve_disk_bytes / 1024**3:.1f} GB\n"
+            f"Ready: {'YES' if estimate.fits_disk_budget else 'NO - insufficient reserve'}",
+        )
+
+    def _activate_storyboard_mode(self) -> None:
+        # Storyboard is a direct source-Timeline preview. Keep the generated
+        # Final visible on the right, but play source media and authored audio
+        # from the work-area head when the saved playhead is on its end frame.
+        self.timeline_playing = False
+        self.timeline_timer.stop()
+        self.generated_player.pause()
+        self.player.pause()
+        for player in self.composite_video_players.values():
+            player.pause()
+        for player in self.timeline_audio_players.values():
+            player.pause()
+        self.play_button.setText("▶")
+        self.storyboard_preview_active = True
+        start = float(self.clip_start.value())
+        end = float(self.clip_end.value())
+        target = float(self.playhead_seconds)
+        if target < start - 1e-6 or target >= end - 1e-6:
+            target = start
+        self.seek_timeline(target)
+        self.monitor_display_stack.setCurrentWidget(self.monitor_compare_splitter)
+        if self.scan:
+            self.toggle_playback()
+        self.statusBar().showMessage(
+            "Storyboard playing - Timeline source and authored audio; no H3 generation was queued."
+        )
+
+    def _storyboard_target_changed(self, value: float) -> None:
+        self.storyboard_target_duration_seconds = max(0.5, float(value))
+        self._refresh_storyboard_trim_controls()
+        self._mark_dirty()
+
+    def _refresh_storyboard_trim_controls(self) -> None:
+        if not hasattr(self, "storyboard_trim_button"):
+            return
+        duration = self.scan.duration_seconds if self.scan else 0.0
+        target = max(0.5, float(self.storyboard_target_duration_seconds))
+        remaining = max(0.0, duration - target)
+        # Keep the feature entry point stable. Replacing its label with
+        # "CUT DONE" made Auto Cut look as if it had disappeared, while
+        # disabling it prevented the user from opening the explanatory state.
+        self.storyboard_trim_button.setText("AUTO CUT")
+        self.storyboard_trim_button.setEnabled(True)
+        target_state = (
+            f"Current {duration:.1f}s → target {target:.1f}s; planned reduction {remaining:.1f}s."
+            if duration > 0.0
+            else "Load or create a Timeline, then set the Storyboard target duration."
+        )
+        self.storyboard_trim_button.setToolTip(
+            "<b>Auto Cut · Smart Cut Story Compression</b><br>"
+            f"{target_state}<br>"
+            "Main button uses Balanced mode; the arrow offers Safe, Aggressive and Manual Ripple Cut."
+        )
+        if remaining <= 0.01 and self.storyboard_trim_active:
+            self.storyboard_trim_active = False
+            if hasattr(self, "manual_ripple_action"):
+                self.manual_ripple_action.blockSignals(True)
+                self.manual_ripple_action.setChecked(False)
+                self.manual_ripple_action.blockSignals(False)
+        self.storyboard_trim_button.setStyleSheet(
+            "background:#8f3340; color:white; font-weight:700;"
+            if self.storyboard_trim_active else ""
+        )
+
+    def _toggle_storyboard_trim_mode(self, enabled: bool) -> None:
+        self.storyboard_trim_active = bool(enabled)
+        if hasattr(self, "manual_ripple_action") and self.manual_ripple_action.isChecked() != bool(enabled):
+            self.manual_ripple_action.blockSignals(True)
+            self.manual_ripple_action.setChecked(bool(enabled))
+            self.manual_ripple_action.blockSignals(False)
+        if not enabled:
+            self._refresh_storyboard_trim_controls()
+            self.statusBar().showMessage("Storyboard Ripple Cut mode disabled")
+            return
+        if not self.scan or (
+            self.scan.duration_seconds
+            <= self.storyboard_target_duration_seconds + 0.01
+        ):
+            self.storyboard_trim_active = False
+            if hasattr(self, "manual_ripple_action"):
+                self.manual_ripple_action.blockSignals(True)
+                self.manual_ripple_action.setChecked(False)
+                self.manual_ripple_action.blockSignals(False)
+            self._refresh_storyboard_trim_controls()
+            return
+        self.quality_profile = "storyboard"
+        self.storyboard_preview_active = True
+        self.timeline_playing = False
+        self.timeline_timer.stop()
+        self._stop_all_timeline_media()
+        self.play_button.setText("▶")
+        self.monitor_display_stack.setCurrentWidget(self.monitor_compare_splitter)
+        self.seek_timeline(min(self.playhead_seconds, self.scan.duration_seconds))
+        self._refresh_storyboard_trim_controls()
+        self.statusBar().showMessage(
+            "STORY CUT active · select an unwanted purple Shot Block and press Delete. "
+            f"Current {self.scan.duration_seconds:.1f}s → target "
+            f"{self.storyboard_target_duration_seconds:.1f}s · Undo/Redo supported."
+        )
+
+    def _smart_cut_shot_inputs(self) -> list[dict]:
+        """Compile current Timeline truth into the deterministic planner schema."""
+        if not self.scan:
+            return []
+        shots = sorted(
+            (cue for cue in self.director_cues if cue.cue_type == "shot"),
+            key=lambda cue: (cue.start_seconds, cue.end_seconds),
+        )
+
+        def layer_belongs(layer: TextLayer, cue: DirectorCue) -> bool:
+            if layer.shot_id:
+                return layer.shot_id == cue.cue_id
+            midpoint = (layer.start_seconds + layer.end_seconds) / 2
+            return cue.start_seconds - 1e-6 <= midpoint <= cue.end_seconds + 1e-6
+
+        rows: list[dict] = []
+        timeline_media = [
+            asset for asset in self.scan.timeline_assets()
+            if asset.timeline_placed and asset.activation_mode != "bypass"
+        ]
+        for cue in shots:
+            speech_layers = [
+                layer for layer in self.text_layers
+                if layer.content_role in {"dialogue", "voice_over", "lyrics"}
+                and layer_belongs(layer, cue)
+            ]
+            intervals = sorted(
+                (
+                    max(cue.start_seconds, float(layer.start_seconds)),
+                    min(cue.end_seconds, float(layer.end_seconds)),
+                )
+                for layer in speech_layers
+                if min(cue.end_seconds, float(layer.end_seconds))
+                > max(cue.start_seconds, float(layer.start_seconds))
+            )
+            speech_duration = 0.0
+            if intervals:
+                active_start, active_end = intervals[0]
+                for start, end in intervals[1:]:
+                    if start <= active_end + 1e-6:
+                        active_end = max(active_end, end)
+                    else:
+                        speech_duration += active_end - active_start
+                        active_start, active_end = start, end
+                speech_duration += active_end - active_start
+            media_ids = sorted({
+                media_shortcut(asset)
+                for asset in timeline_media
+                if ranges_intersect(
+                    cue.start_seconds,
+                    cue.end_seconds,
+                    asset.start_seconds,
+                    asset.end_seconds,
+                )
+            })
+            row = asdict(cue)
+            row.update({
+                "speech_duration": snap_timeline_seconds(speech_duration),
+                "speech_count": len(speech_layers),
+                "explicit_speech": bool(speech_layers),
+                "media_ids": media_ids,
+                "locked": False,
+            })
+            rows.append(row)
+        return rows
+
+    def open_smart_cut(self, mode: str = "balanced") -> None:
+        """Analyze current Shots and open a non-destructive Smart Cut review."""
+        if not self.scan:
+            QMessageBox.information(self, "Smart Cut", "Load an API workflow first.")
+            return
+        rows = self._smart_cut_shot_inputs()
+        if not rows:
+            QMessageBox.information(
+                self,
+                "Smart Cut",
+                "Create Shot Blocks with Design or the Shot Tool before Smart Cut.",
+            )
+            return
+        if self.scan.duration_seconds <= self.storyboard_target_duration_seconds + 0.01:
+            QMessageBox.information(
+                self,
+                "Smart Cut",
+                "The Timeline is already at or below the Storyboard target.",
+            )
+            return
+        self.timeline_playing = False
+        self.timeline_timer.stop()
+        self._stop_all_timeline_media()
+        dialog = SmartCutDialog(
+            rows,
+            self.storyboard_target_duration_seconds,
+            mode if mode in SMART_CUT_MODES else "balanced",
+            self,
+        )
+        self.smart_cut_dialog = dialog
+        dialog.ai_refine_requested.connect(self._start_smart_cut_lm)
+        result = dialog.exec()
+        plan = dialog.result_plan()
+        self.smart_cut_dialog = None
+        dialog.deleteLater()
+        if result != QDialog.Accepted:
+            self.statusBar().showMessage("Smart Cut review cancelled · Timeline unchanged")
+            return
+        self._apply_smart_cut_plan(plan)
+
+    def _start_smart_cut_lm(self, dialog: SmartCutDialog) -> None:
+        """Request bounded semantic hints; LM output never contains edit timings."""
+        if self.smart_cut_job_id:
+            return
+        settings = load_design_settings(DESIGN_SETTINGS_ENV)
+        provider = settings.provider
+        if provider == "lm_studio":
+            base_url = settings.lm_studio_base_url
+            model = settings.lm_studio_model
+            api_key = ""
+        else:
+            base_url = settings.openai_base_url
+            model = settings.openai_model
+            api_key = self.semantic_openai_api_key or os.getenv("OPENAI_API_KEY", "")
+        if not base_url or not model:
+            dialog.set_ai_running(False, "AI semantic refine unavailable · configure Design provider/model")
+            return
+        if provider == "openai" and not api_key:
+            dialog.set_ai_running(False, "Online GPT requires an API key entered in Design")
+            return
+        system_prompt, user_prompt = smart_cut_lm_prompts(
+            dialog.shot_inputs,
+            float(dialog.plan["target_duration"]),
+        )
+        if not self.smart_cut_runner.is_running():
+            if not self.smart_cut_runner.start(
+                str(self.runtime.python), [str(PROJECT_ROOT / "design_ai_service.py")]
+            ):
+                dialog.set_ai_running(False, "Could not start Smart Cut semantic service")
+                return
+        self.smart_cut_job_id = f"smart-cut-{secrets.token_hex(8)}"
+        self.smart_cut_active_request = {
+            "provider": provider,
+            "base_url": base_url,
+            "model": model,
+            "timeout": settings.timeout,
+        }
+        dialog.set_ai_running(
+            True,
+            f"{provider.replace('_', ' ').title()} is classifying story roles · Timeline remains unchanged…",
+        )
+        self.smart_cut_runner.write_json({
+            "action": "generate",
+            "job": self.smart_cut_job_id,
+            "provider": provider,
+            "base_url": base_url,
+            "api_key": api_key,
+            "model": model,
+            "timeout": settings.timeout,
+            "system_prompt": system_prompt,
+            "user_prompt": user_prompt,
+            "schema": smart_cut_lm_schema(),
+            "schema_name": "h3_smart_cut_semantic_hints",
+            "max_output_tokens": 5000,
+        })
+
+    @staticmethod
+    def _json_object_from_model_text(value: object) -> dict:
+        text = str(value or "").strip()
+        text = re.sub(r"^```(?:json)?\s*", "", text, flags=re.I)
+        text = re.sub(r"\s*```$", "", text)
+        try:
+            payload = json.loads(text)
+        except json.JSONDecodeError:
+            start, end = text.find("{"), text.rfind("}")
+            if start < 0 or end <= start:
+                raise ValueError("AI semantic response did not contain a JSON object")
+            payload = json.loads(text[start:end + 1])
+        if not isinstance(payload, dict):
+            raise ValueError("AI semantic response must be a JSON object")
+        return payload
+
+    def _handle_smart_cut_payload(self, payload: dict) -> None:
+        if payload.get("ready"):
+            return
+        job_id = str(payload.get("job", ""))
+        if job_id and job_id == self.smart_cut_unload_job_id:
+            self.smart_cut_unload_job_id = ""
+            return
+        if not job_id or job_id != self.smart_cut_job_id:
+            return
+        self.smart_cut_job_id = ""
+        dialog = self.smart_cut_dialog
+        if payload.get("error"):
+            if dialog:
+                dialog.set_ai_running(False, "AI semantic refine failed · " + str(payload["error"]))
+            self._request_smart_cut_lm_unload()
+            return
+        try:
+            response = self._json_object_from_model_text(payload.get("text", ""))
+            valid_ids = [str(row.get("cue_id", "")) for row in (dialog.shot_inputs if dialog else [])]
+            hints = normalize_lm_hints(response, valid_ids)
+            resolved_model = str(
+                payload.get("resolved_model")
+                or self.smart_cut_active_request.get("model", "")
+            )
+            if resolved_model:
+                # The service may repair a deleted/stale LM Studio model ID.
+                # Unload the instance that actually answered, not the authored
+                # stale identifier, or LM Studio will report model_not_found.
+                self.smart_cut_active_request["model"] = resolved_model
+            if dialog:
+                dialog.apply_ai_hints(hints, resolved_model)
+                dialog.set_ai_running(
+                    False,
+                    f"AI classified {len(hints)} Shot(s) · deterministic planner retained timing authority",
+                )
+        except Exception as exc:
+            if dialog:
+                dialog.set_ai_running(False, "AI semantic response rejected · " + str(exc))
+        self._request_smart_cut_lm_unload()
+
+    def _request_smart_cut_lm_unload(self) -> None:
+        request = getattr(self, "smart_cut_active_request", {}) or {}
+        if (
+            request.get("provider") != "lm_studio"
+            or not self.smart_cut_runner.is_running()
+            or self.smart_cut_unload_job_id
+        ):
+            return
+        self.smart_cut_unload_job_id = f"smart-cut-unload-{secrets.token_hex(6)}"
+        self.smart_cut_runner.write_json({
+            "action": "unload_lm",
+            "job": self.smart_cut_unload_job_id,
+            "base_url": request.get("base_url", ""),
+            "model": request.get("model", ""),
+            "timeout": min(60, int(request.get("timeout", 60))),
+        })
+
+    def _smart_cut_service_finished(self, exit_code: int, log: str) -> None:
+        self.smart_cut_job_id = ""
+        self.smart_cut_unload_job_id = ""
+        if self.smart_cut_dialog:
+            detail = log.strip().splitlines()[-1] if log.strip() else f"exit {exit_code}"
+            self.smart_cut_dialog.set_ai_running(False, "Smart Cut semantic service stopped · " + detail)
+
+    def _apply_smart_cut_plan(self, plan: dict) -> None:
+        """Validate reviewed decisions and commit through Storyboard remapping."""
+        if not self.scan or plan.get("format") != "h3-smart-cut-plan":
+            return
+        current_shots = {
+            cue.cue_id: cue for cue in self.director_cues if cue.cue_type == "shot"
+        }
+        speech_ids = {
+            layer.shot_id
+            for layer in self.text_layers
+            if layer.content_role in {"dialogue", "voice_over", "lyrics"}
+            and layer.shot_id
+        }
+        entries: list[dict] = []
+        for decision in plan.get("decisions", []):
+            shot_id = str(decision.get("shot_id", ""))
+            cue = current_shots.get(shot_id)
+            if cue is None:
+                QMessageBox.warning(self, "Smart Cut stale plan", f"Shot {shot_id} no longer exists.")
+                return
+            action = str(decision.get("action", "keep"))
+            proposed = snap_timeline_seconds(float(decision.get("proposed_duration", 0.0)))
+            if action in {"remove", "merge"} and shot_id in speech_ids:
+                QMessageBox.warning(
+                    self,
+                    "Smart Cut speech protection",
+                    f"{shot_id} contains authored speech and cannot be silently removed.",
+                )
+                return
+            if action in {"remove", "merge"} or proposed < TIMELINE_SNAP_SECONDS:
+                continue
+            entries.append({
+                "cue_id": cue.cue_id,
+                "duration": proposed,
+                "preset": cue.preset,
+                "framing": cue.framing,
+                "subject_action": cue.authored_subject_action or cue.subject_action,
+            })
+        if not entries:
+            QMessageBox.warning(self, "Smart Cut", "The reviewed plan cannot remove every Shot.")
+            return
+        self.smart_cut_last_plan = deepcopy(plan)
+        self._apply_storyboard_entries(
+            entries,
+            float(plan.get("target_duration", self.storyboard_target_duration_seconds)),
+            undo_label="Apply Smart Cut Plan",
+            dirty_ranges=[tuple(row) for row in plan.get("affected_ranges", [])],
+        )
+        if self.example_work_dir:
+            try:
+                destination = self.example_work_dir / "smart_cut_plan.json"
+                destination.write_text(
+                    json.dumps(self.smart_cut_last_plan, ensure_ascii=False, indent=2),
+                    encoding="utf-8",
+                )
+            except OSError:
+                pass
+        self.statusBar().showMessage(
+            f"Smart Cut applied · {plan.get('mode', 'balanced')} · "
+            f"saved {float(plan.get('saved_seconds', 0.0)):.1f}s · "
+            "affected Segments marked for local rerender · Undo available"
+        )
+
+    def open_storyboard_editor(self) -> None:
+        """Open a draft Shot-card board; Timeline changes only after explicit Apply."""
+        if not self.scan:
+            QMessageBox.information(self, "Storyboard", "Load an API workflow first.")
+            return
+        shots = sorted(
+            (cue for cue in self.director_cues if cue.cue_type == "shot"),
+            key=lambda cue: (cue.start_seconds, cue.end_seconds),
+        )
+        if not shots:
+            QMessageBox.information(
+                self,
+                "Storyboard",
+                "Create Shot Blocks with the Shot Tool or apply a Director Design first.",
+            )
+            return
+        self.timeline_playing = False
+        self.timeline_timer.stop()
+        self._stop_all_timeline_media()
+        dialog = StoryboardEditorDialog(
+            shots,
+            self.text_layers,
+            self.scan.timeline_assets(),
+            self.scan.duration_seconds,
+            self.storyboard_target_duration_seconds,
+            self,
+            preview_paths=self.preview_paths,
+            view_mode=self.storyboard_view_mode,
+        )
+        result = dialog.exec()
+        self.storyboard_view_mode = dialog.view_mode
+        if result != QDialog.Accepted:
+            dialog.deleteLater()
+            self._mark_dirty()
+            self.statusBar().showMessage("Storyboard draft cancelled · Timeline unchanged")
+            return
+        entries = dialog.entries()
+        target = float(dialog.target_spin.value())
+        dialog.deleteLater()
+        self._apply_storyboard_entries(entries, target)
+
+    @staticmethod
+    def _storyboard_map_range(
+        start: float,
+        end: float,
+        old_start: float,
+        old_end: float,
+        new_start: float,
+        new_end: float,
+        minimum: float,
+    ) -> tuple[float, float]:
+        old_duration = max(0.05, old_end - old_start)
+        new_duration = max(minimum, new_end - new_start)
+        scale = new_duration / old_duration
+        mapped_start = new_start + (max(old_start, start) - old_start) * scale
+        mapped_end = new_start + (min(old_end, end) - old_start) * scale
+        mapped_start = max(new_start, min(new_end, mapped_start))
+        mapped_end = max(mapped_start + minimum, min(new_end, mapped_end))
+        if mapped_end > new_end:
+            mapped_end = new_end
+            mapped_start = max(new_start, mapped_end - minimum)
+        return snap_timeline_seconds(mapped_start), snap_timeline_seconds(mapped_end)
+
+    def _apply_storyboard_entries(
+        self,
+        entries: list[dict],
+        target_duration: float,
+        *,
+        undo_label: str = "Apply Storyboard Editor",
+        dirty_ranges: list[tuple[float, float]] | None = None,
+    ) -> None:
+        """Atomically remap Shot order/durations and every Timeline dependency."""
+        if not self.scan or not entries:
+            return
+        old_duration = float(self.scan.duration_seconds)
+        old_shots = sorted(
+            (cue for cue in self.director_cues if cue.cue_type == "shot"),
+            key=lambda cue: (cue.start_seconds, cue.end_seconds),
+        )
+        old_by_id = {cue.cue_id: cue for cue in old_shots}
+        before = self._design_workspace_state()
+        dirty_before = set(self.render_dirty_segment_ids)
+        cursor = 0.0
+        normalized: list[dict] = []
+        next_number = max(
+            [
+                int(cue.cue_id[1:])
+                for cue in old_shots
+                if cue.cue_id.startswith("S") and cue.cue_id[1:].isdigit()
+            ]
+            or [0]
+        )
+        for source in entries:
+            entry = deepcopy(source)
+            duration = max(
+                TIMELINE_SNAP_SECONDS,
+                snap_timeline_seconds(float(entry.get("duration", 5.0))),
+            )
+            source_id = str(entry.get("cue_id") or "")
+            if source_id not in old_by_id:
+                next_number += 1
+                source_id = f"S{next_number}"
+                entry["is_new"] = True
+            entry["cue_id"] = source_id
+            entry["new_start"] = cursor
+            entry["new_end"] = cursor + duration
+            entry["duration"] = duration
+            cursor += duration
+            normalized.append(entry)
+        new_duration = max(0.5, snap_timeline_seconds(cursor))
+        mapping = {
+            entry["cue_id"]: entry
+            for entry in normalized
+            if entry["cue_id"] in old_by_id
+        }
+
+        automatic_dirty_ranges: list[tuple[float, float]] = []
+        for old in old_shots:
+            entry = mapping.get(old.cue_id)
+            if entry is None:
+                automatic_dirty_ranges.append((old.start_seconds, old.end_seconds))
+                continue
+            changed = any(
+                (
+                    abs(float(entry["new_start"]) - float(old.start_seconds)) > 1e-6,
+                    abs(float(entry["new_end"]) - float(old.end_seconds)) > 1e-6,
+                    str(entry.get("preset") or old.preset) != old.preset,
+                    str(entry.get("framing") or old.framing) != old.framing,
+                    str(entry.get("subject_action") or "")
+                    != str(old.authored_subject_action or old.subject_action or ""),
+                )
+            )
+            if changed:
+                automatic_dirty_ranges.extend(
+                    [
+                        (old.start_seconds, old.end_seconds),
+                        (float(entry["new_start"]), float(entry["new_end"])),
+                    ]
+                )
+        for entry in normalized:
+            if entry["cue_id"] not in old_by_id:
+                automatic_dirty_ranges.append(
+                    (float(entry["new_start"]), float(entry["new_end"]))
+                )
+
+        new_shots: list[DirectorCue] = []
+        for entry in normalized:
+            old = old_by_id.get(entry["cue_id"])
+            if old is None:
+                cue = DirectorCue(
+                    entry["cue_id"],
+                    "shot",
+                    entry["new_start"],
+                    entry["new_end"],
+                    str(entry.get("preset") or "New Story Beat"),
+                    track_id="V1",
+                    framing=str(entry.get("framing") or "Medium-wide"),
+                    subject_action=str(entry.get("subject_action") or ""),
+                    authored_subject_action=str(entry.get("subject_action") or ""),
+                )
+            else:
+                values = asdict(old)
+                values.update({
+                    "start_seconds": entry["new_start"],
+                    "end_seconds": entry["new_end"],
+                    "preset": str(entry.get("preset") or old.preset),
+                    "subject_action": str(entry.get("subject_action") or ""),
+                    "authored_subject_action": str(entry.get("subject_action") or ""),
+                    "h3_executable_action": "",
+                    "h3_optional_flourish": "",
+                })
+                cue = DirectorCue(**values)
+            new_shots.append(cue)
+
+        storyboard_combat_skill = str(self.special_combo.currentData() or "").strip().casefold()
+        if storyboard_combat_skill in COMBAT_ACTION_SKILLS:
+            reconciled_combat_rows, _combat_warnings = reconcile_combat_action_rows(
+                [asdict(cue) for cue in new_shots],
+                new_duration,
+                source_world_only=(
+                    storyboard_combat_skill == HONG_KONG_COMIC_FIGHTER_SKILL
+                ),
+            )
+            if storyboard_combat_skill == ENVIRONMENT_COMBAT_SPECIAL_SKILL:
+                reconciled_rows, _environment_warnings = reconcile_environmental_combat_rows(
+                    reconciled_combat_rows,
+                    new_duration,
+                    transition_basis_seconds=min(new_duration, max(0.5, target_duration)),
+                )
+            else:
+                reconciled_rows = reconciled_combat_rows
+            new_shots = [director_cue_from_mapping(row) for row in reconciled_rows]
+
+        def owner_entry(start: float, end: float, shot_id: str = "") -> tuple[DirectorCue, dict] | None:
+            if shot_id and shot_id in old_by_id and shot_id in mapping:
+                return old_by_id[shot_id], mapping[shot_id]
+            midpoint = (float(start) + float(end)) / 2
+            owner = next(
+                (
+                    cue for cue in old_shots
+                    if cue.start_seconds - 1e-6 <= midpoint <= cue.end_seconds + 1e-6
+                ),
+                None,
+            )
+            if owner is None or owner.cue_id not in mapping:
+                return None
+            return owner, mapping[owner.cue_id]
+
+        retained_cues: list[DirectorCue] = []
+        for cue in self.director_cues:
+            if cue.cue_type == "shot":
+                continue
+            owned = owner_entry(cue.start_seconds, cue.end_seconds)
+            if owned is None:
+                continue
+            old, entry = owned
+            start, end = self._storyboard_map_range(
+                cue.start_seconds,
+                cue.end_seconds,
+                old.start_seconds,
+                old.end_seconds,
+                entry["new_start"],
+                entry["new_end"],
+                0.05,
+            )
+            values = asdict(cue)
+            values.update({"start_seconds": start, "end_seconds": end})
+            retained_cues.append(DirectorCue(**values))
+        self.director_cues = new_shots + retained_cues
+
+        retained_text: list[TextLayer] = []
+        for layer in self.text_layers:
+            owned = owner_entry(layer.start_seconds, layer.end_seconds, layer.shot_id)
+            if owned is None:
+                continue
+            old, entry = owned
+            start, end = self._storyboard_map_range(
+                layer.start_seconds,
+                layer.end_seconds,
+                old.start_seconds,
+                old.end_seconds,
+                entry["new_start"],
+                entry["new_end"],
+                0.1,
+            )
+            values = asdict(layer)
+            values.update({
+                "start_seconds": start,
+                "end_seconds": end,
+                "shot_id": entry["cue_id"],
+            })
+            retained_text.append(text_layer_from_mapping(values))
+        self.text_layers = retained_text
+
+        added_clips: list[MediaAsset] = []
+
+        def mapped_media_pieces(asset: MediaAsset) -> list[MediaAsset]:
+            if not asset.timeline_placed:
+                return []
+            pieces: list[MediaAsset] = []
+            original_start = float(asset.start_seconds)
+            original_end = float(asset.end_seconds)
+            original_speed = max(0.01, float(asset.playback_speed))
+            for old in old_shots:
+                entry = mapping.get(old.cue_id)
+                if entry is None:
+                    continue
+                overlap_start = max(original_start, old.start_seconds)
+                overlap_end = min(original_end, old.end_seconds)
+                if overlap_end - overlap_start < 0.05:
+                    continue
+                start, end = self._storyboard_map_range(
+                    overlap_start,
+                    overlap_end,
+                    old.start_seconds,
+                    old.end_seconds,
+                    entry["new_start"],
+                    entry["new_end"],
+                    0.05,
+                )
+                piece = deepcopy(asset)
+                piece.timeline_placed = True
+                piece.start_seconds = start
+                piece.end_seconds = end
+                if piece.media_type in {"audio", "video"}:
+                    source_start = float(asset.source_in_seconds) + (
+                        overlap_start - original_start
+                    ) * original_speed
+                    source_span = (overlap_end - overlap_start) * original_speed
+                    piece.source_in_seconds = max(0.0, source_start)
+                    piece.source_out_seconds = piece.source_in_seconds + source_span
+                    if piece.source_duration_seconds > 0:
+                        piece.source_out_seconds = min(
+                            piece.source_duration_seconds, piece.source_out_seconds
+                        )
+                    piece.playback_speed = max(0.01, source_span / max(0.05, end - start))
+                pieces.append(piece)
+            return sorted(pieces, key=lambda item: (item.start_seconds, item.end_seconds))
+
+        for asset in self.scan.assets:
+            if not asset.timeline_placed:
+                continue
+            pieces = mapped_media_pieces(asset)
+            if not pieces:
+                asset.timeline_placed = False
+                continue
+            first = pieces.pop(0)
+            for field_name in TIMELINE_STATE_FIELDS:
+                setattr(asset, field_name, getattr(first, field_name))
+            for piece in pieces:
+                piece.clip_id = f"clip-{secrets.token_hex(8)}"
+                piece.source_node_id = asset.node_id
+                added_clips.append(piece)
+
+        new_timeline_clips: list[MediaAsset] = []
+        for clip in self.scan.timeline_clips:
+            pieces = mapped_media_pieces(clip)
+            for index, piece in enumerate(pieces):
+                if index:
+                    piece.clip_id = f"clip-{secrets.token_hex(8)}"
+                piece.source_node_id = clip.source_node_id or clip.node_id
+                new_timeline_clips.append(piece)
+        self.scan.timeline_clips = new_timeline_clips + added_clips
+        self._sync_timeline_clip_sources()
+
+        self.storyboard_target_duration_seconds = max(0.5, float(target_duration))
+        self._set_design_duration(new_duration)
+        self.timeline_tts_stale = True
+        self._refresh_director_cues()
+        self._refresh_text_layers()
+        self.seek_timeline(0.0)
+        ranges_to_dirty = list(automatic_dirty_ranges)
+        if dirty_ranges is not None:
+            ranges_to_dirty.extend(dirty_ranges)
+        self.render_dirty_segment_ids = dirty_before
+        for range_start, range_end in ranges_to_dirty:
+            self._mark_render_range_dirty(range_start, range_end)
+        after = self._design_workspace_state()
+        self._restore_design_workspace_state(before)
+        self.undo_stack.push(
+            WorkspaceDesignCommand(
+                before,
+                after,
+                self._restore_design_workspace_state,
+                undo_label,
+            )
+        )
+        self._clear_generated_output(preserve_segment_cache=True)
+        self._mark_dirty()
+        self.quality_profile = "storyboard"
+        self.storyboard_preview_active = True
+        self.monitor_display_stack.setCurrentWidget(self.monitor_compare_splitter)
+        self.render_timeline_at(0.0, force_seek=True)
+        delta = self.scan.duration_seconds - self.storyboard_target_duration_seconds
+        self.statusBar().showMessage(
+            f"Storyboard applied · {old_duration:.1f}s → {self.scan.duration_seconds:.1f}s · "
+            f"target {self.storyboard_target_duration_seconds:.1f}s · "
+            f"{'over' if delta > 0.01 else 'under' if delta < -0.01 else 'on target'} "
+            f"{abs(delta):.1f}s · Undo available"
+        )
+
+    def activate_storyboard_preview(self) -> None:
+        if hasattr(self, "manual_ripple_action"):
+            self.manual_ripple_action.setChecked(False)
+        self.quality_profile = "storyboard"
+        index = self.quality_profile_combo.findData(self.quality_profile)
+        self.quality_profile_combo.blockSignals(True)
+        self.quality_profile_combo.setCurrentIndex(max(0, index))
+        self.quality_profile_combo.blockSignals(False)
+        self._mark_dirty()
+        self._activate_storyboard_mode()
+
+    def _mark_latest_preview_rejected(self) -> None:
+        self._sync_shot_take_states()
+        for state in self.shot_take_states.values():
+            if state.get("status") == "preview" and state.get("latest_take"):
+                state["status"] = "rejected"
+                state["updated_at"] = utc_now_text()
+
+    def _record_generation_takes(
+        self,
+        request_kind: str,
+        seed: int | None,
+        outputs: list[dict],
+        manifest: dict | None = None,
+    ) -> None:
+        """Archive one Preview/Final movie per rendered Segment.
+
+        Shot state contains only time-ranged references to those canonical
+        Segment movies. This preserves partial rerender while avoiding one
+        15-second file name for every Shot that happens to share that Segment.
+        """
+        root = self._ensure_project_workspace()
+        self._sync_shot_take_states()
+        master = next(
+            (
+                Path(str(item.get("local_path", "")))
+                for item in outputs
+                if Path(str(item.get("local_path", ""))).is_file()
+                and media_type_for_path(Path(str(item.get("local_path", "")))) == "video"
+            ),
+            None,
+        )
+        rows = [
+            row for row in (manifest or {}).get("segments") or []
+            if isinstance(row, dict)
+        ]
+        if not rows:
+            rows = [segment.to_dict() for segment in self._planned_render_segments()]
+        profile = "motion_preview" if request_kind == "preview" else "approved_final"
+        window_start = float(self.clip_start.value())
+        window_end = float(self.clip_end.value())
+        clear_shot_segment_refs_for_window(
+            self.shot_take_states,
+            profile=profile,
+            start_seconds=window_start,
+            end_seconds=window_end,
+        )
+        shot_ranges = {
+            str(cue.cue_id): (float(cue.start_seconds), float(cue.end_seconds))
+            for cue in self.director_cues
+            if cue.cue_type == "shot"
+        }
+        affected_shots: set[str] = set()
+        for row in rows:
+            core_start = float(
+                row.get("core_start_seconds", row.get("start_seconds", window_start))
+                or row.get("start_seconds", window_start)
+            )
+            core_end = float(
+                row.get("core_end_seconds", row.get("end_seconds", window_end))
+                or row.get("end_seconds", window_end)
+            )
+            shot_ids = [str(value) for value in row.get("shot_ids") or []]
+            if not shot_ids:
+                shot_ids = [
+                    shot_id for shot_id, (shot_start, shot_end) in shot_ranges.items()
+                    if shot_end > core_start + 1e-9 and shot_start < core_end - 1e-9
+                ]
+                row["shot_ids"] = shot_ids
+            affected_shots.update(shot_ids)
+            candidate = Path(str(row.get("output_path") or ""))
+            source = candidate if candidate.is_file() else master
+            if source is None or not source.is_file():
+                continue
+            destination = record_segment_take(
+                root,
+                segment=row,
+                source=source,
+                request_kind=request_kind,
+                seed=(
+                    int(row["seed"])
+                    if row.get("seed") is not None
+                    else seed
+                ),
+                segment_states=self.segment_take_states,
+                shot_states=self.shot_take_states,
+                shot_ranges=shot_ranges,
+            )
+            # Future Smart Render reuse must point to the durable Workspace,
+            # not to a disposable .director_cache path.
+            row["output_path"] = str(destination)
+            row["download_dir"] = ""
+            row["outputs"] = [
+                {"kind": "videos", "local_path": str(destination)}
+            ]
+        now = utc_now_text()
+        for shot_id in affected_shots:
+            state = self.shot_take_states.get(shot_id)
+            if not state:
+                continue
+            state["take_count"] = max(0, int(state.get("take_count", 0))) + 1
+            state["updated_at"] = now
+        self._write_shot_state_manifests()
+
+    def _render_cache_root_from_manifest(self, manifest: dict | None) -> Path | None:
+        """Return only an exact generated-output run folder safe to reclaim."""
+        if not isinstance(manifest, dict):
+            return None
+        raw_master = str(manifest.get("master_output") or "").strip()
+        if not raw_master:
+            return None
+        candidate = Path(raw_master).expanduser().resolve().parent
+        allowed_roots = [(CACHE_ROOT / "generated_outputs").resolve()]
+        if self.example_work_dir:
+            allowed_roots.append(
+                (self.example_work_dir / "cache" / "generated_outputs").resolve()
+            )
+        for allowed in allowed_roots:
+            try:
+                relative = candidate.relative_to(allowed)
+            except (OSError, ValueError):
+                continue
+            # Expected shape: generated_outputs/<preview|accepted|final>/<seed>/
+            if len(relative.parts) == 2 and relative.parts[0] in {
+                "preview", "accepted", "final"
+            }:
+                return candidate
+        return None
+
+    def _make_render_manifest_portable(
+        self,
+        manifest: dict | None,
+        outputs: list[dict],
+    ) -> None:
+        if not isinstance(manifest, dict):
+            return
+        stable_master = next(
+            (
+                Path(str(item.get("local_path") or "")).resolve()
+                for item in outputs
+                if Path(str(item.get("local_path") or "")).is_file()
+                and media_type_for_path(Path(str(item.get("local_path") or "")))
+                == "video"
+            ),
+            None,
+        )
+        if stable_master is not None:
+            manifest["master_output"] = str(stable_master)
+            request_kind = str(manifest.get("request_kind") or "").lower()
+            cache_key = "preview" if request_kind == "preview" else "production"
+            if self.smart_render_manifest:
+                self.smart_render_manifest["master_output"] = str(stable_master)
+            if cache_key in self.smart_render_manifests:
+                self.smart_render_manifests[cache_key]["master_output"] = str(
+                    stable_master
+                )
+
+    @staticmethod
+    def _recover_workspace_render_manifest(workspace_root: Path) -> dict:
+        """Recover durable Smart Render state when the Project snapshot is stale.
+
+        A completed master and its Segment Takes are more authoritative than an
+        empty ``generated_output`` field. This also rebases a copied Workspace
+        whose manifest still names the source computer or the pre-copy folder.
+        """
+        candidates = [
+            workspace_root / "project" / "render_manifest.json",
+            workspace_root / "render_manifest.json",
+        ]
+        render_jobs = workspace_root / "project" / "render_jobs"
+        if render_jobs.is_dir():
+            candidates.extend(render_jobs.glob("*.manifest.json"))
+        candidates = [candidate for candidate in candidates if candidate.is_file()]
+        recovered: list[tuple[tuple[int, str, int], dict]] = []
+        for candidate in candidates:
+            try:
+                loaded = json.loads(candidate.read_text(encoding="utf-8-sig"))
+            except (OSError, ValueError, TypeError):
+                continue
+            if not isinstance(loaded, dict):
+                continue
+
+            request_kind = str(loaded.get("request_kind") or "final").lower()
+            is_preview = request_kind == "preview"
+            stable_master = workspace_root / (
+                "generated_preview.mp4" if is_preview else "generated_output.mp4"
+            )
+            if stable_master.is_file():
+                loaded["master_output"] = str(stable_master.resolve())
+
+            take_name = "motion_preview.mp4" if is_preview else "approved_final.mp4"
+            for row in loaded.get("segments") or []:
+                if not isinstance(row, dict):
+                    continue
+                segment_id = str(row.get("segment_id") or "").strip()
+                if not segment_id:
+                    continue
+                durable_take = (
+                    workspace_root / "segments" / segment_id / "takes" / take_name
+                )
+                if durable_take.is_file():
+                    resolved_take = str(durable_take.resolve())
+                    row["output_path"] = resolved_take
+                    row["download_dir"] = ""
+                    row["outputs"] = [
+                        {"kind": "videos", "local_path": resolved_take}
+                    ]
+
+            completed = sum(
+                1
+                for row in loaded.get("segments") or []
+                if isinstance(row, dict)
+                and str(row.get("status") or "").lower()
+                in {"cached", "complete", "completed", "reusable"}
+                and Path(str(row.get("output_path") or "")).is_file()
+            )
+            recovered.append(
+                (
+                    (
+                        completed,
+                        str(loaded.get("updated_at") or ""),
+                        int(candidate.stat().st_mtime_ns),
+                    ),
+                    loaded,
+                )
+            )
+        if not recovered:
+            return {}
+        # A newer failed checkpoint must never hide an older checkpoint that
+        # contains more durable completed Segment Takes.
+        return max(recovered, key=lambda item: item[0])[1]
+
+    @staticmethod
+    def _render_manifest_recovery_score(manifest: dict | None) -> tuple[int, str]:
+        if not isinstance(manifest, dict):
+            return (0, "")
+        completed = sum(
+            1
+            for row in manifest.get("segments") or []
+            if isinstance(row, dict)
+            and str(row.get("status") or "").lower()
+            in {"cached", "complete", "completed", "reusable"}
+            and Path(str(row.get("output_path") or "")).is_file()
+        )
+        return completed, str(manifest.get("updated_at") or "")
+
+    @staticmethod
+    def _normalize_restored_master_timeline_start(
+        saved_start: float,
+        output_duration: float,
+        timeline_duration: float,
+    ) -> float:
+        """Rebase a copied full-length Master that inherited a partial-run offset.
+
+        A failed local Segment render can leave ``generated_output_timeline_start``
+        pointing at that Segment even after the user restores a complete
+        ``generated_output.mp4`` from backup. File duration is authoritative in
+        this one unambiguous case: a movie that covers the whole Timeline starts
+        at zero. Genuine partial outputs retain their authored offset.
+        """
+        start = max(0.0, float(saved_start))
+        output_duration = max(0.0, float(output_duration))
+        timeline_duration = max(0.0, float(timeline_duration))
+        if output_duration <= 0.0 or timeline_duration <= 0.0:
+            return start
+        tolerance = max(0.25, min(1.0, timeline_duration * 0.01))
+        if abs(output_duration - timeline_duration) <= tolerance:
+            return 0.0
+        return start
+
+    def _cleanup_completed_render_cache(
+        self,
+        cache_root: Path | None,
+        manifest: dict | None,
+    ) -> bool:
+        """Reclaim a completed run only after every durable asset is verified."""
+        if cache_root is None or not cache_root.is_dir() or not isinstance(manifest, dict):
+            return False
+        workspace = self._ensure_project_workspace().resolve()
+        master = Path(str(manifest.get("master_output") or ""))
+        if not master.is_file():
+            return False
+        try:
+            master.resolve().relative_to(workspace)
+        except (OSError, ValueError):
+            return False
+        for row in manifest.get("segments") or []:
+            if not isinstance(row, dict):
+                return False
+            output = Path(str(row.get("output_path") or ""))
+            if not output.is_file():
+                return False
+            try:
+                output.resolve().relative_to((workspace / "segments").resolve())
+            except (OSError, ValueError):
+                return False
+        shutil.rmtree(cache_root)
+        return True
 
     def _archive_generated_outputs(
         self,
         outputs: list[dict],
         request_kind: str,
     ) -> list[dict]:
-        """Copy the current generated master into the active example work folder."""
-        folder = self._ensure_example_work_dir()
+        """Publish one stable user-facing preview/final master in the Workspace.
+
+        Per-Shot Takes remain under ``shots`` for editable Smart Render. Full assembled
+        masters are intentionally not duplicated again under renders/takes.
+        """
+        folder = self._ensure_project_workspace()
         archived = [dict(item) for item in outputs]
         preferred_index: int | None = None
         # ComfyUI can return SaveImage previews before the actual movie. Always
@@ -8582,40 +13916,43 @@ class DirectorCutStudio(QMainWindow):
         source = Path(str(outputs[preferred_index].get("local_path", "")))
         kind = media_type_for_path(source)
         suffix = source.suffix or (".mp4" if kind == "video" else ".png")
-        name = (
-            "generated_preview" + suffix
-            if request_kind == "preview"
-            else "generated_output" + suffix
+        render_kind = "preview" if request_kind == "preview" else "final"
+        destination = folder / (
+            ("generated_preview" if render_kind == "preview" else "generated_output")
+            + suffix
         )
-        destination = folder / name
-        if destination.exists() and self.generated_player.source().toLocalFile():
+        if self.generated_player.source().toLocalFile():
             try:
-                if (
-                    Path(self.generated_player.source().toLocalFile()).resolve()
-                    == destination.resolve()
-                ):
+                playing = Path(self.generated_player.source().toLocalFile()).resolve()
+                if playing == destination.resolve():
                     self.generated_player.stop()
                     self.generated_player.setSource(QUrl())
             except OSError:
                 pass
         if source.resolve() != destination.resolve():
-            shutil.copy2(source, destination)
+            link_or_copy(source, destination)
         archived[preferred_index]["local_path"] = str(destination.resolve())
+        archived[preferred_index]["workspace_take"] = str(destination.resolve())
         return archived
 
     def _auto_save_example_project(self) -> Path | None:
         if not self.scan or not self.generated_output_path:
             return None
-        folder = self._ensure_example_work_dir()
-        destination = folder / "director_project.h3director.json"
+        folder = self._ensure_project_workspace()
+        destination = workspace_project_path(folder)
         destination.write_text(
             json.dumps(self._project_payload(), ensure_ascii=False, indent=2),
             encoding="utf-8",
         )
         if self.smart_render_manifest:
+            manifest_text = json.dumps(
+                self.smart_render_manifest, ensure_ascii=False, indent=2
+            )
+            (folder / "project" / "render_manifest.json").write_text(
+                manifest_text, encoding="utf-8"
+            )
             (folder / "render_manifest.json").write_text(
-                json.dumps(self.smart_render_manifest, ensure_ascii=False, indent=2),
-                encoding="utf-8",
+                manifest_text, encoding="utf-8"
             )
         self.project_path = destination.resolve()
         self.project_dirty = False
@@ -8623,9 +13960,59 @@ class DirectorCutStudio(QMainWindow):
         self._update_window_title()
         return destination.resolve()
 
+    def _checkpoint_smart_render_state(self) -> Path | None:
+        """Persist a partial long render without pretending the edit is done.
+
+        The worker reports a manifest after every completed or failed hidden
+        Segment. Saving it here lets Open Project reconstruct the reusable
+        front of a 120-second job and continue from the first unfinished unit.
+        """
+        if not self.scan or not self.smart_render_manifest:
+            return None
+        folder = self._ensure_project_workspace()
+        destination = workspace_project_path(folder)
+        temporary = destination.with_suffix(destination.suffix + ".tmp")
+        temporary.write_text(
+            json.dumps(self._project_payload(), ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+        temporary.replace(destination)
+
+        manifest_path = folder / "project" / "render_manifest.json"
+        manifest_temp = manifest_path.with_suffix(".json.tmp")
+        manifest_temp.write_text(
+            json.dumps(
+                self.smart_render_manifest, ensure_ascii=False, indent=2
+            ),
+            encoding="utf-8",
+        )
+        manifest_temp.replace(manifest_path)
+        self.project_path = destination.resolve()
+        self._update_window_title()
+        return destination.resolve()
+
     def eventFilter(self, watched, event) -> bool:  # noqa: N802
-        if watched is self.media_scroll.viewport() and event.type() == QEvent.Resize:
+        if (
+            hasattr(self, "media_scroll")
+            and watched is self.media_scroll.viewport()
+            and event.type() == QEvent.Resize
+        ):
             QTimer.singleShot(0, self._reflow_media_pool)
+        if watched is getattr(self, "generation_toolbar", None):
+            if event.type() == QEvent.Resize:
+                QTimer.singleShot(0, self._reflow_generation_toolbar)
+        if (
+            isinstance(watched, QWidget)
+            and bool(watched.property("generation_hover_help"))
+        ):
+            if event.type() == QEvent.Enter and watched.toolTip():
+                QToolTip.showText(
+                    watched.mapToGlobal(QPoint(0, watched.height() + 3)),
+                    watched.toolTip(),
+                    watched,
+                )
+            elif event.type() == QEvent.Leave:
+                QToolTip.hideText()
         return super().eventFilter(watched, event)
 
     def _reflow_media_pool(self) -> None:
@@ -8657,10 +14044,31 @@ class DirectorCutStudio(QMainWindow):
         card = MediaCard(asset)
         card.selected.connect(self.select_asset)
         card.file_dropped.connect(self.load_asset_file)
+        card.z_image_regeneration_requested.connect(
+            self.regenerate_media_asset_with_z_image
+        )
         self.cards[asset.node_id] = card
         self.media_card_order.append(card)
         QTimer.singleShot(0, self._reflow_media_pool)
         return card
+
+    def _show_immediate_image_preview(self, asset: MediaAsset) -> bool:
+        """Bind a valid local Picture directly to its card and in-memory cache.
+
+        Media Preparation may later replace this with a transparent derivative
+        or another optimized preview. Failure or delay in that background job
+        can no longer leave a real Picture card showing DROP MEDIA.
+        """
+        if asset.media_type != "image":
+            return False
+        source = Path(str(asset.local_path or ""))
+        if not source.is_file():
+            return False
+        card = self.cards.get(asset.node_id)
+        if card is None or not card.set_local_image_fallback():
+            return False
+        self.preview_paths[asset.node_id] = source.resolve()
+        return True
 
     def _rebuild_media_cards(self) -> None:
         self.cards.clear()
@@ -8720,6 +14128,9 @@ class DirectorCutStudio(QMainWindow):
         self.special_combo.currentIndexChanged.connect(self._mark_all_render_segments_dirty)
         self.special_combo.currentIndexChanged.connect(self._refresh_skill_binding_display)
         self.special_combo.currentIndexChanged.connect(
+            self._special_skill_production_strategy_changed
+        )
+        self.special_combo.currentIndexChanged.connect(
             lambda _value: self.schedule_prompt_generation()
         )
         self.clip_start.valueChanged.connect(self._mark_dirty)
@@ -8770,6 +14181,7 @@ class DirectorCutStudio(QMainWindow):
         self.special_combo.setCurrentIndex(max(0, selected_index))
         self.special_combo.blockSignals(False)
         self._refresh_skill_binding_display()
+        self._special_skill_production_strategy_changed()
         self._mark_dirty()
         self._mark_all_render_segments_dirty()
         self.schedule_prompt_generation()
@@ -8786,12 +14198,99 @@ class DirectorCutStudio(QMainWindow):
         if not self.prompt_sync_in_progress:
             self._mark_all_render_segments_dirty()
 
+    def _is_reference_scene_reset_shot(self, cue: DirectorCue | None) -> bool:
+        """Return whether a Shot starts an independent Picture-owned scene."""
+        if cue is None or cue.cue_type != "shot":
+            return False
+        selected_skill = str(self.special_combo.currentData() or "").strip().casefold()
+        if (
+            selected_skill == BEAT_SYNCED_ENTRANCE_SPECIAL_SKILL
+            and cue.preset.strip().casefold().startswith("p4 slow-motion final reveal")
+        ):
+            # This Skill now treats P4 as subject/identity evidence inserted
+            # into the campus established by the preceding bridge. Historical
+            # projects may still contain the former REFERENCE SCENE RESET text;
+            # it must not reactivate the discarded P4 background contract.
+            return False
+        evidence = " ".join((
+            cue.preset,
+            cue.detail,
+            cue.location_transition,
+            cue.incoming_environment_state,
+        )).casefold()
+        if "reference scene reset" in evidence or "acoustic scene reset" in evidence:
+            return True
+        return False
+
+    def _reference_scene_reset_shot_at(self, seconds: float) -> DirectorCue | None:
+        tolerance = TIMELINE_SNAP_SECONDS / 2 + 1e-6
+        return next(
+            (
+                cue for cue in self.director_cues
+                if cue.cue_type == "shot"
+                and abs(cue.start_seconds - seconds) <= tolerance
+                and self._is_reference_scene_reset_shot(cue)
+            ),
+            None,
+        )
+
+    def _is_beat_synced_campus_bridge_shot(self, cue: DirectorCue | None) -> bool:
+        """Return whether the 18-second entrance Skill requires a dedicated exit beat."""
+        if cue is None or cue.cue_type != "shot":
+            return False
+        selected_skill = str(self.special_combo.currentData() or "").strip().casefold()
+        return (
+            selected_skill == BEAT_SYNCED_ENTRANCE_SPECIAL_SKILL
+            and cue.preset.strip().casefold().startswith(
+                "p1 corridor-to-campus corner discovery"
+            )
+        )
+
+    def _is_beat_synced_p4_campus_composite_shot(
+        self,
+        cue: DirectorCue | None,
+    ) -> bool:
+        """Return whether P4 supplies subjects for the established campus scene."""
+        if cue is None or cue.cue_type != "shot":
+            return False
+        selected_skill = str(self.special_combo.currentData() or "").strip().casefold()
+        return (
+            selected_skill == BEAT_SYNCED_ENTRANCE_SPECIAL_SKILL
+            and cue.preset.strip().casefold().startswith("p4 slow-motion final reveal")
+        )
+
+    def _coalesce_beat_synced_campus_bridge_cues(
+        self,
+        cues: list[DirectorCue],
+    ) -> list[DirectorCue]:
+        """Rejoin one logical bridge if a Timeline transition split its Shot item."""
+        bridge_cues = sorted(
+            (cue for cue in cues if self._is_beat_synced_campus_bridge_shot(cue)),
+            key=lambda cue: (cue.start_seconds, cue.end_seconds, cue.cue_id),
+        )
+        if len(bridge_cues) <= 1:
+            return cues
+        merged = deepcopy(bridge_cues[0])
+        merged.start_seconds = min(cue.start_seconds for cue in bridge_cues)
+        merged.end_seconds = max(cue.end_seconds for cue in bridge_cues)
+        remainder = [cue for cue in cues if cue not in bridge_cues]
+        return sorted(
+            [*remainder, merged],
+            key=lambda cue: (cue.start_seconds, cue.end_seconds, cue.cue_id),
+        )
+
     def _continuity_mode_at_boundary(
         self,
         seconds: float,
         explicit: str = "Auto",
     ) -> str:
         """Resolve a Shot boundary to one safe hidden-render continuity policy."""
+        if self._reference_scene_reset_shot_at(seconds) is not None:
+            # A full-scene Picture handoff must not receive the preceding
+            # segment's final frames. Those frames can visually transplant the
+            # old set even when the active loader set correctly contains only
+            # the new Picture.
+            return "hard_cut"
         normalized = explicit.strip().lower().replace(" ", "_").replace("-", "_")
         if normalized in {"hard_cut", "match_action", "motion_reference", "transition"}:
             return normalized
@@ -8825,7 +14324,57 @@ class DirectorCutStudio(QMainWindow):
         end = float(self.clip_end.value())
         if end <= start:
             return []
-        if end - start > MAX_NATIVE_SECONDS + 1e-6:
+        keyframe_boundaries = {start, end}
+        if is_drone_special_skill(self.special_combo.currentData()):
+            for asset in self.scan.timeline_assets():
+                if asset.media_type != "image" or not asset.timeline_placed:
+                    continue
+                direction = str(asset.clip_prompt or "")
+                if not (
+                    "SCENE KEYFRAME CHAIN ANCHOR" in direction
+                    or "EXCLUSIVE P1-DERIVED SCENE-STATE REPLACEMENT" in direction
+                ):
+                    continue
+                clipped_start = max(start, float(asset.start_seconds))
+                clipped_end = min(end, float(asset.end_seconds))
+                if clipped_end > clipped_start + 1e-6:
+                    keyframe_boundaries.update((clipped_start, clipped_end))
+        keyframe_chain_active = len(keyframe_boundaries) > 2
+        mandatory_story_boundaries = {start, end}
+        logical_shots = self._coalesce_beat_synced_campus_bridge_cues([
+            cue for cue in self.director_cues if cue.cue_type == "shot"
+        ])
+        for cue in logical_shots:
+            if cue.cue_type != "shot":
+                continue
+            if not (
+                self._is_beat_synced_campus_bridge_shot(cue)
+                or self._is_beat_synced_p4_campus_composite_shot(cue)
+                or self._is_reference_scene_reset_shot(cue)
+            ):
+                continue
+            if start + 1e-6 < cue.start_seconds < end - 1e-6:
+                mandatory_story_boundaries.add(float(cue.start_seconds))
+        mandatory_story_boundary_active = len(mandatory_story_boundaries) > 2
+        if keyframe_chain_active or mandatory_story_boundary_active:
+            # A later Picture must never be present in the same native H3
+            # request as an earlier scene anchor. Render each ownership range
+            # independently. The beat-synced entrance Skill also isolates its
+            # two-second corridor-to-campus bridge: otherwise H3 tends to
+            # spend a packed 13.5-second request on the three character
+            # entrances and silently omit this indispensable causal action.
+            planned = []
+            ordered = sorted(keyframe_boundaries | mandatory_story_boundaries)
+            for range_start, range_end in zip(ordered, ordered[1:]):
+                if range_end <= range_start + 1e-6:
+                    continue
+                planned.extend(plan_render_segments(
+                    range_start,
+                    range_end,
+                    max_segment_seconds=MAX_NATIVE_SECONDS,
+                    overlap_seconds=0.0,
+                ))
+        elif end - start > MAX_NATIVE_SECONDS + 1e-6:
             shots = [
                 asdict(cue) for cue in self.director_cues
                 if cue.cue_type == "shot"
@@ -8852,7 +14401,7 @@ class DirectorCutStudio(QMainWindow):
             # decision list. Use Shot units only when they describe most of the
             # work area; otherwise retain the proven 15-second planner.
             if shots and coverage >= (end - start) * 0.8:
-                return plan_shot_render_segments(
+                planned = plan_shot_render_segments(
                     start,
                     end,
                     shots,
@@ -8864,17 +14413,111 @@ class DirectorCutStudio(QMainWindow):
                     max_segment_seconds=MAX_NATIVE_SECONDS,
                     overlap_seconds=0.0,
                 )
-        planned = plan_render_segments(
-            start,
-            end,
-            max_segment_seconds=MAX_NATIVE_SECONDS,
-            overlap_seconds=0.0,
-        )
-        for index, segment in enumerate(planned):
-            segment.continuity_mode = (
-                "none" if index == 0
-                else self._continuity_mode_at_boundary(segment.start_seconds)
+            else:
+                planned = plan_render_segments(
+                    start,
+                    end,
+                    max_segment_seconds=MAX_NATIVE_SECONDS,
+                    overlap_seconds=0.0,
+                )
+        else:
+            planned = plan_render_segments(
+                start,
+                end,
+                max_segment_seconds=MAX_NATIVE_SECONDS,
+                overlap_seconds=0.0,
             )
+        for index, segment in enumerate(planned):
+            if index == 0:
+                segment.continuity_mode = "none"
+            elif any(
+                abs(segment.start_seconds - cue.start_seconds)
+                <= TIMELINE_SNAP_SECONDS / 2 + 1e-6
+                for cue in logical_shots
+                if self._is_beat_synced_p4_campus_composite_shot(cue)
+            ):
+                # P4 contributes subject identity, while the prior bridge's
+                # final 24 frames provide the campus geometry, lighting and
+                # screen direction into which those subjects are integrated.
+                segment.continuity_mode = "motion_reference"
+            elif any(
+                abs(segment.start_seconds - boundary)
+                <= TIMELINE_SNAP_SECONDS / 2 + 1e-6
+                for boundary in mandatory_story_boundaries
+                if boundary > start + 1e-6 and boundary < end - 1e-6
+            ):
+                # Both the P1 campus-return bridge and the P4 scene reset must
+                # start from their own active Picture. Carrying P2/P3 motion
+                # frames across either boundary can replace P1 or transplant
+                # the corridor into P4.
+                segment.continuity_mode = "hard_cut"
+            elif self._reference_scene_reset_shot_at(segment.start_seconds) is not None:
+                segment.continuity_mode = "hard_cut"
+            elif keyframe_chain_active:
+                # Scene-anchor isolation is a deliberate visual handoff: no
+                # Picture or soundtrack crosses the boundary, only the prior
+                # segment's final 24 silent frames.
+                segment.continuity_mode = "motion_reference"
+            elif segment.continuity_mode in {"", "auto", "match_action"}:
+                segment.continuity_mode = self._continuity_mode_at_boundary(
+                    segment.start_seconds
+                )
+        if not keyframe_chain_active and not mandatory_story_boundary_active:
+            planned = protect_segment_boundaries_from_speech(
+                planned,
+                [asdict(layer) for layer in self.text_layers],
+                max_segment_seconds=MAX_NATIVE_SECONDS,
+                tail_seconds=1.0,
+                grid_seconds=TIMELINE_SNAP_SECONDS,
+            )
+            planned = align_segments_to_dialogue_turns(
+                planned,
+                [asdict(layer) for layer in self.text_layers],
+                max_segment_seconds=MAX_NATIVE_SECONDS,
+                grid_seconds=TIMELINE_SNAP_SECONDS,
+            )
+            # A named/signature technique is one indivisible H3 action chain.
+            # Keep its load, contact, recoil and environment response inside
+            # the same native request after speech/dialogue boundary repair.
+            planned = protect_segment_boundaries_from_atomic_shots(
+                planned,
+                [
+                    asdict(cue) for cue in self.director_cues
+                    if cue.cue_type == "shot"
+                    and ranges_intersect(cue.start_seconds, cue.end_seconds, start, end)
+                ],
+                text_layers=[
+                    asdict(layer) for layer in self.text_layers
+                    if ranges_intersect(
+                        layer.start_seconds, layer.end_seconds, start, end
+                    )
+                ],
+                max_segment_seconds=MAX_NATIVE_SECONDS,
+                grid_seconds=TIMELINE_SNAP_SECONDS,
+            )
+        shots_in_area = self._coalesce_beat_synced_campus_bridge_cues([
+            cue for cue in self.director_cues
+            if cue.cue_type == "shot"
+            and ranges_intersect(cue.start_seconds, cue.end_seconds, start, end)
+        ])
+        for index, segment in enumerate(planned):
+            unit_start = float(
+                segment.core_start_seconds
+                if segment.core_start_seconds is not None
+                else segment.start_seconds
+            )
+            unit_end = float(
+                segment.core_end_seconds
+                if segment.core_end_seconds is not None
+                else segment.end_seconds
+            )
+            segment.index = index
+            segment.shot_ids = [
+                cue.cue_id for cue in shots_in_area
+                if ranges_intersect(
+                    cue.start_seconds, cue.end_seconds, unit_start, unit_end
+                )
+            ] or segment.shot_ids
         return planned
 
     def _render_status_rows(self) -> list[dict]:
@@ -8898,7 +14541,7 @@ class DirectorCutStudio(QMainWindow):
             cached_status = str(cached.get("status", "")).lower()
             cached_output = Path(str(cached.get("output_path", "")))
             runtime = self.render_runtime_status.get(segment_id, "")
-            if runtime in {"running", "failed"}:
+            if runtime in {"running", "reconnecting", "failed"}:
                 status = runtime
             elif segment_id in self.render_dirty_segment_ids:
                 status = "dirty"
@@ -8976,6 +14619,7 @@ class DirectorCutStudio(QMainWindow):
         if not self.scan:
             raise RuntimeError("No workflow is loaded.")
         self._read_settings_ui()
+        self._sync_shot_take_states()
         prompt = {
             name: getattr(self.prompt_panel, name).toPlainText()
             for name in (
@@ -9024,6 +14668,19 @@ class DirectorCutStudio(QMainWindow):
             "application_version": APP_VERSION,
             "workflow_path": str(self.scan.path),
             "timeline_duration_seconds": self.scan.duration_seconds,
+            "storyboard_target_duration_seconds": self.storyboard_target_duration_seconds,
+            "storyboard_view_mode": self.storyboard_view_mode,
+            "smart_cut_last_plan": deepcopy(self.smart_cut_last_plan),
+            "production_strategy": self.production_strategy,
+            "production_batch_seconds": self.production_batch_seconds,
+            "incremental_production": {
+                "approved_horizon_seconds": self.incremental_approved_horizon,
+                "pending_start_seconds": self.incremental_pending_start,
+                "pending_end_seconds": self.incremental_pending_end,
+                "phase": self.incremental_batch_phase,
+                "preview_seed": self.preview_seed,
+                "preview_ready": self.preview_ready,
+            },
             "work_area": [self.clip_start.value(), self.clip_end.value()],
             "playhead_seconds": self.playhead_seconds,
             "special_skill": self.special_combo.currentData(),
@@ -9042,6 +14699,15 @@ class DirectorCutStudio(QMainWindow):
             "smart_render": self.smart_render_manifest,
             "smart_render_manifests": self.smart_render_manifests,
             "render_dirty_segment_ids": sorted(self.render_dirty_segment_ids),
+            "workspace_layout_version": WORKSPACE_LAYOUT_VERSION,
+            "workspace_id": self.project_workspace_id,
+            "workspace_root": str(self.example_work_dir) if self.example_work_dir else "",
+            "legacy_project_source": (
+                str(self.legacy_project_source) if self.legacy_project_source else ""
+            ),
+            "quality_profile": self.quality_profile,
+            "shot_take_states": deepcopy(self.shot_take_states),
+            "segment_take_states": deepcopy(self.segment_take_states),
             "example_work_dir": str(self.example_work_dir) if self.example_work_dir else "",
             "monitor_compare_sizes": self.monitor_compare_splitter.sizes(),
             "generated_output_timeline_start": self.generated_output_timeline_start,
@@ -9058,16 +14724,9 @@ class DirectorCutStudio(QMainWindow):
             return False
         destination = self.project_path
         if destination is None:
-            filename, _ = QFileDialog.getSaveFileName(
-                self,
-                "Save Director Project",
-                str(PROJECT_ROOT / "director_projects" / "untitled.h3director.json"),
-                "H3 Director Project (*.h3director.json)",
-            )
-            if not filename:
-                return False
-            destination = Path(filename)
+            destination = workspace_project_path(self._ensure_project_workspace())
         destination.parent.mkdir(parents=True, exist_ok=True)
+        self._write_shot_state_manifests()
         destination.write_text(json.dumps(self._project_payload(), ensure_ascii=False, indent=2), encoding="utf-8")
         self.project_path = destination.resolve()
         self.project_dirty = False
@@ -9075,6 +14734,28 @@ class DirectorCutStudio(QMainWindow):
         self._update_window_title()
         self.statusBar().showMessage(f"Project saved: {destination.name}")
         return True
+
+    def open_project_storage(self) -> None:
+        """Open the auditable storage tool only for a durable saved Workspace."""
+        if not self.scan:
+            QMessageBox.information(
+                self,
+                "Project Storage",
+                "Load an API workflow or open a Project first.",
+            )
+            return
+        if self.project_dirty or self.project_path is None:
+            if not self.save_project():
+                QMessageBox.warning(
+                    self,
+                    "Project Storage",
+                    "Save the Project before inspecting or archiving its Workspace.",
+                )
+                return
+        workspace = self._ensure_project_workspace()
+        dialog = ProjectStorageDialog(workspace, self)
+        dialog.exec()
+        dialog.deleteLater()
 
     def open_project(self) -> None:
         start_folder = (
@@ -9098,11 +14779,31 @@ class DirectorCutStudio(QMainWindow):
             payload = json.loads(path.read_text(encoding="utf-8-sig"))
             if payload.get("format") != "h3-director-project":
                 raise ValueError("This is not an H3 Director Project file.")
+            payload, integrity_repairs = repair_project_payload(payload)
+            recovered_workspace_state = False
+            opened_project_path = path.resolve()
+            is_legacy_project = (
+                int(payload.get("version", 0)) < PROJECT_FORMAT_VERSION
+                or int(payload.get("workspace_layout_version", 0))
+                < WORKSPACE_LAYOUT_VERSION
+            )
+            workspace_root = locate_workspace_for_project(opened_project_path, payload)
+            manifest = ensure_workspace_layout(
+                workspace_root,
+                display_name=opened_project_path.stem,
+                workspace_id=str(payload.get("workspace_id") or ""),
+                legacy_project_path=opened_project_path if is_legacy_project else None,
+            )
             workflow_path = Path(payload["workflow_path"])
             if not workflow_path.is_file():
-                portable_workflow = PROJECT_ROOT / workflow_path.name
-                if portable_workflow.is_file():
-                    workflow_path = portable_workflow
+                for portable_workflow in (
+                    workspace_root / workflow_path.name,
+                    workspace_root / "workflow" / workflow_path.name,
+                    PROJECT_ROOT / workflow_path.name,
+                ):
+                    if portable_workflow.is_file():
+                        workflow_path = portable_workflow
+                        break
             if not workflow_path.is_file():
                 raise FileNotFoundError(f"Workflow not found: {workflow_path}")
             self._clear_generated_output()
@@ -9111,13 +14812,46 @@ class DirectorCutStudio(QMainWindow):
             saved_duration = payload.get("timeline_duration_seconds")
             if saved_duration is not None:
                 self._set_design_duration(max(0.5, float(saved_duration)))
+            saved_story_target = payload.get("storyboard_target_duration_seconds")
+            if saved_story_target is None:
+                saved_story_target = self._storyboard_target_from_workspace(
+                    workspace_root,
+                    float(saved_duration)
+                    if saved_duration is not None
+                    else self.scan.duration_seconds,
+                )
+            self.storyboard_target_duration_seconds = max(
+                0.5, float(saved_story_target)
+            )
+            saved_view_mode = str(
+                payload.get("storyboard_view_mode", "large_icons")
+            )
+            self.storyboard_view_mode = (
+                saved_view_mode
+                if saved_view_mode in StoryboardBlockList.DISPLAY_MODES
+                else "large_icons"
+            )
+            self.smart_cut_last_plan = deepcopy(
+                payload.get("smart_cut_last_plan") or {}
+            )
+            self.storyboard_target_spin.blockSignals(True)
+            self.storyboard_target_spin.setValue(
+                self.storyboard_target_duration_seconds
+            )
+            self.storyboard_target_spin.blockSignals(False)
+            if hasattr(self, "manual_ripple_action"):
+                self.manual_ripple_action.setChecked(False)
+            self.storyboard_trim_active = False
+            self._refresh_storyboard_trim_controls()
             track_rows = payload.get("tracks") or []
             if track_rows:
                 self.tracks = [TimelineTrack(**row) for row in track_rows]
                 self.timeline.set_tracks(self.tracks)
                 self._rebuild_track_headers()
             self.text_layers = [
-                TextLayer(**row) for row in payload.get("text_layers", [])
+                text_layer_from_mapping(row)
+                for row in payload.get("text_layers", [])
+                if isinstance(row, dict)
             ]
             if self._normalize_text_layer_tracks():
                 self.timeline.set_tracks(self.tracks)
@@ -9127,7 +14861,9 @@ class DirectorCutStudio(QMainWindow):
             )
             self.timeline.set_text_layers(self.text_layers)
             self.director_cues = [
-                DirectorCue(**row) for row in payload.get("director_cues", [])
+                director_cue_from_mapping(row)
+                for row in payload.get("director_cues", [])
+                if isinstance(row, dict)
             ]
             self.timeline.set_director_cues(self.director_cues)
             asset_map = {asset.node_id: asset for asset in self.scan.assets}  # type: ignore[union-attr]
@@ -9160,6 +14896,7 @@ class DirectorCutStudio(QMainWindow):
                 )
                 if resolved_media is not None:
                     assign_local_media(self.scan, asset, resolved_media)  # type: ignore[arg-type]
+                    self._show_immediate_image_preview(asset)
                 for name in (
                     "reference_id",
                     "is_virtual",
@@ -9219,9 +14956,84 @@ class DirectorCutStudio(QMainWindow):
                 if isinstance(field, QPlainTextEdit):
                     field.setPlainText(str(value))
             self.prompt_panel.auto_sync.setChecked(bool(payload.get("prompt_auto_sync", True)))
-            special = payload.get("special_skill", NONE_SPECIAL)
+            special = _canonical_special_skill_key(
+                payload.get("special_skill", NONE_SPECIAL)
+            )
             index = self.special_combo.findData(special)
             self.special_combo.setCurrentIndex(max(0, index))
+            # Migrate generated combat choreography when an older Project is
+            # opened.  This repairs vague exchanges, outcome-without-cause
+            # rows, stale market targets inside Hong Kong comic projects and
+            # the final resolve timestamp in memory.  The original Project
+            # file remains untouched until the user explicitly saves.
+            if special in COMBAT_ACTION_SKILLS:
+                before_combat = json.dumps(
+                    [
+                        asdict(cue) for cue in self.director_cues
+                        if cue.cue_type in {"shot", "marker"}
+                    ],
+                    ensure_ascii=False,
+                    sort_keys=True,
+                )
+                self._refresh_director_cues()
+                after_combat = json.dumps(
+                    [
+                        asdict(cue) for cue in self.director_cues
+                        if cue.cue_type in {"shot", "marker"}
+                    ],
+                    ensure_ascii=False,
+                    sort_keys=True,
+                )
+                if before_combat != after_combat:
+                    integrity_repairs.append(
+                        "Combat Timeline causality, source-world targets and final resolve were migrated"
+                    )
+            self.production_strategy = str(
+                payload.get("production_strategy")
+                or (
+                    "incremental"
+                    if str(special) == "long-form-h3-director"
+                    else "full_range"
+                )
+            )
+            if self.production_strategy not in {"full_range", "incremental"}:
+                self.production_strategy = "full_range"
+            self.production_batch_seconds = max(
+                MIN_PRODUCTION_BATCH_SECONDS,
+                float(payload.get("production_batch_seconds", 30.0)),
+            )
+            incremental = payload.get("incremental_production") or {}
+            duration_limit = self._timeline_duration_seconds()
+            self.incremental_approved_horizon = min(
+                duration_limit,
+                max(0.0, float(incremental.get("approved_horizon_seconds", 0.0))),
+            )
+            self.incremental_pending_start = min(
+                duration_limit,
+                max(0.0, float(incremental.get("pending_start_seconds", 0.0))),
+            )
+            self.incremental_pending_end = min(
+                duration_limit,
+                max(
+                    self.incremental_pending_start,
+                    float(incremental.get("pending_end_seconds", 0.0)),
+                ),
+            )
+            self.incremental_batch_phase = str(incremental.get("phase") or "")
+            raw_preview_seed = incremental.get("preview_seed")
+            self.preview_seed = (
+                int(raw_preview_seed) if raw_preview_seed is not None else None
+            )
+            self.preview_ready = bool(incremental.get("preview_ready", False))
+            strategy_index = self.production_strategy_combo.findData(
+                self.production_strategy
+            )
+            self.production_strategy_combo.blockSignals(True)
+            self.production_strategy_combo.setCurrentIndex(max(0, strategy_index))
+            self.production_strategy_combo.blockSignals(False)
+            self.production_batch_spin.blockSignals(True)
+            self.production_batch_spin.setValue(self.production_batch_seconds)
+            self.production_batch_spin.blockSignals(False)
             saved_settings = payload.get("render_settings") or {}
             if saved_settings:
                 self.render_settings = RenderSettings.from_mapping(saved_settings)
@@ -9249,52 +15061,216 @@ class DirectorCutStudio(QMainWindow):
                 for key, value in (payload.get("smart_render_manifests") or {}).items()
                 if isinstance(value, dict)
             }
+            recovered_manifest = self._recover_workspace_render_manifest(
+                workspace_root
+            )
+            if recovered_manifest:
+                recovered_kind = str(
+                    recovered_manifest.get("request_kind") or "final"
+                ).lower()
+                recovered_key = (
+                    "preview" if recovered_kind == "preview" else "production"
+                )
+                existing_manifest = self.smart_render_manifests.get(recovered_key)
+                if not existing_manifest or self._render_manifest_recovery_score(
+                    recovered_manifest
+                ) > self._render_manifest_recovery_score(existing_manifest):
+                    self.smart_render_manifests[recovered_key] = recovered_manifest
+                    self.smart_render_manifest = recovered_manifest
+                    recovered_workspace_state = True
             if self.smart_render_manifest and not self.smart_render_manifests:
                 legacy_kind = str(self.smart_render_manifest.get("request_kind", "final"))
                 cache_key = "preview" if legacy_kind == "preview" else "production"
                 self.smart_render_manifests[cache_key] = self.smart_render_manifest
+            preferred_manifest_key = (
+                "preview"
+                if str(payload.get("generated_output_request_kind", "final"))
+                == "preview"
+                else "production"
+            )
+            if preferred_manifest_key in self.smart_render_manifests:
+                self.smart_render_manifest = self.smart_render_manifests[
+                    preferred_manifest_key
+                ]
             self.render_dirty_segment_ids = {
                 str(value) for value in payload.get("render_dirty_segment_ids", [])
             }
             self.render_runtime_status.clear()
             self._refresh_render_status_bar()
-            # Continue saving beside the project that was actually opened, not
-            # into a stale example_work_dir from another machine or drive.
-            self.example_work_dir = path.resolve().parent
+            # A copied legacy project adopts its containing folder. Its source
+            # JSON remains read-only; new snapshots go to project/director_project.
+            self.example_work_dir = workspace_root.resolve()
+            self.project_workspace_id = str(manifest.get("workspace_id") or "")
+            self.legacy_project_source = (
+                opened_project_path if is_legacy_project else None
+            )
+            self.quality_profile = str(
+                payload.get("quality_profile") or "approved_final"
+            )
+            if self.quality_profile not in QUALITY_PROFILES:
+                self.quality_profile = "approved_final"
+            quality_index = self.quality_profile_combo.findData(self.quality_profile)
+            self.quality_profile_combo.blockSignals(True)
+            self.quality_profile_combo.setCurrentIndex(max(0, quality_index))
+            self.quality_profile_combo.blockSignals(False)
+            self.shot_take_states = normalize_shot_take_states(
+                payload.get("shot_take_states"), self._shot_ids()
+            )
+            self.segment_take_states = normalize_segment_take_states(
+                payload.get("segment_take_states")
+            )
+            self.segment_take_states, rebased_shots = rebase_workspace_take_states(
+                workspace_root,
+                self.segment_take_states,
+                self.shot_take_states,
+            )
+            self.shot_take_states = normalize_shot_take_states(
+                rebased_shots, self._shot_ids()
+            )
+            if int(payload.get("workspace_layout_version", 0)) < 2:
+                shot_ranges = {
+                    str(cue.cue_id): (
+                        float(cue.start_seconds), float(cue.end_seconds)
+                    )
+                    for cue in self.director_cues
+                    if cue.cue_type == "shot"
+                }
+                migrated_segments, migrated_shots, migration_report = (
+                    migrate_legacy_shot_takes(
+                        workspace_root,
+                        manifests=self.smart_render_manifests,
+                        shot_states=self.shot_take_states,
+                        shot_ranges=shot_ranges,
+                        segment_states=self.segment_take_states,
+                    )
+                )
+                self.segment_take_states = migrated_segments
+                self.shot_take_states = normalize_shot_take_states(
+                    migrated_shots, self._shot_ids()
+                )
+                if int(migration_report.get("migrated_segments", 0)):
+                    self.statusBar().showMessage(
+                        "Workspace upgraded to compact Segment storage: "
+                        f"{migration_report['migrated_segments']} Segment assets, "
+                        f"{migration_report['removed_legacy_files']} legacy aliases removed."
+                    )
+            self._write_shot_state_manifests()
             compare_sizes = payload.get("monitor_compare_sizes") or []
             if len(compare_sizes) == 2 and any(int(value) > 0 for value in compare_sizes):
                 self.monitor_compare_splitter.setSizes(
                     [max(1, int(value)) for value in compare_sizes]
                 )
-            generated_output = Path(str(payload.get("generated_output", "")))
+            saved_output_text = str(payload.get("generated_output", "")).strip()
+            generated_output = Path(saved_output_text)
             self.submit_request_kind = str(
                 payload.get("generated_output_request_kind", "final")
             )
-            sibling_output = path.resolve().parent / "generated_output.mp4"
-            # Version 12 projects predate portable output archiving. Prefer the
-            # MP4 beside the project so a copied example folder remains complete.
-            if sibling_output.is_file() and (
-                int(payload.get("version", 0)) < 13 or not generated_output.is_file()
+            root_workspace_output = (
+                workspace_root / (
+                    "generated_preview.mp4"
+                    if self.submit_request_kind == "preview"
+                    else "generated_output.mp4"
+                )
+            )
+            workspace_output = (
+                workspace_root / "renders" / "final" / "generated_output.mp4"
+            )
+            legacy_workspace_output = workspace_root / "generated_output.mp4"
+            sibling_output = opened_project_path.parent / "generated_output.mp4"
+            manifest_master = Path(
+                str(self.smart_render_manifest.get("master_output") or "")
+            )
+            # Durable Workspace masters are authoritative even when an older
+            # or interrupted Project snapshot left generated_output empty.
+            # Prefer the requested Preview/Final kind, then use portable and
+            # legacy fallbacks without ever requiring a stale JSON path first.
+            candidates = [
+                root_workspace_output,
+                generated_output,
+                manifest_master,
+                workspace_output,
+                legacy_workspace_output,
+                sibling_output,
+            ]
+            if self.submit_request_kind == "preview":
+                candidates.append(workspace_root / "generated_output.mp4")
+            else:
+                candidates.append(workspace_root / "generated_preview.mp4")
+            generated_output = next(
+                (candidate for candidate in candidates if candidate.is_file()),
+                generated_output,
+            )
+            if generated_output.is_file() and (
+                not saved_output_text
+                or Path(saved_output_text).resolve() != generated_output.resolve()
             ):
-                generated_output = sibling_output
-            elif not generated_output.is_file() and payload.get("generated_output"):
-                generated_output = path.resolve().parent / generated_output.name
+                recovered_workspace_state = True
             if generated_output.is_file():
+                saved_timeline_start = float(
+                    payload.get("generated_output_timeline_start", 0.0)
+                )
+                restored_timeline_start = saved_timeline_start
+                try:
+                    output_info = probe_media(generated_output, self.runtime)
+                    restored_timeline_start = (
+                        self._normalize_restored_master_timeline_start(
+                            saved_timeline_start,
+                            float(output_info.get("duration") or 0.0),
+                            self._timeline_duration_seconds(),
+                        )
+                    )
+                except (OSError, RuntimeError, ValueError, TypeError):
+                    # The monitor/proxy path will expose an actually broken MP4.
+                    # A failed probe must not prevent the Project itself loading.
+                    restored_timeline_start = saved_timeline_start
+                if abs(restored_timeline_start - saved_timeline_start) > 1e-6:
+                    recovered_workspace_state = True
                 self._show_generated_output(
                     [{"kind": "videos", "local_path": str(generated_output)}],
-                    timeline_start=float(payload.get("generated_output_timeline_start", 0.0)),
+                    timeline_start=restored_timeline_start,
                     autoplay=False,
                 )
+            self.accept_preview_button.setEnabled(
+                self.preview_ready and self.preview_seed is not None
+            )
+            self.reject_preview_button.setEnabled(
+                self.preview_ready and self.preview_seed is not None
+            )
+            self._refresh_incremental_controls()
             # Restore every visible time control from the same saved playhead.
             # Previously the Timeline scene restored correctly while the slider
             # and labels incorrectly remained at 0.00 seconds.
             self.seek_timeline(self.playhead_seconds)
-            self.project_path = path.resolve()
-            self.project_dirty = False
+            self.project_path = (
+                workspace_project_path(workspace_root).resolve()
+                if is_legacy_project
+                else opened_project_path
+            )
+            # Automatic integrity repairs are deliberately kept in memory
+            # until the user saves.  The original JSON remains recoverable,
+            # while Save Project persists the clean, rerender-ready form.
+            if integrity_repairs:
+                # Project integrity may have rippled speech and Shot timing.
+                # Rebuild the editable prompt fields from that repaired
+                # Timeline so a subsequent Run cannot reuse stale timecodes.
+                self._sync_prompt_panel_from_timeline(force=True)
+            self.project_dirty = bool(integrity_repairs or recovered_workspace_state)
             self.undo_stack.clear()
-            self.undo_stack.setClean()
+            if not integrity_repairs and not recovered_workspace_state:
+                self.undo_stack.setClean()
             self._update_window_title()
-            self.statusBar().showMessage(f"Project restored: {path.name}")
+            migration_note = " 路 legacy source preserved" if is_legacy_project else ""
+            repair_note = (
+                f" · auto-repaired {len(integrity_repairs)} integrity item(s); save to persist"
+                if integrity_repairs else ""
+            )
+            recovery_note = (
+                " · recovered generated output/manifest from Workspace; save to persist"
+                if recovered_workspace_state else ""
+            )
+            self.statusBar().showMessage(
+                f"Project restored: {path.name}{migration_note}{repair_note}{recovery_note}"
+            )
         except Exception as exc:
             QMessageBox.critical(self, "Project load error", str(exc))
         finally:
@@ -9345,6 +15321,31 @@ class DirectorCutStudio(QMainWindow):
         self.timeline.set_director_cues(self.director_cues)
         self._rebuild_track_headers()
         self.scan = scan
+        if not self.restoring_project:
+            self.storyboard_target_duration_seconds = scan.duration_seconds
+            self.storyboard_trim_active = False
+            self.production_strategy = "full_range"
+            self.production_batch_seconds = 30.0
+            self.incremental_approved_horizon = 0.0
+            self.incremental_pending_start = 0.0
+            self.incremental_pending_end = 0.0
+            self.incremental_batch_phase = ""
+            if hasattr(self, "production_strategy_combo"):
+                strategy_index = self.production_strategy_combo.findData("full_range")
+                self.production_strategy_combo.blockSignals(True)
+                self.production_strategy_combo.setCurrentIndex(max(0, strategy_index))
+                self.production_strategy_combo.blockSignals(False)
+                self.production_batch_spin.blockSignals(True)
+                self.production_batch_spin.setValue(self.production_batch_seconds)
+                self.production_batch_spin.blockSignals(False)
+            if hasattr(self, "storyboard_target_spin"):
+                self.storyboard_target_spin.blockSignals(True)
+                self.storyboard_target_spin.setValue(scan.duration_seconds)
+                self.storyboard_target_spin.blockSignals(False)
+            if hasattr(self, "storyboard_trim_button"):
+                if hasattr(self, "manual_ripple_action"):
+                    self.manual_ripple_action.setChecked(False)
+                self._refresh_storyboard_trim_controls()
         mapped_classes = (
             "ResolutionSelector",
             "BasicScheduler",
@@ -9372,7 +15373,7 @@ class DirectorCutStudio(QMainWindow):
         counts = scan.counts
         self._refresh_virtual_media_header()
         self.clip_start.setRange(0, scan.duration_seconds)
-        self.clip_end.setRange(0.01, scan.duration_seconds)
+        self.clip_end.setRange(0.01, MAX_MANUAL_TIMELINE_SECONDS)
         self.clip_start.setValue(0)
         self.clip_end.setValue(scan.duration_seconds)
         self.asset_start.setRange(0, scan.duration_seconds)
@@ -9402,13 +15403,36 @@ class DirectorCutStudio(QMainWindow):
         self._refresh_render_status_bar()
         self._refresh_recognition_inspector()
         self._maybe_request_semantic_lm_unload()
+        self._refresh_incremental_controls()
 
     def load_asset_file(self, asset: MediaAsset, filename: str) -> None:
         if media_type_for_path(filename) != asset.media_type:
             QMessageBox.warning(self, "Wrong media type", f"{asset.tag} expects {asset.media_type} media.")
             return
         try:
-            incoming_path = str(Path(filename).expanduser().resolve())
+            source_path = Path(filename).expanduser().resolve()
+            workspace = self._ensure_project_workspace()
+            try:
+                source_path.relative_to(workspace)
+                imported_path = source_path
+            except ValueError:
+                stat = source_path.stat()
+                signature = hashlib.sha256(
+                    f"{source_path}|{stat.st_size}|{stat.st_mtime_ns}".encode("utf-8")
+                ).hexdigest()[:12]
+                logical_id = slugify_project_name(
+                    stable_reference_id(asset), "media"
+                )
+                safe_name = slugify_project_name(source_path.stem, "source")
+                imported_path = (
+                    workspace
+                    / "media"
+                    / "imported"
+                    / f"{logical_id}_{signature}_{safe_name}{source_path.suffix.lower()}"
+                )
+                if not imported_path.is_file():
+                    link_or_copy(source_path, imported_path)
+            incoming_path = str(imported_path.resolve())
             replacing_timeline_media = bool(
                 any(
                     item.timeline_placed
@@ -9418,7 +15442,8 @@ class DirectorCutStudio(QMainWindow):
                 and asset.local_path
                 and asset.local_path != incoming_path
             )
-            assign_local_media(self.scan, asset, filename)  # type: ignore[arg-type]
+            assign_local_media(self.scan, asset, imported_path)  # type: ignore[arg-type]
+            self._show_immediate_image_preview(asset)
             self.semantic_errors.pop(asset.node_id, None)
             self.semantic_waiting_assets.discard(asset.node_id)
             if replacing_timeline_media:
@@ -9444,6 +15469,314 @@ class DirectorCutStudio(QMainWindow):
                 )
         except Exception as exc:
             QMessageBox.critical(self, "Media load error", str(exc))
+
+    @staticmethod
+    def _z_image_sidecar_for_asset(asset: MediaAsset) -> Path | None:
+        source = Path(str(asset.local_path or ""))
+        if not source.is_file():
+            return None
+        candidates = [source.with_suffix(source.suffix + ".request.json")]
+        if source.stem.endswith("_nobg"):
+            original = source.with_name(source.stem[:-5] + source.suffix)
+            candidates.append(original.with_suffix(original.suffix + ".request.json"))
+        for candidate in candidates:
+            if candidate.is_file():
+                return candidate
+        return None
+
+    def _z_image_regeneration_request(self, asset: MediaAsset) -> dict:
+        """Rebuild one Z-Image request without changing its stable P mapping."""
+        if asset.media_type != "image":
+            raise ValueError("Z-Image regeneration is available only for Picture media.")
+        metadata: dict = {}
+        sidecar = self._z_image_sidecar_for_asset(asset)
+        if sidecar is not None:
+            try:
+                loaded = json.loads(sidecar.read_text(encoding="utf-8-sig"))
+                if isinstance(loaded, dict):
+                    metadata = loaded
+            except (OSError, ValueError):
+                metadata = {}
+        prompt = str(metadata.get("prompt") or asset.clip_prompt or "").strip()
+        if not prompt:
+            match = re.search(
+                r"(?:^|\n)Requirement:\s*(.*?)(?=\n(?:BLIP|Overview|Inference)|\Z)",
+                str(asset.recognition or ""),
+                flags=re.I | re.S,
+            )
+            prompt = match.group(1).strip() if match else ""
+        if not prompt:
+            raise ValueError(
+                f"{media_shortcut(asset)} has no reusable Z-Image prompt. "
+                "Add a Clip Prompt or reload its Design-generated request metadata first."
+            )
+        stable_id = media_shortcut(asset)
+        contract = (
+            f"REGENERATION CONTRACT FOR {stable_id}: preserve the same story role, exact subject "
+            "count, character and prop ownership, identity relationship, environment, composition, "
+            "time of day and continuity state stated above. Correct only visual defects. Never add, "
+            "merge, replace or duplicate a person beyond the stated subject-count contract."
+        )
+        if f"REGENERATION CONTRACT FOR {stable_id}:" not in prompt:
+            prompt = prompt.rstrip(" .") + ". " + contract
+        request = {
+            "requirement_id": str(
+                metadata.get("requirement_id") or f"regenerate_{stable_id.lower()}"
+            ),
+            "media_type": "image",
+            "usage": str(metadata.get("usage") or "h3_reference"),
+            "reuse_policy": str(metadata.get("reuse_policy") or "time_scoped"),
+            "start_seconds": float(
+                asset.start_seconds
+                if asset.timeline_placed
+                else metadata.get("start_seconds", asset.start_seconds)
+            ),
+            "end_seconds": float(
+                asset.end_seconds
+                if asset.timeline_placed
+                else metadata.get("end_seconds", asset.end_seconds)
+            ),
+            "track": str(
+                asset.timeline_track_id
+                if asset.timeline_placed and asset.timeline_track_id
+                else metadata.get("track") or "V1"
+            ),
+            "subject_keywords": list(metadata.get("subject_keywords") or []),
+            "prompt": prompt,
+            "negative_prompt": str(metadata.get("negative_prompt") or ""),
+            "identity_anchor_requirement_id": str(
+                metadata.get("identity_anchor_requirement_id") or ""
+            ),
+            "preferred_media_id": stable_id,
+            "regeneration_source": {
+                "node_id": asset.node_id,
+                "reference_id": stable_id,
+                "previous_local_path": str(asset.local_path or ""),
+                "previous_sidecar": str(sidecar or ""),
+            },
+        }
+        for key in (
+            "source_plate_media_id",
+            "source_plate_mode",
+            "source_plate_effect_profile",
+            "source_image_denoise",
+            "derived_from_media_id",
+            "route_control_media_id",
+            "route_stage_index",
+            "route_stage_count",
+            "final_hold_seconds",
+            "immutable_scene_plate",
+        ):
+            if key in metadata:
+                request[key] = metadata[key]
+        # Migrate older caption-only drone stage sidecars on explicit regeneration.
+        if (request.get("derived_from_media_id") == "P1"
+                and request.get("route_stage_index")
+                and not request.get("source_plate_mode")):
+            request.update(source_plate_media_id="P1", source_plate_mode="p1_img2img",
+                           source_image_denoise=0.25)
+        source_plate_id = str(request.get("source_plate_media_id", "")).strip().upper()
+        if source_plate_id and self.scan:
+            source_plate = next(
+                (
+                    item for item in self.scan.assets
+                    if media_shortcut(item).upper() == source_plate_id
+                    and item.media_type == "image"
+                ),
+                None,
+            )
+            if source_plate and Path(str(source_plate.local_path or "")).is_file():
+                request["source_plate_local_path"] = str(
+                    Path(source_plate.local_path).resolve()
+                )
+        special_key = str(self.special_combo.currentData() or "")
+        if is_drone_special_skill(special_key):
+            request = sanitize_drone_still_image_request(
+                request,
+                fireworks=special_key == "drone-fly-on-city-fireworks",
+            )
+        return request
+
+    def regenerate_media_asset_with_z_image(self, asset: MediaAsset) -> None:
+        """Generate a corrected take and replace the same logical Picture source."""
+        if not self.scan or asset not in self.scan.assets:
+            return
+        if asset.media_type != "image":
+            self.statusBar().showMessage("Z-Image regeneration supports Picture media only")
+            return
+        runners = (
+            self.submit_runner,
+            self.design_media_runner,
+            self.design_tts_runner,
+            self.media_regeneration_runner,
+        )
+        if any(runner and runner.is_running() for runner in runners):
+            QMessageBox.information(
+                self,
+                "Generation is busy",
+                "Wait for the current video, TTS or reference-image task to finish, then retry.",
+            )
+            return
+        try:
+            settings = load_design_settings(DESIGN_SETTINGS_ENV)
+            if not settings.image_checkpoint:
+                raise RuntimeError(
+                    "No Z-Image checkpoint is selected. Choose one in Design settings first."
+                )
+            request = self._z_image_regeneration_request(asset)
+            workspace = self._ensure_project_workspace()
+            output_dir = (
+                workspace
+                / "media"
+                / "regenerated_references"
+                / media_shortcut(asset)
+            )
+            output_dir.mkdir(parents=True, exist_ok=True)
+            stamp = time.strftime("%Y%m%d_%H%M%S")
+            source_stem = slugify_project_name(
+                Path(str(asset.filename or "reference")).stem,
+                "reference",
+            )
+            destination = output_dir / (
+                f"{media_shortcut(asset)}_{stamp}_{source_stem}.png"
+            )
+            request["local_path"] = str(destination.resolve())
+            request["request_index"] = 0
+            destination.with_suffix(destination.suffix + ".request.json").write_text(
+                json.dumps(request, ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
+            job_path = CACHE_ROOT / f"z_image_regenerate_{asset.node_id}_{time.time_ns()}.json"
+            job_path.parent.mkdir(parents=True, exist_ok=True)
+            job_path.write_text(
+                json.dumps(
+                    {
+                        "server": self.server_url.text().strip(),
+                        "workflow_path": str(Z_IMAGE_WORKFLOW),
+                        "materials": [request],
+                        "settings": {
+                            "checkpoint": settings.image_checkpoint,
+                            "width": settings.image_width,
+                            "height": settings.image_height,
+                            "steps": settings.image_steps,
+                            "cfg": settings.image_cfg,
+                            "negative_prompt": settings.image_negative_prompt,
+                        },
+                        "attempts_per_image": 2,
+                        "poll_interval": self.render_settings.history_poll_interval,
+                        "generation_timeout": self.render_settings.generation_timeout,
+                        "http_timeout": self.render_settings.http_request_timeout,
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+            runner = JsonLineProcess(self, f"z-image-regenerate-{asset.node_id}")
+            runner.message.connect(self._media_regeneration_message)
+            runner.finished.connect(self._media_regeneration_finished)
+            self.media_regeneration_runner = runner
+            self.media_regeneration_result = {}
+            self.pending_media_regeneration = {
+                "asset": asset,
+                "request": request,
+                "previous_local_path": str(asset.local_path or ""),
+            }
+            card = self.cards.get(asset.node_id)
+            if card:
+                card.set_processing(True, "Z-IMAGE")
+            self.statusBar().showMessage(
+                f"{media_shortcut(asset)} · regenerating with preserved mapping and relationships"
+            )
+            if not runner.start(
+                str(self.runtime.python),
+                [str(PROJECT_ROOT / "design_media_service.py"), str(job_path)],
+            ):
+                raise RuntimeError("Z-Image regeneration worker is still stopping")
+        except Exception as exc:
+            card = self.cards.get(asset.node_id)
+            if card:
+                card.set_processing(False)
+            if self.media_regeneration_runner:
+                self.media_regeneration_runner.deleteLater()
+            self.media_regeneration_runner = None
+            self.pending_media_regeneration = None
+            QMessageBox.warning(self, "Z-Image regeneration", str(exc))
+
+    def _media_regeneration_message(self, payload: dict) -> None:
+        if payload.get("progress"):
+            message = str(payload["progress"])
+            self.statusBar().showMessage(message)
+            pending = self.pending_media_regeneration or {}
+            asset = pending.get("asset")
+            card = self.cards.get(asset.node_id) if asset else None
+            if card:
+                card.set_processing(True, "Z-IMAGE")
+        if payload.get("completed") or payload.get("error"):
+            self.media_regeneration_result = dict(payload)
+
+    def _media_regeneration_finished(self, exit_code: int, log: str) -> None:
+        pending = self.pending_media_regeneration or {}
+        asset: MediaAsset | None = pending.get("asset")
+        result = self.media_regeneration_result
+        try:
+            if asset is None:
+                return
+            card = self.cards.get(asset.node_id)
+            if card:
+                card.set_processing(False)
+            outputs = [
+                item for item in (result.get("outputs") or [])
+                if isinstance(item, dict) and item.get("generated")
+            ]
+            generated = Path(str(outputs[0].get("local_path", ""))) if outputs else None
+            if exit_code or result.get("error") or generated is None or not generated.is_file():
+                detail = str(result.get("error") or "").strip()
+                if not detail:
+                    warnings = result.get("warnings") or []
+                    detail = str(warnings[-1]) if warnings else log[-500:]
+                raise RuntimeError(detail or f"worker exit {exit_code}")
+            preserved_prompt = asset.clip_prompt
+            preserved_recognition = asset.recognition
+            assign_local_media(self.scan, asset, generated)
+            self._show_immediate_image_preview(asset)
+            asset.clip_prompt = preserved_prompt
+            asset.recognition = (
+                remove_previous_blip_output(preserved_recognition).rstrip()
+                + "\n\nZ-IMAGE REGENERATION: new visual take; original relationship and mapping contract preserved."
+            ).strip()
+            self.semantic_errors.pop(asset.node_id, None)
+            self.semantic_waiting_assets.discard(asset.node_id)
+            self._sync_timeline_clip_sources(asset)
+            if card:
+                card.set_preview(QPixmap(str(generated)))
+            self.select_asset(asset)
+            self.queue_media_preparation(
+                asset,
+                auto_analyze=True,
+                preserve_recognition=True,
+            )
+            for clip in self._timeline_assets():
+                if self._source_asset_for(clip) is asset and clip.timeline_placed:
+                    self._mark_render_range_dirty(clip.start_seconds, clip.end_seconds)
+            self._mark_dirty()
+            self.schedule_prompt_generation()
+            self.timeline.schedule_rebuild()
+            self.render_timeline_at(self.playhead_seconds, force_seek=True)
+            self.statusBar().showMessage(
+                f"{media_shortcut(asset)} regenerated and replaced in place · Timeline mapping unchanged"
+            )
+        except Exception as exc:
+            if asset is not None:
+                card = self.cards.get(asset.node_id)
+                if card:
+                    card.set_processing(False)
+            QMessageBox.warning(self, "Z-Image regeneration failed", str(exc))
+        finally:
+            self.pending_media_regeneration = None
+            self.media_regeneration_result = {}
+            if self.media_regeneration_runner:
+                self.media_regeneration_runner.deleteLater()
+            self.media_regeneration_runner = None
 
     def queue_media_preparation(
         self,
@@ -9547,6 +15880,7 @@ class DirectorCutStudio(QMainWindow):
         transparent_path = Path(str(background_removal.get("path", "")))
         if transparent_path.is_file() and self.scan:
             assign_local_media(self.scan, asset, transparent_path)
+            self._show_immediate_image_preview(asset)
         if not job["preserve_recognition"] or not asset.recognition.strip():
             asset.recognition = result.get("metadata", "")
         if transparent_path.is_file():
@@ -10661,16 +16995,24 @@ class DirectorCutStudio(QMainWindow):
         self._mark_dirty()
 
     def _normalize_text_layer_tracks(self) -> bool:
-        """Repair old projects and role edits without hiding speech on V tracks."""
+        """Repair Text Layers and place colliding speech on independent tracks."""
+
         track_model_changed = False
+        timing_changed = False
+        speech_roles = {"dialogue", "voice_over", "lyrics"}
+
+        # Visible titles retain their normal V-track behaviour.
         for layer in self.text_layers:
+            if layer.content_role in speech_roles:
+                layer.overlap_policy = normalize_speech_overlap_policy(
+                    layer.overlap_policy
+                )
+                continue
             wanted_kind = text_layer_track_kind(layer.content_role)
             current_track = next(
                 (
-                    track
-                    for track in self.tracks
-                    if track.track_id == layer.track_id
-                    and track.kind == wanted_kind
+                    track for track in self.tracks
+                    if track.track_id == layer.track_id and track.kind == wanted_kind
                 ),
                 None,
             )
@@ -10680,14 +17022,108 @@ class DirectorCutStudio(QMainWindow):
                 )
                 layer.track_id = current_track.track_id
                 track_model_changed = True
-            wanted_name = text_layer_track_name(
-                current_track.track_id, layer.content_role
-            )
+            wanted_name = text_layer_track_name(current_track.track_id, layer.content_role)
             if current_track.name in {current_track.track_id, wanted_name}:
                 if current_track.name != wanted_name:
                     current_track.name = wanted_name
                     track_model_changed = True
-        return track_model_changed
+
+        speech_layers = [
+            layer for layer in self.text_layers if layer.content_role in speech_roles
+        ]
+        if not speech_layers:
+            return track_model_changed
+
+        assignments = plan_speech_track_lanes(
+            [asdict(layer) for layer in speech_layers],
+            grid_seconds=TIMELINE_SNAP_SECONDS,
+        )
+        by_layer_id = {layer.layer_id: layer for layer in speech_layers}
+        required_lanes: dict[str, int] = {role: 0 for role in speech_roles}
+        for assignment in assignments:
+            layer = by_layer_id.get(str(assignment["layer_id"]))
+            if layer is None:
+                continue
+            layer.overlap_policy = str(assignment["overlap_policy"])
+            new_start = float(assignment["start_seconds"])
+            new_end = float(assignment["end_seconds"])
+            if (
+                abs(layer.start_seconds - new_start) > 1e-6
+                or abs(layer.end_seconds - new_end) > 1e-6
+            ):
+                layer.start_seconds = new_start
+                layer.end_seconds = new_end
+                layer.speech_timing_auto_adjusted = True
+                timing_changed = True
+            required_lanes[layer.content_role] = max(
+                required_lanes[layer.content_role], int(assignment["lane_number"])
+            )
+
+        role_labels = {
+            "dialogue": ("D", "Dialogue"),
+            "voice_over": ("VO", "Voice-over"),
+            "lyrics": ("L", "Lyrics"),
+        }
+        role_tracks: dict[str, list[TimelineTrack]] = {role: [] for role in speech_roles}
+        used_track_ids: set[str] = set()
+        for role in ("dialogue", "voice_over", "lyrics"):
+            prefix, label = role_labels[role]
+            primary = self._design_track(default_text_layer_track(role), "audio")
+            role_tracks[role].append(primary)
+            used_track_ids.add(primary.track_id)
+            wanted_name = f"{prefix}1 · {label}"
+            replaceable_names = {
+                primary.track_id,
+                text_layer_track_name(primary.track_id, role),
+                wanted_name,
+            }
+            if primary.name in replaceable_names and primary.name != wanted_name:
+                primary.name = wanted_name
+                track_model_changed = True
+            for lane_number in range(2, required_lanes[role] + 1):
+                wanted_name = f"{prefix}{lane_number} · {label}"
+                track = next(
+                    (
+                        candidate for candidate in self.tracks
+                        if candidate.kind == "audio"
+                        and candidate.track_id not in used_track_ids
+                        and candidate.name == wanted_name
+                    ),
+                    None,
+                )
+                if track is None:
+                    number = self._next_track_number("A")
+                    track = TimelineTrack(
+                        f"A{number}", wanted_name, "audio", "#258a70"
+                    )
+                    self.tracks.append(track)
+                    track_model_changed = True
+                role_tracks[role].append(track)
+                used_track_ids.add(track.track_id)
+
+        assignment_by_id = {
+            str(row["layer_id"]): row for row in assignments
+        }
+        for layer in speech_layers:
+            assignment = assignment_by_id.get(layer.layer_id)
+            if assignment is None:
+                continue
+            lane_number = max(1, int(assignment["lane_number"]))
+            wanted_track = role_tracks[layer.content_role][lane_number - 1]
+            if layer.track_id != wanted_track.track_id:
+                layer.track_id = wanted_track.track_id
+                track_model_changed = True
+
+        if (
+            timing_changed
+            and not self.restoring_project
+            and self.scan is not None
+        ):
+            maximum_end = max(layer.end_seconds for layer in speech_layers)
+            if maximum_end > self.scan.duration_seconds + 1e-6:
+                self._set_design_duration(maximum_end)
+            self._mark_all_render_segments_dirty()
+        return track_model_changed or timing_changed
 
     def _refresh_text_layers(self, _layer: TextLayer | None = None) -> None:
         track_model_changed = self._normalize_text_layer_tracks()
@@ -10706,6 +17142,7 @@ class DirectorCutStudio(QMainWindow):
                     "language": layer.language,
                     "delivery": layer.delivery,
                     "lip_sync": layer.lip_sync,
+                    "overlap_policy": layer.overlap_policy,
                     "explicit_user_requested": True,
                 }
                 for layer in self.text_layers
@@ -10758,6 +17195,7 @@ class DirectorCutStudio(QMainWindow):
         cue = DirectorCue(
             self._next_director_cue_id(prefix), cue_type, start, end, preset.strip(), detail.strip()
         )
+        self._seed_native_audio_for_new_cue(cue)
         self.undo_stack.push(AddDirectorCueCommand(self.director_cues, cue, self._refresh_director_cues))
         self._mark_render_range_dirty(cue.start_seconds, cue.end_seconds)
         self._mark_dirty()
@@ -10772,6 +17210,7 @@ class DirectorCutStudio(QMainWindow):
         prefix = {"shot": "S", "transition": "X", "marker": "M"}[cue_type]
         default_preset = DirectorCueDialog.PRESETS[cue_type][0]
         cue = DirectorCue(self._next_director_cue_id(prefix), cue_type, start, end, default_preset)
+        self._seed_native_audio_for_new_cue(cue)
         dialog = DirectorCueDialog(cue, self.scan.duration_seconds, self)
         if dialog.exec() != QDialog.Accepted:
             dialog.deleteLater()
@@ -10802,6 +17241,7 @@ class DirectorCutStudio(QMainWindow):
             DirectorCueDialog.PRESETS["shot"][0],
             track_id=track_id,
         )
+        self._seed_native_audio_for_new_cue(cue)
         dialog = DirectorCueDialog(cue, self.scan.duration_seconds, self)
         if dialog.exec() != QDialog.Accepted:
             dialog.deleteLater()
@@ -10832,6 +17272,7 @@ class DirectorCutStudio(QMainWindow):
     def edit_director_cue(self, cue: DirectorCue) -> None:
         if not self.scan or cue not in self.director_cues:
             return
+        self._refresh_native_audio_directions()
         dialog = DirectorCueDialog(cue, self.scan.duration_seconds, self)
         if dialog.exec() != QDialog.Accepted:
             dialog.deleteLater()
@@ -10851,6 +17292,12 @@ class DirectorCutStudio(QMainWindow):
     def remove_director_cue(self, cue: DirectorCue) -> None:
         if cue not in self.director_cues:
             return
+        if (
+            cue.cue_type == "shot"
+            and self.storyboard_trim_active
+        ):
+            self._ripple_delete_storyboard_shot(cue)
+            return
         state = asdict(cue)
         self.undo_stack.push(
             RemoveDirectorCueCommand(
@@ -10859,6 +17306,174 @@ class DirectorCutStudio(QMainWindow):
         )
         self._mark_render_states_dirty(state)
         self._mark_dirty()
+
+    @staticmethod
+    def _ripple_interval(
+        item_start: float,
+        item_end: float,
+        cut_start: float,
+        cut_end: float,
+    ) -> tuple[float, float] | None:
+        """Remove one Timeline interval and return the surviving rippled range."""
+        start = float(item_start)
+        end = float(item_end)
+        delta = cut_end - cut_start
+        if end <= cut_start + 1e-6:
+            return start, end
+        if start >= cut_end - 1e-6:
+            return start - delta, end - delta
+        if start >= cut_start - 1e-6 and end <= cut_end + 1e-6:
+            return None
+        if start < cut_start and end > cut_end:
+            return start, end - delta
+        if start < cut_start < end <= cut_end + 1e-6:
+            return (start, cut_start) if cut_start - start >= 0.1 else None
+        if cut_start - 1e-6 <= start < cut_end < end:
+            shifted_end = end - delta
+            return (cut_start, shifted_end) if shifted_end - cut_start >= 0.1 else None
+        return start, end
+
+    def _ripple_delete_storyboard_shot(self, shot: DirectorCue) -> None:
+        """Delete a Storyboard Shot and ripple all dependent Timeline layers left."""
+        if not self.scan or shot not in self.director_cues:
+            return
+        cut_start = max(0.0, float(shot.start_seconds))
+        cut_end = min(self.scan.duration_seconds, float(shot.end_seconds))
+        delta = cut_end - cut_start
+        if delta < 0.1:
+            self.statusBar().showMessage("Storyboard Shot is too short to ripple delete")
+            return
+        old_duration = float(self.scan.duration_seconds)
+        before = self._design_workspace_state()
+
+        retained_cues: list[DirectorCue] = []
+        for cue in self.director_cues:
+            if cue is shot:
+                continue
+            adjusted = self._ripple_interval(
+                cue.start_seconds, cue.end_seconds, cut_start, cut_end
+            )
+            if adjusted is None:
+                continue
+            cue.start_seconds, cue.end_seconds = adjusted
+            retained_cues.append(cue)
+        self.director_cues = retained_cues
+
+        retained_text: list[TextLayer] = []
+        for layer in self.text_layers:
+            adjusted = self._ripple_interval(
+                layer.start_seconds, layer.end_seconds, cut_start, cut_end
+            )
+            if adjusted is None:
+                continue
+            layer.start_seconds, layer.end_seconds = adjusted
+            retained_text.append(layer)
+        self.text_layers = retained_text
+
+        added_clips: list[MediaAsset] = []
+
+        def adjust_media(asset: MediaAsset) -> bool:
+            if not asset.timeline_placed:
+                return True
+            original_start = float(asset.start_seconds)
+            original_end = float(asset.end_seconds)
+            adjusted = self._ripple_interval(
+                original_start, original_end, cut_start, cut_end
+            )
+            if adjusted is None:
+                asset.timeline_placed = False
+                return False
+            # A moving Audio/Video clip spanning the removed interval needs a
+            # real source discontinuity. Split it into head and tail; still
+            # images can simply remain visible across the joined boundary.
+            if (
+                asset.media_type in {"audio", "video"}
+                and original_start < cut_start - 1e-6
+                and original_end > cut_end + 1e-6
+            ):
+                tail = deepcopy(asset)
+                tail.clip_id = f"clip-{secrets.token_hex(8)}"
+                tail.source_node_id = asset.source_node_id or asset.node_id
+                tail.start_seconds = cut_start
+                tail.end_seconds = original_end - delta
+                tail.source_in_seconds = (
+                    float(asset.source_in_seconds)
+                    + (cut_end - original_start) * float(asset.playback_speed)
+                )
+                asset.end_seconds = cut_start
+                if asset.source_duration_seconds > 0:
+                    asset.source_out_seconds = min(
+                        float(asset.source_duration_seconds),
+                        float(asset.source_in_seconds)
+                        + (cut_start - original_start) * float(asset.playback_speed),
+                    )
+                added_clips.append(tail)
+                return True
+            new_start, new_end = adjusted
+            if (
+                asset.media_type in {"audio", "video"}
+                and original_start >= cut_start - 1e-6
+                and original_start < cut_end - 1e-6
+                and original_end > cut_end + 1e-6
+            ):
+                asset.source_in_seconds = (
+                    float(asset.source_in_seconds)
+                    + (cut_end - original_start) * float(asset.playback_speed)
+                )
+            asset.start_seconds, asset.end_seconds = new_start, new_end
+            return True
+
+        for asset in self.scan.assets:
+            adjust_media(asset)
+        retained_clips: list[MediaAsset] = []
+        for clip in self.scan.timeline_clips:
+            if adjust_media(clip):
+                retained_clips.append(clip)
+        self.scan.timeline_clips = retained_clips + added_clips
+        self._sync_timeline_clip_sources()
+
+        new_duration = max(0.5, old_duration - delta)
+        self._set_design_duration(new_duration)
+        ordered_shots = sorted(
+            (cue for cue in self.director_cues if cue.cue_type == "shot"),
+            key=lambda cue: (cue.start_seconds, cue.end_seconds),
+        )
+        for layer in self.text_layers:
+            midpoint = (layer.start_seconds + layer.end_seconds) / 2
+            layer.shot_id = next(
+                (
+                    cue.cue_id for cue in ordered_shots
+                    if cue.start_seconds <= midpoint <= cue.end_seconds
+                ),
+                "",
+            )
+        self.timeline_tts_stale = True
+        self._refresh_director_cues()
+        self._refresh_text_layers()
+        self.seek_timeline(min(cut_start, new_duration))
+        after = self._design_workspace_state()
+        self._restore_design_workspace_state(before)
+        self.undo_stack.push(
+            WorkspaceDesignCommand(
+                before,
+                after,
+                self._restore_design_workspace_state,
+                "Ripple delete Storyboard Shot",
+            )
+        )
+        self._clear_generated_output()
+        self._mark_all_render_segments_dirty()
+        self._mark_dirty()
+        self._refresh_storyboard_trim_controls()
+        remaining = max(
+            0.0,
+            self.scan.duration_seconds - self.storyboard_target_duration_seconds,
+        )
+        self.statusBar().showMessage(
+            f"Deleted {shot.cue_id} and rippled {delta:.1f}s · Timeline "
+            f"{old_duration:.1f}s → {self.scan.duration_seconds:.1f}s · "
+            f"{remaining:.1f}s still above Story target · Undo available."
+        )
 
     def _refresh_director_cues(self, _cue: DirectorCue | None = None) -> None:
         self.director_cues.sort(key=lambda cue: (cue.start_seconds, cue.end_seconds, cue.cue_id))
@@ -10883,6 +17498,67 @@ class DirectorCutStudio(QMainWindow):
             cue.h3_optional_flourish = budgeted["h3_optional_flourish"]
             cue.action_budget_status = budgeted["action_budget"]["status"]
             cue.action_budget_notes = budgeted["action_budget"]["notes"]
+        special_key = (
+            self.special_combo.currentData()
+            if getattr(self, "special_combo", None) is not None
+            else ""
+        )
+        special_key = str(special_key or "").strip().casefold()
+        if self.scan and special_key in COMBAT_ACTION_SKILLS:
+            shot_cues = [cue for cue in self.director_cues if cue.cue_type == "shot"]
+            reconciled, _combat_warnings = reconcile_combat_action_rows(
+                [asdict(cue) for cue in shot_cues],
+                self.scan.duration_seconds,
+                source_world_only=(special_key == HONG_KONG_COMIC_FIGHTER_SKILL),
+            )
+            if special_key == ENVIRONMENT_COMBAT_SPECIAL_SKILL:
+                reconciled, _environment_warnings = reconcile_environmental_combat_rows(
+                    reconciled,
+                    self.scan.duration_seconds,
+                    transition_basis_seconds=min(
+                        self.scan.duration_seconds,
+                        max(0.5, float(getattr(self, "storyboard_target_duration_seconds", self.scan.duration_seconds))),
+                    ),
+                )
+            cue_by_id = {cue.cue_id: cue for cue in shot_cues}
+            allowed_fields = DirectorCue.__dataclass_fields__.keys()
+            for row in reconciled:
+                cue = cue_by_id.get(str(row.get("cue_id") or row.get("id") or ""))
+                if cue is None:
+                    continue
+                for field_name in allowed_fields:
+                    if field_name in row:
+                        setattr(cue, field_name, deepcopy(row[field_name]))
+            marker_cues = [cue for cue in self.director_cues if cue.cue_type == "marker"]
+            migrated_markers = reconcile_final_combat_markers(
+                [
+                    {
+                        "time_seconds": cue.start_seconds,
+                        "preset": cue.preset,
+                        "direction": cue.detail,
+                    }
+                    for cue in marker_cues
+                ],
+                self.scan.duration_seconds,
+            )
+            for marker, cue in zip(migrated_markers, marker_cues):
+                cue.start_seconds = float(marker.get("time_seconds", cue.start_seconds))
+                cue.end_seconds = min(self.scan.duration_seconds, cue.start_seconds + 0.5)
+                cue.preset = str(marker.get("preset", cue.preset))
+                cue.detail = str(marker.get("direction", cue.detail))
+            if len(migrated_markers) > len(marker_cues):
+                for marker in migrated_markers[len(marker_cues):]:
+                    start = float(marker.get("time_seconds", 0.0))
+                    self.director_cues.append(DirectorCue(
+                        f"M{len(marker_cues) + 1}", "marker", start,
+                        min(self.scan.duration_seconds, start + 0.5),
+                        str(marker.get("preset", "Final Combat Resolve")),
+                        str(marker.get("direction", "")),
+                    ))
+                    marker_cues.append(self.director_cues[-1])
+            self.director_cues.sort(
+                key=lambda cue: (cue.start_seconds, cue.end_seconds, cue.cue_id)
+            )
         self.timeline.set_director_cues(self.director_cues)
         self._sync_prompt_panel_from_timeline(reconcile_brief=True)
 
@@ -10905,7 +17581,7 @@ class DirectorCutStudio(QMainWindow):
             layer_id=self._next_text_layer_id(),
             start_seconds=seconds,
         )
-        clone = TextLayer(**clone_state)
+        clone = text_layer_from_mapping(clone_state)
         self.undo_stack.push(
             SplitTextLayerCommand(self.text_layers, layer, clone, seconds, self._refresh_text_layers)
         )
@@ -11454,6 +18130,7 @@ class DirectorCutStudio(QMainWindow):
     def toggle_playback(self) -> None:
         generated_video = bool(
             self.generated_output_locked
+            and not self.storyboard_preview_active
             and self.generated_output_path
             and media_type_for_path(self.generated_output_path) == "video"
         )
@@ -11910,6 +18587,7 @@ class DirectorCutStudio(QMainWindow):
         )
         if (
             self.generated_output_locked
+            and not self.storyboard_preview_active
             and self.generated_output_path
             and media_type_for_path(self.generated_output_path) == "video"
         ):
@@ -12090,6 +18768,18 @@ class DirectorCutStudio(QMainWindow):
         if hasattr(self, "play_button"):
             self.play_button.setText("▶")
 
+    def _release_all_media_sources(self) -> None:
+        """Release Windows/FFmpeg file handles without changing project state."""
+
+        for player in (
+            self.player,
+            self.generated_player,
+            *self.composite_video_players.values(),
+            *self.timeline_audio_players.values(),
+        ):
+            player.stop()
+            player.setSource(QUrl())
+
     def recognize_selected(self) -> None:
         if not self.selected_asset:
             return
@@ -12118,7 +18808,7 @@ class DirectorCutStudio(QMainWindow):
             return
         now = time.monotonic()
         timeline_seconds = self.scan.duration_seconds if self.scan else 60.0
-        workers = (
+        workers = [
             ("media", self.media_runner, bool(self.media_jobs), 180.0),
             ("blip", self.blip_runner, bool(self.blip_jobs), 300.0),
             ("audio", self.audio_runner, bool(self.audio_jobs), max(300.0, timeline_seconds * 20.0)),
@@ -12128,7 +18818,16 @@ class DirectorCutStudio(QMainWindow):
                 bool(self.semantic_jobs) or bool(self.semantic_unload_job_id),
                 max(120.0, float(load_design_settings(DESIGN_SETTINGS_ENV).timeout) + 60.0),
             ),
-        )
+        ]
+        if self.media_regeneration_runner is not None:
+            workers.append(
+                (
+                    "z-image-regeneration",
+                    self.media_regeneration_runner,
+                    bool(self.pending_media_regeneration),
+                    max(300.0, float(self.render_settings.generation_timeout) + 60.0),
+                )
+            )
         for name, runner, has_jobs, running_timeout in workers:
             if not has_jobs or not runner.is_running():
                 continue
@@ -12330,6 +19029,13 @@ class DirectorCutStudio(QMainWindow):
             self.blip_restart_after_jobs = False
             self.blip_runner.stop()
         self._sync_timeline_clip_sources(asset)
+        if not self.project_path and not self.media_jobs and not self.blip_jobs:
+            first_picture = self._first_loaded_picture()
+            overview_name = picture_overview_project_name(
+                first_picture.recognition if first_picture is not None else ""
+            )
+            if overview_name:
+                self._ensure_project_workspace(overview_name)
         self._mark_dirty()
         self.schedule_prompt_generation()
         if card:
@@ -12451,6 +19157,40 @@ class DirectorCutStudio(QMainWindow):
         if payload.get("fatal"):
             self.statusBar().showMessage(f"Audio service startup failed: {payload.get('error', 'unknown error')}")
             return
+        qc_context = self.native_audio_qc_jobs.get(payload.get("job", ""))
+        if qc_context is not None:
+            if "progress" in payload and not payload.get("error"):
+                percent = max(0, min(99, round(float(payload["progress"]) * 100)))
+                self.statusBar().showMessage(f"Native Audio QC · {percent}%")
+                return
+            self.native_audio_qc_jobs.pop(payload.get("job", ""), None)
+            if payload.get("error"):
+                message = f"Native Audio QC ERROR · {payload['error']}"
+            else:
+                result = evaluate_native_audio_qc(
+                    list(qc_context.get("expected_dialogue", [])),
+                    str(payload.get("transcript", "")),
+                    dict(payload.get("vad") or {}),
+                    dict(payload.get("ambient") or {}),
+                )
+                message = str(result["message"])
+            range_start = float(qc_context.get("timeline_start", 0.0))
+            range_end = range_start + float(qc_context.get("duration", 0.0))
+            for cue in self.director_cues:
+                if (
+                    cue.cue_type == "shot"
+                    and ranges_intersect(
+                        cue.start_seconds,
+                        cue.end_seconds,
+                        range_start,
+                        range_end,
+                    )
+                    and not cue.native_audio_qc_user_edited
+                ):
+                    cue.native_audio_qc_status = message
+            self._refresh_director_cues()
+            self.statusBar().showMessage(message)
+            return
         asset = self.audio_jobs.get(payload.get("job", ""))
         if not asset:
             return
@@ -12489,6 +19229,7 @@ class DirectorCutStudio(QMainWindow):
         self.audio_runner.discard_pending()
         if self._closing:
             self.audio_jobs.clear()
+            self.native_audio_qc_jobs.clear()
             return
         seen: set[int] = set()
         affected_assets: list[MediaAsset] = []
@@ -12502,9 +19243,67 @@ class DirectorCutStudio(QMainWindow):
                 f"Audio service stopped unexpectedly (exit {exit_code}): {log[-300:]}",
             )
         self.audio_jobs.clear()
+        if self.native_audio_qc_jobs:
+            message = f"Native Audio QC ERROR · analysis service stopped (exit {exit_code})"
+            for cue in self.director_cues:
+                if cue.cue_type == "shot" and not cue.native_audio_qc_user_edited:
+                    cue.native_audio_qc_status = message
+            self.native_audio_qc_jobs.clear()
         for asset in affected_assets:
             self._maybe_auto_enrich(asset)
         self._maybe_request_semantic_lm_unload()
+
+    def _start_native_audio_qc(self, path: Path, timeline_start: float) -> None:
+        """Analyze H3's untouched output through existing VAD/Whisper tooling."""
+        try:
+            info = probe_media(path, self.runtime)
+            duration = max(0.05, float(info.get("duration") or 0.0))
+            if not self.audio_runner.is_running():
+                if not self.audio_runner.start(
+                    str(self.runtime.python),
+                    [
+                        str(PROJECT_ROOT / "audio_service.py"),
+                        "--model",
+                        str(self.runtime.speech_model),
+                        "--ffmpeg",
+                        str(self.runtime.ffmpeg),
+                    ],
+                ):
+                    raise RuntimeError("Audio service is still stopping")
+            expected = [
+                layer.text
+                for layer in self.text_layers
+                if layer.text.strip()
+                and layer.content_role in {"dialogue", "voice_over", "lyrics"}
+                and ranges_intersect(
+                    layer.start_seconds,
+                    layer.end_seconds,
+                    timeline_start,
+                    timeline_start + duration,
+                )
+            ]
+            job_id = f"native-audio-qc:{path.stem}:{time.time_ns()}"
+            self.native_audio_qc_jobs[job_id] = {
+                "path": str(path),
+                "timeline_start": timeline_start,
+                "duration": duration,
+                "expected_dialogue": expected,
+            }
+            self.audio_runner.write_json(
+                {
+                    "job": job_id,
+                    "media": str(path),
+                    "chunk_seconds": 8.0,
+                    "max_seconds": duration,
+                }
+            )
+            self.statusBar().showMessage("Native Audio QC · queued (analysis only, soundtrack unchanged)")
+        except Exception as exc:
+            message = f"Native Audio QC ERROR · {exc}"
+            for cue in self.director_cues:
+                if cue.cue_type == "shot" and not cue.native_audio_qc_user_edited:
+                    cue.native_audio_qc_status = message
+            self.statusBar().showMessage(message)
 
     def closeEvent(self, event) -> None:  # noqa: N802
         if self.project_dirty and self.isVisible():
@@ -12519,21 +19318,31 @@ class DirectorCutStudio(QMainWindow):
                 event.ignore()
                 return
         self._stop_all_timeline_media()
+        self._release_all_media_sources()
         self._closing = True
         self.media_runner.stop()
         self.blip_runner.stop()
         self.audio_runner.stop()
         self.semantic_runner.stop()
+        self.smart_cut_runner.stop()
         if self.submit_runner:
             self.submit_runner.stop()
         if self.design_media_runner:
             self.design_media_runner.stop()
+        if self.media_regeneration_runner:
+            self.media_regeneration_runner.stop()
         if self.design_tts_runner:
             self.design_tts_runner.stop()
         if self.design_cleanup_runner:
             self.design_cleanup_runner.stop()
         if self.generated_proxy_runner:
             self.generated_proxy_runner.stop()
+        if self.generated_proxy_working:
+            try:
+                self.generated_proxy_working.unlink(missing_ok=True)
+            except OSError:
+                pass
+            self.generated_proxy_working = None
         super().closeEvent(event)
 
     def _sync_prompt_panel_from_timeline(
@@ -12544,7 +19353,7 @@ class DirectorCutStudio(QMainWindow):
     ) -> None:
         if (
             not hasattr(self, "prompt_panel")
-            or self.restoring_project
+            or (self.restoring_project and not force)
             or (not force and not self.prompt_panel.auto_sync.isChecked())
         ):
             return
@@ -12634,12 +19443,19 @@ class DirectorCutStudio(QMainWindow):
             if layer.content_role == "dialogue":
                 sync = "lip sync" if layer.lip_sync else "no required lip sync"
                 direction = (
-                    f'{layer.speaker} [{layer.language}, {layer.delivery}, {sync}]: "{layer.text}"'
+                    f'{layer.speaker} [{layer.language}, {layer.delivery}, {sync}] '
+                    f'[track={layer.track_id}, overlap={layer.overlap_policy}]: "{layer.text}"'
                 )
             elif layer.content_role == "voice_over":
-                direction = f'Voice-over: "{layer.text}"'
+                direction = (
+                    f'Voice-over [{layer.track_id}, {layer.language}, '
+                    f'overlap={layer.overlap_policy}]: "{layer.text}"'
+                )
             elif layer.content_role == "lyrics":
-                direction = f'Lyrics: "{layer.text}"'
+                direction = (
+                    f'Lyrics [{layer.track_id}, {layer.language}, '
+                    f'overlap={layer.overlap_policy}]: "{layer.text}"'
+                )
             else:
                 direction = f'On-screen text: "{layer.text}"'
             dialogue_lines.append(f"{shot_number}|{direction}")
@@ -12819,18 +19635,23 @@ class DirectorCutStudio(QMainWindow):
         })
         if soundscape != self.prompt_panel.soundscape.toPlainText().strip():
             self.prompt_panel.soundscape.setPlainText(soundscape)
-        music = automatic_background_music({
-            "non_diegetic_music": self.prompt_panel.music.toPlainText(),
-            "creative_brief": self.prompt_panel.brief.toPlainText(),
-            "shots": [
-                {
-                    "subject_action": cue.subject_action,
-                    "environment_response": cue.environment_response,
-                    "additional_direction": cue.detail,
-                }
-                for cue in self.director_cues if cue.cue_type == "shot"
-            ],
-        })
+        music_mode = normalize_design_music_mode(self.render_settings.music_mode)
+        music = self.prompt_panel.music.toPlainText().strip()
+        if music_mode == "off":
+            music = "N/A"
+        elif music_mode == "auto":
+            music = automatic_background_music({
+                "non_diegetic_music": music,
+                "creative_brief": self.prompt_panel.brief.toPlainText(),
+                "shots": [
+                    {
+                        "subject_action": cue.subject_action,
+                        "environment_response": cue.environment_response,
+                        "additional_direction": cue.detail,
+                    }
+                    for cue in self.director_cues if cue.cue_type == "shot"
+                ],
+            })
         if music != self.prompt_panel.music.toPlainText().strip():
             self.prompt_panel.music.setPlainText(music)
         base_spec = self.prompt_panel.spec()
@@ -12887,6 +19708,229 @@ class DirectorCutStudio(QMainWindow):
             for asset, was_enabled in original_enabled:
                 asset.enabled = was_enabled
 
+    @staticmethod
+    def _music_cue_stops_score(cue: DirectorCue) -> bool:
+        evidence = f"{cue.preset} {cue.detail}".lower()
+        return bool(re.search(
+            r"\b(?:stop|end|remove|mute|silence|fade[- ]?out)\b|"
+            r"停止配乐|停止配樂|结束配乐|結束配樂|音乐停止|音樂停止|静音|靜音|淡出",
+            evidence,
+        ))
+
+    def _timeline_music_requested_for_range(
+        self, start_seconds: float, end_seconds: float
+    ) -> bool:
+        """Return whether any part of a range is covered by authored Music Cues."""
+        cues = sorted(
+            (
+                cue for cue in self.director_cues
+                if cue.cue_type == "marker" and "music" in cue.preset.lower()
+            ),
+            key=lambda cue: (cue.start_seconds, cue.end_seconds, cue.cue_id),
+        )
+        active = False
+        for cue in cues:
+            if cue.start_seconds >= end_seconds - 1e-6:
+                break
+            if cue.start_seconds <= start_seconds + 1e-6:
+                active = not self._music_cue_stops_score(cue)
+                continue
+            if active:
+                return True
+            if not self._music_cue_stops_score(cue):
+                return True
+        return active
+
+    def _refresh_native_audio_directions(
+        self,
+        reference_assets: list[MediaAsset] | None = None,
+    ) -> None:
+        """Refresh prompt-only H3 native audio fields without touching overrides."""
+        shots = sorted(
+            (cue for cue in self.director_cues if cue.cue_type == "shot"),
+            key=lambda cue: (cue.start_seconds, cue.end_seconds, cue.cue_id),
+        )
+        assets = reference_assets
+        if assets is None and self.scan is not None:
+            assets = [
+                asset for asset in self.scan.assets
+                if asset.enabled and asset.timeline_placed
+            ]
+        assets = assets or []
+        previous_profile: NativeAudioProfile | None = None
+        inherited_space: tuple[str, str] | None = None
+        for cue in shots:
+            dialogue_rows = [
+                {
+                    "content_role": layer.content_role,
+                    "speaker": layer.speaker,
+                    "delivery": layer.delivery,
+                    "text": layer.text,
+                }
+                for layer in self.text_layers
+                if layer.text.strip()
+                and layer.content_role in {"dialogue", "voice_over", "lyrics"}
+                and ranges_intersect(
+                    layer.start_seconds,
+                    layer.end_seconds,
+                    cue.start_seconds,
+                    cue.end_seconds,
+                )
+            ]
+            shot_state = {
+                "preset": cue.preset,
+                "framing": cue.framing,
+                "camera_angle": cue.camera_angle,
+                "camera_movement": cue.camera_movement,
+                "subject_action": cue.subject_action,
+                "environment_response": cue.environment_response,
+                "continuity_state": cue.continuity_state,
+                "optional_flourish": cue.optional_flourish,
+                "detail": cue.detail,
+                "additional_direction": cue.detail,
+                "environment_interaction": cue.environment_interaction,
+                "incoming_environment_state": cue.incoming_environment_state,
+                "outgoing_environment_state": cue.outgoing_environment_state,
+                "crowd_reaction": cue.crowd_reaction,
+                "location_transition": cue.location_transition,
+            }
+            campus_bridge = self._is_beat_synced_campus_bridge_shot(cue)
+            campus_composite = self._is_beat_synced_p4_campus_composite_shot(cue)
+            if campus_bridge:
+                shot_state.update({
+                    "preset": "P1 outdoor campus exit and face-first discovery",
+                    "framing": "Campus-side frontal medium view of P1",
+                    "camera_angle": "Eye level outside the campus doorway",
+                    "camera_movement": "Track backward in the campus, then complete one architectural wipe",
+                    "subject_action": (
+                        "P1 crosses outside toward camera, reacts in surprise to an off-camera subject, "
+                        "then the campus wall covers the lens."
+                    ),
+                    "environment_response": (
+                        "Open outdoor campus air, daylight, distant campus activity and exterior footsteps."
+                    ),
+                    "detail": "Outdoor campus threshold, frontal P1 face and architectural wipe.",
+                    "additional_direction": "Outdoor campus threshold and frontal P1 reaction.",
+                    "location_transition": "INDOOR TO OUTDOOR CAMPUS",
+                })
+            elif self._is_reference_scene_reset_shot(cue):
+                # Also migrates older saved projects whose generated S5 did
+                # not yet persist a location_transition field.
+                shot_state["location_transition"] = (
+                    "REFERENCE SCENE RESET: establish only the independent "
+                    "location visibly defined by the active Picture reference."
+                )
+            elif campus_composite:
+                shot_state.update({
+                    "preset": "P4 subject composite in outdoor campus",
+                    "framing": "Campus eye-level view with P4 subjects",
+                    "camera_angle": "Eye level on the inherited campus axis",
+                    "camera_movement": "Very slow horizontal slide in the same campus",
+                    "subject_action": (
+                        "P4 subjects appear inside the already established outdoor campus after the "
+                        "architectural wipe, with source-faithful slow motion."
+                    ),
+                    "environment_response": (
+                        "The same open campus ambience, daylight, ground plane and acoustic distance "
+                        "continue while the P4 subjects are integrated into the space."
+                    ),
+                    "location_transition": (
+                        "SAME OUTDOOR CAMPUS: clear the architectural wipe into the unchanged campus; "
+                        "P4 changes the visible subjects, not the acoustic or spatial environment."
+                    ),
+                    "detail": "P4 subjects integrated into the same outdoor campus.",
+                    "additional_direction": "Same outdoor campus; P4 supplies visible subjects only.",
+                })
+            profile = build_native_audio_profile(
+                shot_state,
+                dialogue_rows,
+                inherited_space=inherited_space,
+            )
+            inherited_space = (profile.acoustic_space, profile.ambience)
+            music_mode = normalize_design_music_mode(self.render_settings.music_mode)
+            timeline_music_cue = self._timeline_music_requested_for_range(
+                cue.start_seconds, cue.end_seconds
+            )
+            has_music = (
+                music_mode == "auto"
+                or (music_mode == "timeline" and timeline_music_cue)
+            )
+            has_voice_over = any(
+                row["content_role"] == "voice_over" for row in dialogue_rows
+            )
+            acoustic_references: list[str] = []
+            for asset in assets:
+                if not ranges_intersect(
+                    asset.start_seconds,
+                    asset.end_seconds,
+                    cue.start_seconds,
+                    cue.end_seconds,
+                ):
+                    continue
+                evidence = " ".join(
+                    (asset.filename, asset.clip_prompt, asset.recognition)
+                ).lower()
+                is_authored_speech = "ai design authored speech tts" in evidence
+                is_music_or_dialogue = bool(re.search(
+                    r"\b(?:music|song|score|dialogue|speech|voiceover|voice-over|lyrics)\b|"
+                    r"音乐|音樂|歌曲|配乐|配樂|对白|對白|旁白|歌词|歌詞",
+                    evidence,
+                ))
+                acoustic_keywords = bool(re.search(
+                    r"\b(?:ambience|ambient|room tone|location sound|on-location|environmental sound|"
+                    r"spatial acoustics|field recording)\b|环境声|環境聲|现场声|現場聲|空间声学|空間聲學|底噪",
+                    evidence,
+                ))
+                is_acoustic_reference = (
+                    asset.media_type == "audio"
+                    and not is_authored_speech
+                    and not is_music_or_dialogue
+                ) or (
+                    asset.media_type == "video" and acoustic_keywords
+                )
+                if is_acoustic_reference:
+                    acoustic_references.append(asset.tag)
+            if not cue.native_audio_direction_user_edited:
+                if campus_composite:
+                    cue.native_audio_direction = (
+                        "Acoustic space remains the same open campus exterior established by the preceding "
+                        "Shot. Keep @A1 at its exact Timeline source time and retain the same outdoor air, "
+                        "distant campus activity and subject-to-camera distance; add only visible subject "
+                        "Foley as diegetic sound. No narration, extra dialogue, recording-booth close-mic "
+                        "sound or replacement music."
+                    )
+                else:
+                    cue.native_audio_direction = native_audio_direction_text(
+                        profile,
+                        has_authored_voice_over=has_voice_over,
+                        music_requested=has_music,
+                    )
+            if not cue.environment_continuity_user_edited:
+                if campus_composite:
+                    cue.environment_continuity = (
+                        "Continue the preceding campus ambience, acoustic openness and distance without a "
+                        "room-tone reset while the P4 subjects appear after the wipe."
+                    )
+                else:
+                    cue.environment_continuity = environment_continuity_text(
+                        previous_profile,
+                        profile,
+                    )
+            if not cue.audio_reference_intent_user_edited:
+                cue.audio_reference_intent = audio_reference_intent_text(
+                    acoustic_references
+                )
+            previous_profile = profile
+
+    def _seed_native_audio_for_new_cue(self, cue: DirectorCue) -> None:
+        if cue.cue_type != "shot" or cue in self.director_cues:
+            return
+        self.director_cues.append(cue)
+        try:
+            self._refresh_native_audio_directions()
+        finally:
+            self.director_cues.remove(cue)
+
     def _prompt_spec_with_director_cues(
         self,
         spec: PromptSpec,
@@ -12895,9 +19939,21 @@ class DirectorCutStudio(QMainWindow):
         window_end: float | None = None,
         is_final_window: bool = True,
         supplied_dialogue_audio_tag: str = "",
+        reference_assets: list[MediaAsset] | None = None,
     ) -> PromptSpec:
         """Merge timeline-authored direction into the six-section H3 prompt input."""
+        self._refresh_native_audio_directions(reference_assets)
         state = asdict(spec)
+        active_reference_assets = reference_assets or []
+        has_p5_population_plate = (
+            str(self.special_combo.currentData() or "").strip().casefold()
+            == BEAT_SYNCED_ENTRANCE_SPECIAL_SKILL
+            and any(
+                asset.media_type == "image"
+                and stable_reference_id(asset).strip().upper() == "P5"
+                for asset in active_reference_assets
+            )
+        )
         state["has_supplied_dialogue_audio"] = bool(
             supplied_dialogue_audio_tag
         )
@@ -12926,6 +19982,7 @@ class DirectorCutStudio(QMainWindow):
             # an internal segment that has no matching cue of its own.
             state["shots"] = []
             state["shot_ranges"] = []
+            state["native_audio_ranges"] = []
             state["dialogue"] = ""
             # The visible transition field may summarize the entire project.
             # Hidden generation jobs receive only cues inside their own local
@@ -12945,65 +20002,222 @@ class DirectorCutStudio(QMainWindow):
                 )
             ]
 
-        audio_shots = [
-            {
-                "start_seconds": (
-                    max(0.0, cue.start_seconds - window_start)
-                    if window_start is not None else cue.start_seconds
-                ),
-                "end_seconds": (
-                    max(0.0, cue.end_seconds - window_start)
-                    if window_start is not None else cue.end_seconds
-                ),
-                "framing": cue.framing,
-                "camera_angle": cue.camera_angle,
-                "subject_action": cue.subject_action,
-                "environment_response": cue.environment_response,
-                "additional_direction": cue.detail,
-                "continuity_state": cue.continuity_state,
-            }
-            for cue in ordered
-            if cue.cue_type == "shot"
-        ]
-        state["audio"] = automatic_background_soundscape({
-            "overall_soundscape": state.get("audio", ""),
-            "creative_brief": state.get("brief", ""),
-            "shots": audio_shots,
-        })
-        state["music"] = automatic_background_music({
-            "non_diegetic_music": state.get("music", ""),
-            "creative_brief": state.get("brief", ""),
-            "shots": audio_shots,
-        })
+        # Native mode describes location sound to H3 itself. Legacy generated
+        # mix-contract prose is stripped, while the selected OFF/AUTO/TIMELINE
+        # policy controls whether the underlying score direction reaches H3.
+        state["audio"] = str(state.get("audio", "")).split(
+            "Production mix contract:", 1
+        )[0].strip(" .")
+        raw_music_direction = str(state.get("music", "")).strip()
+        if window_start is not None and window_end is not None:
+            timeline_music_requested = self._timeline_music_requested_for_range(
+                window_start, window_end
+            )
+        else:
+            timeline_music_requested = any(
+                cue.cue_type == "marker"
+                and "music" in cue.preset.lower()
+                and not self._music_cue_stops_score(cue)
+                for cue in self.director_cues
+            )
+        music_mode = normalize_design_music_mode(self.render_settings.music_mode)
+        authored_music = raw_music_direction.split(
+            "Music mix contract:", 1
+        )[0].strip(" .")
+        if music_mode == "off":
+            state["music"] = "N/A"
+        elif music_mode == "auto":
+            generated_music = automatic_background_music({
+                "non_diegetic_music": raw_music_direction,
+                "creative_brief": state.get("brief", ""),
+                "shots": [
+                    {
+                        "subject_action": cue.subject_action,
+                        "environment_response": cue.environment_response,
+                        "additional_direction": cue.detail,
+                    }
+                    for cue in ordered if cue.cue_type == "shot"
+                ],
+            })
+            authored_music = generated_music.split(
+                "Music mix contract:", 1
+            )[0].strip(" .")
+            state["music"] = (
+                authored_music
+                if authored_music and authored_music.lower() != "n/a"
+                else "Subtle scene-appropriate cinematic underscore shaped to the active Shot's emotion and pacing."
+            )
+        elif timeline_music_requested:
+            state["music"] = (
+                authored_music
+                if authored_music and authored_music.lower() != "n/a"
+                else "Use only the music explicitly authored by the active Timeline Music Cue."
+            )
+        else:
+            state["music"] = "N/A"
 
         def local_time(seconds: float) -> float:
             if window_start is None:
                 return seconds
             return max(0.0, seconds - window_start)
 
-        shot_cues = [cue for cue in ordered if cue.cue_type == "shot"]
+        shot_cues = self._coalesce_beat_synced_campus_bridge_cues(
+            [cue for cue in ordered if cue.cue_type == "shot"]
+        )
         cut_cues = [cue for cue in ordered if cue.cue_type == "cut"]
         transition_cues = [cue for cue in ordered if cue.cue_type == "transition"]
         marker_cues = [cue for cue in ordered if cue.cue_type == "marker"]
 
         if shot_cues:
+            selected_combat_skill = str(self.special_combo.currentData() or "").strip().casefold()
+            street_fighter_prompt = selected_combat_skill in COMBAT_ACTION_SKILLS
+            if selected_combat_skill == ENVIRONMENT_COMBAT_SPECIAL_SKILL:
+                environment_contracts = (
+                    STREET_FIGHTER_MARKET_CONTRACT,
+                    STREET_FIGHTER_P1_P2_PIXEL_LOCK,
+                    CAUSALITY_CONTRACT,
+                )
+            elif selected_combat_skill == HONG_KONG_COMIC_FIGHTER_SKILL:
+                environment_contracts = (REFERENCE_WORLD_CAUSALITY_CONTRACT,)
+            else:
+                environment_contracts = ()
+            if street_fighter_prompt:
+                must_keep = str(state.get("must_keep", "")).strip()
+                for contract in (
+                    STREET_FIGHTER_FPV_COMBAT_CONTRACT,
+                    FACT_LEDGER_CONTRACT,
+                    FIVE_DUTY_CONTRACT,
+                    ACTION_CARRIER_CONTRACT,
+                    DYNAMIC_CAMERA_CONTRACT,
+                    ACTION_CAUSALITY_CONTRACT,
+                    *environment_contracts,
+                ):
+                    if contract.split(":", 1)[0].casefold() not in must_keep.casefold():
+                        must_keep = must_keep.rstrip(" .") + (". " if must_keep else "") + contract
+                state["must_keep"] = must_keep
+            compact_global_contracts = (
+                STREET_FIGHTER_FPV_COMBAT_CONTRACT,
+                FACT_LEDGER_CONTRACT,
+                FIVE_DUTY_CONTRACT,
+                ACTION_CARRIER_CONTRACT,
+                DYNAMIC_CAMERA_CONTRACT,
+                ACTION_CAUSALITY_CONTRACT,
+                *environment_contracts,
+            )
             shots: list[str] = []
             shot_ranges: list[dict] = []
-            inherited_acoustic = spatial_acoustics_profile(
-                str(state.get("brief", "")) + " " + str(state.get("audio", ""))
-            )
+            native_audio_ranges: list[dict] = []
             for cue in shot_cues:
+                reference_scene_reset = self._is_reference_scene_reset_shot(cue)
+                campus_bridge = self._is_beat_synced_campus_bridge_shot(cue)
+                campus_composite = self._is_beat_synced_p4_campus_composite_shot(cue)
+                framing = (
+                    "Campus-side frontal medium view of @P1 crossing the exit threshold, with both "
+                    "eyes and the complete surprised facial reaction readable before a full-frame wipe"
+                    if campus_bridge
+                    else (
+                        "Preserve @P4 subject count, faces, bodies, wardrobe and relative arrangement "
+                        + (
+                            "while placing them naturally inside the @P5 populated school exterior"
+                            if has_p5_population_plate
+                            else "while placing them naturally inside the established campus exterior"
+                        )
+                        if campus_composite
+                        else cue.framing
+                    )
+                )
+                camera_angle = (
+                    "Eye level from outside the doorway facing @P1"
+                    if campus_bridge
+                    else (
+                        (
+                            "Eye level matching the @P5 school-exterior camera axis"
+                            if has_p5_population_plate
+                            else "Eye level matching the established campus camera axis"
+                        )
+                        if campus_composite
+                        else cue.camera_angle
+                    )
+                )
+                camera_movement = (
+                    "Very slow horizontal camera slide parallel to the active Picture's original "
+                    "image plane while its optical axis, camera height, yaw, pitch, roll, focal "
+                    "length, horizon and viewing angle remain fixed from first frame to last"
+                    if reference_scene_reset
+                    else (
+                        "Track backward outside the doorway while facing @P1, then slide laterally "
+                        "behind the immediately adjacent campus corner until it covers the whole lens"
+                        if campus_bridge
+                        else (
+                            (
+                                "Very slow horizontal slide through the @P5 school exterior while keeping "
+                                "its camera height, horizon and viewing direction stable"
+                                if has_p5_population_plate
+                                else "Very slow horizontal slide through the established campus while keeping "
+                                     "the inherited camera height, horizon and viewing direction stable"
+                            )
+                            if campus_composite
+                            else cue.camera_movement
+                        )
+                    )
+                )
+                movement_amplitude = (
+                    "minimal horizontal travel followed by zero movement for the final 0.5 second"
+                    if reference_scene_reset
+                    else (
+                        "one short forward crossing and one complete architectural wipe"
+                        if campus_bridge
+                        else (
+                            "minimal lateral travel followed by zero movement for the final 0.5 second"
+                            if campus_composite
+                            else cue.movement_amplitude.lower()
+                        )
+                    )
+                )
                 movement = (
-                    f"Camera movement: {cue.camera_movement}, {cue.movement_speed.lower()} speed, "
-                    f"{cue.movement_amplitude.lower()} amplitude"
+                    f"Camera movement: {camera_movement}, {cue.movement_speed.lower()} speed, "
+                    f"{movement_amplitude} amplitude"
                 )
                 parts = [
                     cue.preset,
-                    f"{cue.framing} framing",
-                    f"{cue.camera_angle} camera angle",
+                    f"{framing} framing",
+                    f"{camera_angle} camera angle",
                     movement,
                 ]
                 executable_action = cue.h3_executable_action or cue.subject_action
+                if campus_bridge:
+                    executable_action = (
+                        "0.00-0.70s: from a campus-side frontal view, @P1 is already crossing the "
+                        "visible interior exit threshold so @P1's face and both eyes are clear. "
+                        "0.70-1.45s: @P1 sees the off-camera next subject, stops for one readable beat, "
+                        "widens the eyes, raises the brows and parts the mouth in unmistakable surprise. "
+                        "1.45-2.00s: while @P1 keeps that eyeline, the camera slides behind the adjacent "
+                        "solid corner wall or door frame until architecture covers the entire image. "
+                        "The face reveal, surprise reaction and full wipe are all mandatory."
+                    )
+                elif campus_composite:
+                    executable_action = (
+                        "Reveal every @P4 subject already occupying the @P5 populated school exterior "
+                        if has_p5_population_plate else
+                        "Reveal every @P4 subject already occupying the same campus exterior that was "
+                        "established immediately before the wipe. "
+                    ) + (
+                        "Preserve the exact @P4 subject count, "
+                        "face, body, hair, wardrobe, accessories and relative arrangement. Transfer only "
+                        "those subjects from @P4; integrate their feet, shadows, scale, perspective and "
+                        + (
+                            "campus daylight naturally into @P5. Keep @P5 background people in varied "
+                            "school-leaving, bus-waiting, backpack and crossing-road activity. "
+                            if has_p5_population_plate
+                            else "campus daylight naturally into the inherited campus. "
+                        )
+                        + "Use clear physical slow "
+                        "motion, then settle completely before the final 0.5-second hold."
+                    )
+                if street_fighter_prompt:
+                    executable_action = compact_street_fighter_prompt_field(
+                        executable_action, global_contracts=compact_global_contracts
+                    )
                 if executable_action:
                     parts.append(
                         "MANDATORY CORE ACTION - complete before any flourish: "
@@ -13011,18 +20225,61 @@ class DirectorCutStudio(QMainWindow):
                             executable_action, cue.semantic_reference_directions
                         )
                     )
-                if cue.continuity_state:
+                continuity_state = cue.continuity_state
+                if campus_bridge:
+                    continuity_state = (
+                        "Begin with exact @P1 identity and wardrobe at the exit threshold; preserve "
+                        "a clear frontal face and surprised eyeline through the reaction; end only when "
+                        "solid architecture covers every pixel."
+                    )
+                elif campus_composite:
+                    continuity_state = (
+                        "Preserve @P5 campus architecture, ground plane, daylight, background-life layout, "
+                        "camera height, horizon and view direction. Inherit only wipe timing and camera "
+                        "motion from the incoming 24-frame reference. Preserve @P4 only as subject identity "
+                        "and arrangement evidence, not as a background plate."
+                        if has_p5_population_plate else
+                        "Inherit campus architecture, ground plane, daylight, camera height, horizon and "
+                        "view direction from the incoming 24-frame motion reference. Preserve @P4 only "
+                        "as subject identity and arrangement evidence, not as a background plate."
+                    )
+                if street_fighter_prompt:
+                    continuity_state = compact_street_fighter_prompt_field(
+                        continuity_state, global_contracts=compact_global_contracts
+                    )
+                if continuity_state:
                     parts.append(
                         "CONTINUITY STATE - preserve exactly: "
                         + canonicalize_cue_reference_ids(
-                            cue.continuity_state, cue.semantic_reference_directions
+                            continuity_state, cue.semantic_reference_directions
                         )
                     )
-                if cue.environment_response:
+                environment_response = cue.environment_response
+                if campus_bridge:
+                    environment_response = (
+                        "Enclosed reflections fall away across the threshold while open campus air, "
+                        "daylight and exterior depth become visibly established before the wall wipe."
+                    )
+                elif campus_composite:
+                    environment_response = (
+                        "@P5 school-exterior sunlight relights every @P4 subject consistently; feet contact "
+                        "the @P5 ground, shadows follow one shared light direction, and atmospheric depth, "
+                        "colour temperature and reflections match @P5 while its background people continue "
+                        "natural dismissal-time activity."
+                        if has_p5_population_plate else
+                        "Campus sunlight relights every @P4 subject consistently; feet contact the campus "
+                        "ground, shadows follow one shared light direction, and atmospheric depth, colour "
+                        "temperature and reflections match the inherited outdoor scene."
+                    )
+                if street_fighter_prompt:
+                    environment_response = compact_street_fighter_prompt_field(
+                        environment_response, global_contracts=compact_global_contracts
+                    )
+                if environment_response:
                     parts.append(
                         "Environment response: "
                         + canonicalize_cue_reference_ids(
-                            cue.environment_response,
+                            environment_response,
                             cue.semantic_reference_directions,
                     )
                 )
@@ -13033,40 +20290,101 @@ class DirectorCutStudio(QMainWindow):
                             cue.h3_optional_flourish, cue.semantic_reference_directions
                         )
                     )
-                acoustic_profile, acoustic_direction = spatial_acoustics_profile(
-                    " ".join(
-                        str(value or "")
-                        for value in (
-                            cue.framing,
-                            cue.camera_angle,
-                            cue.subject_action,
-                            cue.environment_response,
-                            cue.detail,
-                            cue.continuity_state,
-                        )
+                environment_physics_clause = environmental_combat_prompt_clause(
+                    asdict(cue),
+                    include_global_contract=not street_fighter_prompt,
+                )
+                if environment_physics_clause:
+                    parts.append(environment_physics_clause)
+                combat_clause = combat_action_prompt_clause(asdict(cue))
+                if combat_clause:
+                    parts.append(combat_clause)
+                # Keep a concise Shot-local audio instruction beside the
+                # matching visual action, while the complete editable schedule
+                # remains authoritative in overall_soundscape.  Capping these
+                # copies prevents dense combat prompts from burying dialogue.
+                def compact_native_audio(value: object, limit: int) -> str:
+                    compacted = " ".join(str(value or "").split()).strip()
+                    if len(compacted) > limit:
+                        compacted = compacted[: limit - 1].rstrip(" ,;:") + "…"
+                    return compacted
+
+                native_audio_direction = cue.native_audio_direction
+                environment_continuity = cue.environment_continuity
+                if reference_scene_reset:
+                    environment_continuity = (
+                        "Establish only the location tone implied by the active Picture from frame one; "
+                        "borrow no ambience, reflection tail, subject sound or spatial character from "
+                        "any earlier generated scene."
                     )
-                )
-                if acoustic_profile == "neutral visible location":
-                    acoustic_profile, acoustic_direction = inherited_acoustic
-                else:
-                    inherited_acoustic = (acoustic_profile, acoustic_direction)
+                elif campus_bridge:
+                    native_audio_direction = (
+                        "Acoustic space changes during the visible threshold crossing from an enclosed "
+                        "interior exit to an open campus exterior. Keep @A1 at its exact Timeline source "
+                        "time, with only synchronized footsteps, cloth movement and the natural change "
+                        "from short interior reflections to open-air ambience as diegetic sound."
+                    )
+                    environment_continuity = (
+                        "Perform one audible indoor-to-outdoor acoustic transition at the same frame as "
+                        "the visible doorway crossing; exterior ambience is established before the wipe."
+                    )
+                elif campus_composite:
+                    native_audio_direction = (
+                        "Acoustic space remains the same open campus exterior established by the preceding "
+                        "Shot. Keep @A1 at its exact Timeline source time and retain the same outdoor air, "
+                        "distant campus activity and speaking distance; add only visible subject Foley."
+                    )
+                    environment_continuity = (
+                        "Continue the preceding campus ambience, acoustic openness and distance without a "
+                        "room-tone reset while the new visible subjects appear after the wipe."
+                    )
                 parts.append(
-                    "SHOT SOUND EXECUTION - keep the location ambience continuously audible; "
-                    "give every visible footstep, cloth movement, handled prop, surface contact "
-                    "and stated environment response an exact-frame Foley/SFX transient with "
-                    "natural distance and decay. Never add a generic whoosh or impact without "
-                    "a visible physical cause, and never allow a silent gap unless the Shot "
-                    "explicitly calls for silence"
+                    "NATIVE AUDIO DIRECTION - "
+                    + compact_native_audio(native_audio_direction, 360)
+                    + ". Every sound belongs to a visible or established filmed-world source as diegetic sound"
                 )
                 parts.append(
-                    f"SHOT SPATIAL ACOUSTICS - {acoustic_profile}: {acoustic_direction}. "
-                    "Apply the same visible-space perspective to dialogue, Foley and ambience, "
-                    "while keeping the direct sound and exact words intelligible"
+                    "ENVIRONMENT CONTINUITY - "
+                    + compact_native_audio(environment_continuity, 240)
                 )
-                if cue.detail:
+                parts.append(
+                    "AUDIO REFERENCE INTENT - "
+                    + compact_native_audio(cue.audio_reference_intent, 220)
+                )
+                cue_detail = cue.detail
+                if reference_scene_reset:
+                    cue_detail = (
+                        "ACTIVE-PICTURE SCENE LOCK: use only the active Picture's visible subjects, "
+                        "complete background, terrain or architecture, object layout, sky or weather, "
+                        "palette, colour temperature, lighting, camera height, focal length, horizon "
+                        "and viewing angle. Add only source-consistent slow motion and a very small "
+                        "horizontal camera slide parallel to the original image plane."
+                    )
+                elif campus_bridge:
+                    cue_detail = (
+                        "MANDATORY CAMPUS BRIDGE: begin at the exit threshold, show @P1 physically "
+                        "crossing outside and rounding the adjacent corner, then finish on a complete "
+                        "wall-or-doorframe wipe. Allocate the entire Segment to this one causal bridge."
+                    )
+                elif campus_composite:
+                    cue_detail = (
+                        "P4+P5 CAMPUS COMPOSITE: @P5 owns the complete school-exterior environment, "
+                        "background people and camera axis; the incoming motion-reference frames own only "
+                        "wipe and camera-motion continuity. @P4 owns only its visible foreground subjects "
+                        "and their exact identity, wardrobe and arrangement. Relight and ground them inside @P5."
+                        if has_p5_population_plate else
+                        "P4 CAMPUS COMPOSITE: the incoming motion-reference frames own the complete campus "
+                        "environment and camera axis. @P4 owns only its visible subjects and their exact "
+                        "identity, wardrobe and arrangement. Relight and ground them inside that campus."
+                    )
+                if street_fighter_prompt:
+                    cue_detail = compact_street_fighter_prompt_field(
+                        cue_detail, global_contracts=compact_global_contracts
+                    )
+                if cue_detail:
                     parts.append(
                         canonicalize_cue_reference_ids(
-                            cue.detail, cue.semantic_reference_directions
+                            cue_detail, cue.semantic_reference_directions
                         )
                     )
                 for media_id, direction in cue.semantic_reference_directions.items():
@@ -13130,8 +20448,25 @@ class DirectorCutStudio(QMainWindow):
                         "description": description,
                     }
                 )
+                native_audio_ranges.append(
+                    {
+                        "cue_id": cue.cue_id,
+                        "start_seconds": local_time(
+                            max(cue.start_seconds, window_start)
+                            if window_start is not None else cue.start_seconds
+                        ),
+                        "end_seconds": local_time(
+                            min(cue.end_seconds, window_end)
+                            if window_end is not None else cue.end_seconds
+                        ),
+                        "native_audio_direction": native_audio_direction,
+                        "environment_continuity": environment_continuity,
+                        "audio_reference_intent": cue.audio_reference_intent,
+                    }
+                )
             state["shots"] = shots
             state["shot_ranges"] = shot_ranges
+            state["native_audio_ranges"] = native_audio_ranges
 
         # Type Tool content is a first-class Timeline track, never part of a
         # visual Director Shot's prompt payload.  Keep exact wording in one
@@ -13154,6 +20489,7 @@ class DirectorCutStudio(QMainWindow):
                 "language": layer.language,
                 "delivery": layer.delivery,
                 "lip_sync": layer.lip_sync,
+                "overlap_policy": layer.overlap_policy,
                 "shot_id": layer.shot_id,
                 "supplied_audio_tag": supplied_dialogue_audio_tag,
             }
@@ -13174,6 +20510,59 @@ class DirectorCutStudio(QMainWindow):
             # The visible Dialogue panel mirrors Type clips. The compiler emits
             # only text_ranges, preventing duplicate or competing speech.
             state["dialogue"] = ""
+
+        visible_text_rows = [
+            row for row in state["text_ranges"]
+            if str(row.get("content_role", "")) == "on_screen_text"
+        ]
+        # Visible words have one authoritative source: editable Timeline
+        # on_screen_text layers. Old Design constraints and Shot prose may
+        # still contain requests such as "show this text on screen". Remove
+        # those phrases from every compiled window so a screen instruction
+        # owned by an earlier Shot cannot leak into a later phone/final Shot.
+        for field_name in ("brief", "must_keep", "technical"):
+            state[field_name] = strip_untracked_visible_text_directions(
+                state.get(field_name, "")
+            )
+        state["shots"] = [
+            strip_untracked_visible_text_directions(row)
+            for row in state.get("shots", [])
+        ]
+        for row in state.get("shot_ranges", []):
+            if isinstance(row, dict):
+                row["description"] = strip_untracked_visible_text_directions(
+                    row.get("description", "")
+                )
+        if visible_text_rows:
+            exact_words = " / ".join(
+                f'"{str(row.get("text", "")).strip()}"'
+                for row in visible_text_rows
+                if str(row.get("text", "")).strip()
+            )
+            visible_text_contract = (
+                "VISIBLE TEXT WHITELIST: the only visible words permitted in this generated "
+                f"window are the Timeline on_screen_text events {exact_words}. Render them only "
+                "at their authored times. Do not invent, repeat or burn in any other subtitle, "
+                "caption, lower-third, dialogue or voice-over text."
+            )
+        else:
+            visible_text_contract = (
+                "VISIBLE TEXT LOCK: this generated window has no Timeline on_screen_text event. "
+                "Render no subtitles, captions, lower-thirds or burned-in spoken words. Dialogue "
+                "and voice-over are audio only; never convert them into pixels. Never draw large "
+                "centered typography or quotation text. Any monitor, phone, sign or interface must "
+                "remain blank, defocused, cropped or unreadable."
+            )
+        for field_name in ("must_keep", "technical"):
+            current = re.sub(
+                r"(?:VISIBLE TEXT WHITELIST|VISIBLE TEXT LOCK):.*?(?=(?:CHARACTER CONTINUITY CONTRACT|$))",
+                "",
+                str(state.get(field_name, "")),
+                flags=re.I | re.S,
+            ).strip(" .")
+            state[field_name] = (
+                current + (". " if current else "") + visible_text_contract
+            )
 
         transition_notes = [
             f"At {local_time(cue.start_seconds):.2f}s use {cue.preset}"
@@ -13243,6 +20632,7 @@ class DirectorCutStudio(QMainWindow):
             f"{cue.preset} at {local_time(cue.start_seconds):.2f}s" + (f": {cue.detail}" if cue.detail else "")
             for cue in marker_cues
             if cue not in ending_notes
+            and not cue.preset.startswith(SPEECH_TIMELINE_MARKER_PREFIX)
         ]
         if technical_notes:
             state["technical"] = "; ".join(
@@ -13279,35 +20669,113 @@ class DirectorCutStudio(QMainWindow):
         continuity: dict | None = None,
     ) -> str:
         """Build an H3 prompt whose timeline timestamps are local to one hidden segment."""
+        campus_bridge = False
+        campus_composite = False
         spec = self._prompt_spec_with_director_cues(
             self.prompt_panel.spec(),
             window_start=start,
             window_end=end,
             is_final_window=is_final_window,
             supplied_dialogue_audio_tag=self._supplied_speech_audio_tag(assets),
+            reference_assets=assets,
         )
         if start is not None and end is not None:
             # A global creative brief describes the complete movie. Feeding it
             # to every hidden H3 job makes each job attempt the whole story and
             # visually restart from the reference images. Always replace its
             # action summary with a strictly local generation brief.
-            local_shots = [
+            local_shots = self._coalesce_beat_synced_campus_bridge_cues([
                 cue for cue in self.director_cues
                 if cue.cue_type == "shot"
                 and ranges_intersect(cue.start_seconds, cue.end_seconds, start, end)
-            ]
+            ])
             local_layers = [
                 layer for layer in self.text_layers
                 if ranges_intersect(layer.start_seconds, layer.end_seconds, start, end)
             ]
+            local_speech_layers = [
+                layer for layer in local_layers
+                if layer.content_role in {"dialogue", "voice_over", "lyrics"}
+            ]
+            first_shot = min(
+                local_shots,
+                key=lambda cue: (cue.start_seconds, cue.end_seconds, cue.cue_id),
+                default=None,
+            )
+            reference_scene_reset = self._is_reference_scene_reset_shot(first_shot)
+            campus_bridge = self._is_beat_synced_campus_bridge_shot(first_shot)
+            campus_composite = self._is_beat_synced_p4_campus_composite_shot(first_shot)
+            p5_population_plate = next(
+                (
+                    asset for asset in assets
+                    if asset.media_type == "image"
+                    and stable_reference_id(asset).strip().upper() == "P5"
+                ),
+                None,
+            )
+            has_p5_population_plate = p5_population_plate is not None
+            beat_synced_entrance = (
+                str(self.special_combo.currentData() or "").strip().casefold()
+                == BEAT_SYNCED_ENTRANCE_SPECIAL_SKILL
+            )
             brief_parts = [
                 f"Generate only the timeline interval from {start:.2f}s to {end:.2f}s "
                 f"as one {end - start:.2f}-second continuation.",
                 "Execute only the current Shot blocks listed below. Do not summarize, preview, "
                 "restart, recap, or perform any action scheduled outside this interval.",
-                "Begin in medias res on the first listed action and use the final frames only "
-                "to hand momentum into the next interval.",
+                (
+                    "Begin from the active Picture's independent scene on frame one; do not "
+                    "inherit the preceding segment's subject, set, geometry, lighting, ambience "
+                    "or camera state."
+                    if reference_scene_reset
+                    else "Begin in medias res on the first listed action and use the final frames only "
+                    "to hand momentum into the next interval."
+                ),
             ]
+            if beat_synced_entrance and any(cue.cue_id == "S1" for cue in local_shots):
+                # Runtime compatibility for projects saved before the stronger
+                # corridor-model contract was persisted by Design Apply.
+                brief_parts.append(
+                    "S1 CORRIDOR MODEL LOCK: models move at a relaxed, unhurried pace and perform "
+                    "grounded locker, book, conversation, shoulder-pat, watch-check or side-step "
+                    "activities instead of racing past. Each selected model turns head and upper "
+                    "torso to hold a clear frontal or three-quarter face toward the lens for "
+                    "1.0-1.5 seconds. No running, power-walking, fast crossing or back-only performance."
+                )
+            if campus_bridge:
+                brief_parts.append(
+                    "MANDATORY TWO-SECOND CAMPUS BRIDGE: frame one already shows the active P1 "
+                    "reference crossing the visible interior exit threshold into the campus exterior. "
+                    + (
+                        "Use the active P5 Picture as the exact school-exterior architecture, daylight, "
+                        "ground plane, camera-axis and background-life plate. "
+                        if has_p5_population_plate else ""
+                    )
+                    +
+                    "P1 immediately rounds the adjacent campus corner toward the next encounter, and "
+                    "the solid corner wall or door frame sweeps across until it covers every pixel. "
+                    "Use the complete interval for this single continuous crossing-turn-wipe chain. "
+                    "The outdoor campus must become visible before the wipe."
+                )
+            if campus_composite:
+                brief_parts.append(
+                    (
+                        "P4+P5 CAMPUS COMPOSITE: the active P5 Picture exclusively owns the school-exterior "
+                        "architecture, ground plane, daylight, camera height, horizon, viewing direction, "
+                        "bus-stop zone and background-life population. The incoming 24-frame motion reference "
+                        "owns only the architectural-wipe timing and camera-motion handoff. The active P4 "
+                        "Picture exclusively owns its foreground subject count, faces, bodies, hair, wardrobe, "
+                        "accessories and relative arrangement. Place and relight those P4 subjects inside P5 "
+                        "with correct scale, ground contact and shared shadows."
+                        if has_p5_population_plate else
+                        "P4 CAMPUS COMPOSITE: continue from the incoming 24-frame campus motion reference. "
+                        "Those frames exclusively own the campus architecture, ground plane, daylight, "
+                        "camera height, horizon and viewing direction. The active P4 Picture exclusively "
+                        "owns its visible subject count, faces, bodies, hair, wardrobe, accessories and "
+                        "relative arrangement. Place and relight those P4 subjects inside the inherited "
+                        "campus with correct scale, ground contact and shared shadows."
+                    )
+                )
             all_shots = sorted(
                 (cue for cue in self.director_cues if cue.cue_type == "shot"),
                 key=lambda cue: (cue.start_seconds, cue.end_seconds, cue.cue_id),
@@ -13323,33 +20791,59 @@ class DirectorCutStudio(QMainWindow):
                       "history; never stage their opening pose, setup, attack, camera introduction "
                       "or environmental impact again."
                 )
-                previous_shot = max(
-                    (
-                        cue for cue in all_shots
-                        if cue.end_seconds <= start + 1e-6
-                    ),
-                    key=lambda cue: (cue.end_seconds, cue.start_seconds, cue.cue_id),
-                )
-                terminal_state = self._terminal_state_from_shot(previous_shot)
-                if terminal_state:
+                if not reference_scene_reset and not campus_bridge:
+                    if campus_composite:
+                        brief_parts.append(
+                            "Boundary state contract: the preceding campus-side Shot has already shown "
+                            "P1's surprised face and finished with an architectural wipe. "
+                            + (
+                                "The incoming 24 silent frames carry only wipe timing and camera motion; P5 "
+                                "remains the immutable school-exterior and background-population plate. "
+                                if has_p5_population_plate else
+                                "The incoming 24 silent frames carry only the established outdoor campus "
+                                "geometry, ground plane, daylight and camera axis into this Segment. "
+                            )
+                            + "Do not replay P1 or the wipe."
+                        )
+                    else:
+                        previous_shot = max(
+                            (
+                                cue for cue in all_shots
+                                if cue.end_seconds <= start + 1e-6
+                            ),
+                            key=lambda cue: (cue.end_seconds, cue.start_seconds, cue.cue_id),
+                        )
+                        terminal_state = self._terminal_state_from_shot(previous_shot)
+                        if terminal_state:
+                            brief_parts.append(
+                                "Boundary state contract: "
+                                f"{previous_shot.cue_id} has already finished with {terminal_state} "
+                                "Use that only as the inherited physical state immediately before frame "
+                                "one. Begin with the next action; do not show, reconstruct, hold or replay "
+                                "the completed terminal pose."
+                            )
+            if first_shot is not None:
+                if reference_scene_reset:
                     brief_parts.append(
-                        "Boundary state contract: "
-                        f"{previous_shot.cue_id} has already finished with {terminal_state} "
-                        "Use that only as the inherited physical state immediately before frame "
-                        "one. Begin with the next action; do not show, reconstruct, hold or replay "
-                        "the completed terminal pose."
+                        f"REFERENCE SCENE RESET at {first_shot.cue_id}: the active Picture is the "
+                        "sole full-scene authority. Preserve its visible subjects, complete background, "
+                        "terrain or architecture, object layout, sky or weather, palette, colour "
+                        "temperature and lighting. Use no prior motion-context frames and reconstruct "
+                        "no location from an earlier Shot. Use only a very slow horizontal camera "
+                        "slide parallel to the original image plane while camera height, optical axis, "
+                        "yaw, pitch, roll, focal length, horizon and viewing angle stay fixed from "
+                        "the first frame through the Final Hold."
                     )
-            if local_shots:
-                first_shot = min(
-                    local_shots,
-                    key=lambda cue: (cue.start_seconds, cue.end_seconds, cue.cue_id),
-                )
                 brief_parts.append(
                     f"The first visible event belongs to {first_shot.cue_id}, "
                     f"{first_shot.preset.strip() or first_shot.cue_id}. "
-                    "Enter its already-in-progress physical state in the "
-                    "first second; do not insert an establishing view, neutral ready pose, or "
-                    "reference-image tableau before it."
+                    + (
+                        "Animate directly from the active Picture's source-authentic state; do not "
+                        "reinterpret its location or import a preceding set."
+                        if reference_scene_reset
+                        else "Enter its already-in-progress physical state in the first second; do not "
+                        "insert an establishing view, neutral ready pose, or reference-image tableau before it."
+                    )
                 )
             brief_parts.append(
                 "Reference images define identity, props, geography and explicitly assigned visual "
@@ -13361,12 +20855,154 @@ class DirectorCutStudio(QMainWindow):
                 "A name or place that survives only inside a project-global modifier is inactive "
                 "continuity metadata; never introduce it into this segment."
             )
-            local_roles = [
-                f"{asset.tag}: {' '.join(asset.clip_prompt.split())[:260]}"
-                for asset in assets if asset.clip_prompt.strip()
-            ]
+            if campus_bridge:
+                local_roles = []
+                for asset in assets:
+                    if asset.media_type != "image":
+                        continue
+                    stable_id = stable_reference_id(asset).strip().upper()
+                    if stable_id == "P5":
+                        local_roles.append(
+                            f"{asset.tag}: P5 school-exterior architecture, daylight, ground plane, "
+                            "camera axis and background-life authority only"
+                        )
+                    else:
+                        local_roles.append(
+                            f"{asset.tag}: exact P1 identity and wardrobe authority for the threshold crossing"
+                        )
+                local_roles += [
+                    f"{asset.tag}: continuous Master Audio source window at this Timeline position"
+                    for asset in assets if asset.media_type == "audio"
+                ]
+            elif campus_composite:
+                local_roles = []
+                for asset in assets:
+                    if asset.media_type != "image":
+                        continue
+                    stable_id = stable_reference_id(asset).strip().upper()
+                    if stable_id == "P5":
+                        local_roles.append(
+                            f"{asset.tag}: P5 school-exterior background, architecture, bus-stop zone, "
+                            "daylight, ground plane and varied background-life authority only"
+                        )
+                    else:
+                        local_roles.append(
+                            f"{asset.tag}: P4 foreground-subject identity, wardrobe, subject count and arrangement only"
+                        )
+                local_roles += [
+                    f"{asset.tag}: continuous Master Audio source window at this Timeline position"
+                    for asset in assets if asset.media_type == "audio"
+                ]
+            else:
+                local_roles = [
+                    f"{asset.tag}: {' '.join(asset.clip_prompt.split())[:260]}"
+                    for asset in assets if asset.clip_prompt.strip()
+                ]
             if local_roles:
                 brief_parts.append("Reference roles: " + "; ".join(local_roles) + ".")
+            image_assets = [asset for asset in assets if asset.media_type == "image"]
+            female_identity = next(
+                (
+                    asset for asset in image_assets
+                    if re.search(
+                        r"\b(?:woman|female|girl|heroine)\b|女人|女性|女孩",
+                        f"{asset.filename} {asset.clip_prompt}", re.I,
+                    )
+                    and not re.search(
+                        r"\b(?:man|male|boy|hero)\b|男人|男性|男孩",
+                        f"{asset.filename} {asset.clip_prompt}", re.I,
+                    )
+                ),
+                None,
+            )
+            male_identity = next(
+                (
+                    asset for asset in image_assets
+                    if re.search(
+                        r"\b(?:man|male|boy|hero)\b|男人|男性|男孩",
+                        f"{asset.filename} {asset.clip_prompt}", re.I,
+                    )
+                    and not re.search(
+                        r"\b(?:woman|female|girl|heroine)\b|女人|女性|女孩",
+                        f"{asset.filename} {asset.clip_prompt}", re.I,
+                    )
+                ),
+                None,
+            )
+            speaker_references = {
+                "S1": female_identity.tag if female_identity is not None else "the female character",
+                "S2": male_identity.tag if male_identity is not None else "the male character",
+            }
+            street_fighter_cast_mode = (
+                self.special_combo.currentData() == ENVIRONMENT_COMBAT_SPECIAL_SKILL
+            )
+            if street_fighter_cast_mode:
+                stable_images = {
+                    stable_reference_id(asset): asset.tag for asset in image_assets
+                }
+                speaker_references = {
+                    "S1": stable_images.get("P1", "<Subject 1> from permanent P1"),
+                    "S2": stable_images.get("P2", "<Subject 2> from permanent P2"),
+                }
+            local_dialogue_layers = [
+                layer for layer in local_speech_layers
+                if layer.content_role == "dialogue"
+            ]
+            dialogue_overlap_pairs = [
+                (left, right)
+                for index, left in enumerate(local_dialogue_layers)
+                for right in local_dialogue_layers[index + 1:]
+                if ranges_intersect(
+                    left.start_seconds, left.end_seconds,
+                    right.start_seconds, right.end_seconds,
+                )
+            ]
+            if local_dialogue_layers:
+                if street_fighter_cast_mode:
+                    brief_parts.append(
+                        "SPEAKER-TO-FACE IDENTITY LOCK: S1 is exclusively permanent P1, currently "
+                        f"mapped to {speaker_references['S1']}; S2 is exclusively permanent P2, "
+                        f"currently mapped to {speaker_references['S2']}. This P1/P2 order overrides "
+                        "every generic female/male convention and never swaps with screen position, "
+                        "Shot order or camera angle. Outside an authored overlapping Dialogue range, "
+                        "only the assigned fighter moves lips and jaw and the opponent reacts silently."
+                    )
+                else:
+                    brief_parts.append(
+                        "SPEAKER-TO-FACE IDENTITY LOCK: S1 always means the female voice/character "
+                        f"defined by {speaker_references['S1']}; S2 always means the male "
+                        f"voice/character defined by {speaker_references['S2']}. These assignments "
+                        "never swap with screen position, shot order or camera angle. During each "
+                        "non-overlapping Dialogue Text Range, only the assigned speaker moves lips "
+                        "and jaw; every listener reacts silently. During an authored overlap, each "
+                        "assigned speaker performs only their own independent Text Layer. "
+                        "Voice-over never causes any visible character to lip-sync."
+                    )
+                brief_parts.append(
+                    "Dialogue face schedule: "
+                    + "; ".join(
+                        f"{max(start, layer.start_seconds) - start:.2f}-"
+                        f"{min(end, layer.end_seconds) - start:.2f}s {layer.layer_id} "
+                        f"uses {layer.speaker} -> {speaker_references.get(layer.speaker, layer.speaker)}"
+                        for layer in sorted(
+                            local_dialogue_layers,
+                            key=lambda item: (item.start_seconds, item.end_seconds, item.layer_id),
+                        )
+                    )
+                    + "."
+                )
+                if dialogue_overlap_pairs:
+                    brief_parts.append(
+                        "AUTHORED DIALOGUE OVERLAP: "
+                        + "; ".join(
+                            f"{max(start, left.start_seconds, right.start_seconds) - start:.2f}-"
+                            f"{min(end, left.end_seconds, right.end_seconds) - start:.2f}s "
+                            f"{left.layer_id}/{left.track_id} with {right.layer_id}/{right.track_id}"
+                            for left, right in dialogue_overlap_pairs
+                        )
+                        + ". Both voices are intentional and independent. Preserve both exact lines; "
+                          "never merge their words or transfer one speaker's words to the other."
+                    )
             if local_shots:
                 brief_parts.append(
                     "Follow this segment's " + str(len(local_shots))
@@ -13375,8 +21011,49 @@ class DirectorCutStudio(QMainWindow):
                         cue.preset.strip() or cue.cue_id for cue in local_shots
                     ) + "."
                 )
-            if local_layers:
-                brief_parts.append("Preserve this segment's authored dialogue and visible text exactly.")
+            if local_speech_layers:
+                brief_parts.append(
+                    "Preserve this segment's authored dialogue, voice-over and lyrics exactly. "
+                    "Only Timeline Dialogue, Voice-over or Lyrics Text Ranges may produce a "
+                    "human voice; never improvise, repeat, paraphrase or start an unlisted word."
+                )
+            else:
+                brief_parts.append(
+                    "This segment has no authored speech event. Generate no spoken word, vocal "
+                    "fragment, whisper, narration or intelligible background voice."
+                )
+            if local_speech_layers:
+                speech_windows = []
+                for layer in sorted(
+                    local_speech_layers,
+                    key=lambda item: (item.start_seconds, item.end_seconds, item.layer_id),
+                ):
+                    local_start = max(start, layer.start_seconds) - start
+                    local_end = min(end, layer.end_seconds) - start
+                    speech_windows.append(
+                        f"{local_start:.2f}-{local_end:.2f}s {layer.layer_id} "
+                        f"on {layer.track_id} ({layer.content_role}, "
+                        f"{layer.speaker or 'speaker'}, overlap={layer.overlap_policy})"
+                    )
+                brief_parts.append(
+                    "SPEECH WHITELIST WITH VOCAL-SILENCE GAPS: human speech is permitted only "
+                    "inside these segment-local windows: "
+                    + "; ".join(speech_windows)
+                    + ". Start and finish each exact line inside its own window. Every interval "
+                      "outside those windows is strict vocal silence: no filler syllable, false "
+                      "start, repeated word, translation, commentary, whisper, crowd voice or "
+                      "telephone voice. Room tone, music and non-vocal Foley may continue."
+                )
+            brief_parts.append(
+                "AUDIO SEGMENT BOUNDARY CONTRACT: establish the location's continuous room tone "
+                "or outdoor ambience from the first frame and keep it stable through the final "
+                "frame. Complete every authored utterance by its exact Text Range end. Before an "
+                "internal edit boundary leave at least one second for natural breath, reverberation "
+                "decay and ambience only; at the final project endpoint use all available authored "
+                "tail without extending the Timeline. "
+                "Never begin a fresh sound, word, music cue or Foley transient in the final second; "
+                "never end the audio bed with an abrupt digital stop."
+            )
             if is_final_window and any(
                 cue.cue_type == "marker"
                 and ("ending" in cue.preset.lower() or "final" in cue.preset.lower())
@@ -13386,12 +21063,175 @@ class DirectorCutStudio(QMainWindow):
                 brief_parts.append("Finish on this segment's Timeline Ending Hold marker.")
             state = asdict(spec)
             state["brief"] = " ".join(brief_parts)
+            if reference_scene_reset:
+                # A full-scene reset receives a positive-only local contract.
+                # Global Design fields legitimately describe earlier Shots,
+                # but even negative phrases naming the old set can make H3
+                # rebuild it in an otherwise isolated Picture-only Segment.
+                state["style"] = (
+                    "Match the active Picture's exact visual medium, subjects, complete background, "
+                    "geometry, palette, colour temperature, lighting, lens perspective and viewing angle."
+                )
+                state["references"] = (
+                    "The active Picture is the sole visual and spatial source for this Segment. "
+                    "Keep every visible subject and background element in its original relationship."
+                )
+                state["audio"] = (
+                    "Continue only the active Timeline audio at its matching source time. Derive any "
+                    "quiet diegetic sound solely from surfaces and motion visible in the active Picture."
+                )
+                state["music"] = (
+                    "Use only the active Timeline Master Audio at normal speed; generate no replacement score."
+                )
+                state["transition"] = (
+                    "Begin directly on the active Picture after a fully covered architectural wipe; "
+                    "do not reconstruct the previous view."
+                )
+                state["must_keep"] = (
+                    "Preserve the active Picture's original subjects, complete background, object layout, "
+                    "sky, lighting and viewing angle. Use only a very small slow horizontal slide "
+                    "parallel to the original image plane, with the optical axis and framing fixed. "
+                    "Add no person, location replacement, text, logo or watermark."
+                )
+                state["technical"] = (
+                    "Stable source-faithful geometry and identity; no reframing, perspective redesign, "
+                    "duplicate subject, flicker, morph or unrelated visible element."
+                )
+                state["ending"] = (
+                    "Finish the slow source-consistent motion, then hold the unchanged active-Picture "
+                    "view steadily for the final 0.5 second."
+                )
+            elif campus_bridge:
+                # Saved projects may still carry the former global rule that
+                # described all early beats as one continuous hallway. Give
+                # the dedicated bridge a local-only positive contract so H3
+                # cannot spend its two seconds extending the prior encounter.
+                state["style"] = (
+                    "Photoreal live-action threshold crossing from an enclosed interior exit into a "
+                    "real open campus exterior, with natural daylight adaptation and stable identity."
+                )
+                state["references"] = (
+                    "The active P1 Picture is the sole character-identity and wardrobe authority. "
+                    + (
+                        "The active P5 Picture is the sole school-exterior architecture, daylight, ground-plane, "
+                        "camera-axis and background-life authority."
+                        if has_p5_population_plate else
+                        "Generate only the doorway, immediately adjacent campus corner and exterior depth."
+                    )
+                )
+                state["audio"] = (
+                    "Continue the active A1 Timeline source window unchanged. Add only synchronized "
+                    "footsteps, clothing movement and the audible indoor-to-outdoor ambience change."
+                )
+                state["music"] = "Use only the active A1 Timeline source window at normal speed."
+                state["transition"] = (
+                    "Begin already crossing the exit threshold; establish exterior campus space; end "
+                    "with the adjacent solid corner completing a full-frame architectural wipe."
+                )
+                state["must_keep"] = (
+                    "Exact active-P1 identity and wardrobe; visible threshold crossing; visibly outdoor "
+                    "campus before the turn; one adjacent-corner turn; complete wall or door-frame wipe. "
+                    + (
+                        "Keep exact P5 campus architecture, background-person layout and school-life context."
+                        if has_p5_population_plate else ""
+                    )
+                )
+                state["technical"] = (
+                    "Start the crossing on frame one. Preserve continuous feet, heading and screen "
+                    "direction. Complete the wipe by the last frame. Render no text, logo or watermark."
+                )
+                state["ending"] = "End with solid architecture covering the entire image."
+            elif campus_composite:
+                state["style"] = (
+                    "Match the active P5 school exterior, daylight, colour temperature, ground plane, "
+                    "atmospheric depth and camera axis."
+                    if has_p5_population_plate else
+                    "Match the established photoreal campus exterior, daylight, colour temperature, "
+                    "ground plane, atmospheric depth and camera axis from the incoming motion reference."
+                )
+                state["references"] = (
+                    "The active P5 Picture is the sole environment and background-life source; incoming "
+                    "motion-reference frames supply only wipe timing and camera motion. The active P4 Picture "
+                    "supplies only exact foreground-subject identity, wardrobe, count and arrangement."
+                    if has_p5_population_plate else
+                    "Incoming motion-reference frames are the sole environment source. The active P4 "
+                    "Picture supplies only exact visible-subject identity, wardrobe, count and arrangement."
+                )
+                state["audio"] = (
+                    "Continue the active A1 source window and the established outdoor campus ambience. "
+                    "Add only visible, synchronized subject Foley at matching camera distance."
+                )
+                state["music"] = "Use only the active A1 Timeline source window at normal speed."
+                state["transition"] = (
+                    "Begin as the preceding architectural wipe clears to reveal the P5 school exterior "
+                    "with the P4 subjects naturally present inside it."
+                    if has_p5_population_plate else
+                    "Begin as the preceding architectural wipe clears to reveal the same campus exterior "
+                    "with the P4 subjects naturally present inside it."
+                )
+                state["must_keep"] = (
+                    "Exact P4 foreground-subject identities, count, wardrobe and arrangement integrated into "
+                    + ("the exact P5 school exterior and populated background; " if has_p5_population_plate else "the inherited campus; ")
+                    + "shared perspective, ground contact, daylight and shadows; very slow horizontal camera "
+                    "slide; stable final 0.5-second hold."
+                )
+                state["technical"] = (
+                    (
+                        "Preserve P5 campus geometry, background population and camera axis; use the incoming "
+                        "frames only for wipe and camera motion. "
+                        if has_p5_population_plate else
+                        "Preserve the incoming campus geometry and camera axis. "
+                    )
+                    + "Render one coherent composite scene with stable identity and anatomy and no text, "
+                    "logo or watermark."
+                )
+                state["ending"] = (
+                    "Finish the P4 subjects' source-consistent slow motion, then hold the integrated campus "
+                    "composition steadily for the final 0.5 second."
+                )
             spec = PromptSpec(**state)
         prompt_assets: list[MediaAsset] = []
         for asset in assets:
             clone = MediaAsset(**asdict(asset))
             clone.start_seconds = round(max(start, asset.start_seconds) - start, 6)
             clone.end_seconds = round(min(end, asset.end_seconds) - start, 6)
+            if campus_bridge:
+                if clone.media_type == "image":
+                    if stable_reference_id(clone).strip().upper() == "P5":
+                        clone.clip_prompt = (
+                            "Use this active P5 Picture only as the immutable school-exterior architecture, "
+                            "road, bus-stop zone, daylight, ground plane, camera axis and varied background "
+                            "school-life authority. It defines no P1-P4 identity."
+                        )
+                    else:
+                        clone.clip_prompt = (
+                            "Use this active Picture only as the exact P1 face, body, hair, wardrobe "
+                            "and accessory authority during the visible threshold crossing."
+                        )
+                elif clone.media_type == "audio":
+                    clone.clip_prompt = (
+                        "Play only this Segment's matching Timeline source window as continuous "
+                        "Master Audio at normal speed."
+                    )
+            elif campus_composite:
+                if clone.media_type == "image":
+                    if stable_reference_id(clone).strip().upper() == "P5":
+                        clone.clip_prompt = (
+                            "Use this active P5 Picture as the immutable school-exterior environment: exact "
+                            "architecture, road, bus-stop zone, daylight, ground plane, camera axis and varied "
+                            "background school-life population. Preserve it behind the P4 foreground subjects."
+                        )
+                    else:
+                        clone.clip_prompt = (
+                            "Use this active Picture only for exact P4 foreground-subject identity, face, body, "
+                            "hair, wardrobe, accessories, subject count and relative arrangement. Integrate "
+                            "those subjects into the active P5 school exterior; discard this Picture's background."
+                        )
+                elif clone.media_type == "audio":
+                    clone.clip_prompt = (
+                        "Play only this Segment's matching Timeline source window as continuous Master "
+                        "Audio at normal speed."
+                    )
             prompt_assets.append(clone)
         continuity = continuity or {}
         prompt_assets, continuity_tag = effective_reference_assets(
@@ -13567,6 +21407,7 @@ class DirectorCutStudio(QMainWindow):
             "frame_count": 24,
             "fps": 24,
             "tail_seconds": 1.0,
+            "visual_only": True,
         }
         # Deliberately do not attach the loader's paired audio output.  The
         # preceding 24 frames are visual motion context, not prior sound to
@@ -13865,7 +21706,8 @@ class DirectorCutStudio(QMainWindow):
         planned = self._planned_render_segments()
         all_media: list[dict[str, str]] = []
         segment_rows: list[dict] = []
-        render_root = CACHE_ROOT / "generated_outputs" / request_kind / str(seed)
+        workspace = self._ensure_project_workspace()
+        render_root = workspace / "cache" / "generated_outputs" / request_kind / str(seed)
         for index, segment in enumerate(planned):
             segment.seed = derive_named_segment_seed(seed, segment.segment_id)
             core_start = (
@@ -13891,6 +21733,9 @@ class DirectorCutStudio(QMainWindow):
             assets = self._prepare_windowed_tts_audio(
                 assets, core_start, core_end
             )
+            assets = self._prepare_windowed_reference_audio(
+                assets, core_start, core_end
+            )
             uploads = media_upload_manifest(assets)
             patch_media_upload_names(compiled, uploads)
             segment.fingerprint = fingerprint
@@ -13905,16 +21750,15 @@ class DirectorCutStudio(QMainWindow):
             )
             segment_rows.append(row)
 
-        # Every Segment retains only its active media loaders plus the one
-        # optional runtime continuity loader. Patch retained loaders from the
-        # complete collision-safe upload set; inactive cross-computer widgets
-        # have already been removed by compile_active_workflow.
+        # Every Segment was already patched from its own active asset set.
+        # ``unique_media`` is only the union uploaded once by Smart Render.
+        # Never patch a Segment again from this union: different Segments may
+        # reuse the same physical Loader node for different virtual assets,
+        # and a global rewrite would make the final asset win in every window.
         unique_media = list({
             (row["loader_node_id"], row["upload_name"]): row
             for row in all_media
         }.values())
-        for row in segment_rows:
-            patch_media_upload_names(row["workflow"], unique_media)
 
         cache_key = "preview" if request_kind == "preview" else "production"
         cached_manifest = self.smart_render_manifests.get(cache_key, {})
@@ -13929,18 +21773,71 @@ class DirectorCutStudio(QMainWindow):
             for row in cached_rows
             if Path(str(row.get("output_path", ""))).is_file()
         }
+        current_server = self.server_url.text().strip().rstrip("/")
+        manifest_server = str(cached_manifest.get("server", "")).strip().rstrip("/")
+        pending_by_id = {
+            str(row.get("segment_id", "")): row
+            for row in cached_rows
+            if str(row.get("prompt_id", "")).strip()
+            and str(row.get("status", "")).strip().lower()
+            in {"queued", "monitoring", "reconnecting", "running"}
+            and manifest_server == current_server
+        }
+        approved_horizon = float(
+            cached_manifest.get("target_duration_seconds", 0.0) or 0.0
+        )
         for row in segment_rows:
             cached = cached_by_id.get(str(row["segment_id"]))
-            if cached and cached.get("fingerprint") == row.get("fingerprint"):
+            pending = pending_by_id.get(str(row["segment_id"]))
+            core_end = float(
+                row.get("core_end_seconds", row.get("end_seconds", 0.0))
+                or row.get("end_seconds", 0.0)
+            )
+            dirty = str(row["segment_id"]) in self.render_dirty_segment_ids
+            fingerprint_match = bool(
+                cached and cached.get("fingerprint") == row.get("fingerprint")
+            )
+            approved_locked_range = bool(
+                cached
+                and request_kind != "preview"
+                and not dirty
+                and approved_horizon > 0.0
+                and core_end <= approved_horizon + 1e-6
+                and str(cached.get("status", "")).lower()
+                in {"cached", "complete", "completed", "reusable"}
+            )
+            if cached and not dirty and (fingerprint_match or approved_locked_range):
                 row["status"] = "cached"
                 row["output_path"] = str(Path(cached["output_path"]).resolve())
+                row["reuse_reason"] = (
+                    "approved_locked_range"
+                    if approved_locked_range and not fingerprint_match
+                    else "fingerprint_match"
+                )
                 if request_kind != "preview":
                     self.render_dirty_segment_ids.discard(str(row["segment_id"]))
+            elif (
+                pending
+                and not dirty
+                and pending.get("fingerprint") == row.get("fingerprint")
+            ):
+                # The remote ComfyUI prompt was already accepted. Preserve its
+                # identity and resume /history monitoring instead of queuing a
+                # duplicate Segment after Studio or the LAN reconnects.
+                row.update(
+                    status="monitoring",
+                    prompt_id=str(pending["prompt_id"]),
+                    queued_at=str(pending.get("queued_at", "")),
+                    attempts_used=int(pending.get("attempts_used", 1) or 1),
+                )
 
         self._refresh_render_status_bar()
 
-        manifest_path = render_root / "smart_render_manifest.json"
-        job_path = CACHE_ROOT / "smart_render_job.json"
+        render_jobs = workspace / "project" / "render_jobs"
+        render_jobs.mkdir(parents=True, exist_ok=True)
+        job_token = f"{request_kind}_{seed}_{time.time_ns()}"
+        manifest_path = render_jobs / f"{job_token}.manifest.json"
+        job_path = render_jobs / f"{job_token}.job.json"
         job = {
             "action": "smart_render",
             "render_policy_version": SMART_RENDER_POLICY_VERSION,
@@ -13949,10 +21846,13 @@ class DirectorCutStudio(QMainWindow):
             "segments": segment_rows,
             "segment_count": len(segment_rows),
             "progress_shots": self._progress_shot_rows(start, end),
-            "segment_attempts": 2,
+            "segment_attempts": 3,
             "history_poll_interval": self.render_settings.history_poll_interval,
             "generation_timeout": self.render_settings.generation_timeout,
             "http_timeout": self.render_settings.http_request_timeout,
+            "connection_recovery_timeout": (
+                self.render_settings.connection_recovery_timeout
+            ),
             "request_kind": request_kind,
             "seed": seed,
             "megapixels": megapixels,
@@ -13964,9 +21864,14 @@ class DirectorCutStudio(QMainWindow):
             "master_output": str(render_root / "master.mp4"),
             "manifest_path": str(manifest_path),
         }
+        job.update(self._immutable_final_hold_spec(start, end))
         job_path.parent.mkdir(parents=True, exist_ok=True)
         job_path.write_text(json.dumps(job, ensure_ascii=False), encoding="utf-8")
         return job_path, len(segment_rows)
+
+    def _immutable_final_hold_spec(self, start: float, end: float) -> dict:
+        """Compatibility shim: automatic P1 tail replacement has been retired."""
+        return {}
 
     def _prepare_windowed_tts_audio(
         self,
@@ -14015,6 +21920,80 @@ class DirectorCutStudio(QMainWindow):
                     raise RuntimeError(f"Could not prepare segment TTS audio: {detail}")
             asset.local_path = str(destination.resolve())
             asset.filename = destination.name
+        return clones
+
+    def _prepare_windowed_reference_audio(
+        self,
+        assets: list[MediaAsset],
+        start: float,
+        end: float,
+    ) -> list[MediaAsset]:
+        """Give each H3 Segment the matching slice of continuous Timeline audio.
+
+        ComfyUI starts every uploaded audio file at local time zero. Uploading the
+        full A1 file for every hidden Segment therefore restarts the music after a
+        Segment boundary. Physically window ordinary, full-coverage Timeline audio
+        before upload, while leaving authored TTS to its dedicated path and keeping
+        H3's generated ambience untouched.
+        """
+
+        clones = [deepcopy(asset) for asset in assets]
+        duration = max(0.01, end - start)
+        cache = CACHE_ROOT / "reference_audio_windows"
+        cache.mkdir(parents=True, exist_ok=True)
+        for asset in clones:
+            if (
+                asset.media_type != "audio"
+                or "AI DESIGN AUTHORED SPEECH TTS" in str(asset.recognition or "")
+                or float(asset.playback_speed or 1.0) != 1.0
+                or float(asset.start_seconds) > start + 1e-6
+                or float(asset.end_seconds) < end - 1e-6
+            ):
+                continue
+            source = Path(str(asset.local_path or ""))
+            if not source.is_file():
+                continue
+            source_offset = max(
+                0.0,
+                float(asset.source_in_seconds or 0.0)
+                + start - float(asset.start_seconds or 0.0),
+            )
+            # A full-span single H3 request already begins at the correct source
+            # position and needs no extra lossless PCM cache copy.
+            if source_offset <= 1e-6 and abs(duration - float(asset.end_seconds - asset.start_seconds)) <= 1e-6:
+                continue
+            source_key = (
+                f"{source.resolve()}|{source.stat().st_mtime_ns}|"
+                f"{source_offset:.6f}|{duration:.6f}|{asset.reference_id}|{asset.node_id}"
+            )
+            digest = hashlib.sha256(source_key.encode("utf-8")).hexdigest()[:20]
+            destination = cache / f"audio_{digest}_{start:.3f}-{end:.3f}.wav"
+            if not destination.is_file() or destination.stat().st_size <= 44:
+                creation_flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+                completed = subprocess.run(
+                    [
+                        str(self.runtime.ffmpeg), "-y", "-ss", f"{source_offset:.6f}",
+                        "-i", str(source), "-af", f"apad=whole_dur={duration:.6f}",
+                        "-t", f"{duration:.6f}", "-ar", "48000", "-ac", "2",
+                        "-c:a", "pcm_s16le", str(destination),
+                    ],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.PIPE,
+                    creationflags=creation_flags,
+                    timeout=max(60, int(duration * 4)),
+                )
+                if completed.returncode or not destination.is_file():
+                    detail = completed.stderr.decode("utf-8", errors="replace")[-1000:]
+                    raise RuntimeError(
+                        "Could not prepare continuous segment reference audio: " + detail
+                    )
+            asset.local_path = str(destination.resolve())
+            asset.filename = destination.name
+            asset.source_duration_seconds = duration
+            asset.source_in_seconds = 0.0
+            asset.source_out_seconds = duration
+            asset.start_seconds = start
+            asset.end_seconds = end
         return clones
 
     def _compiled_job(
@@ -14086,7 +22065,10 @@ class DirectorCutStudio(QMainWindow):
                     enable_rtx_vsr=enable_rtx_vsr,
                 ),
             )
-            return compiled, self._prepare_windowed_tts_audio(
+            compiled_assets = self._prepare_windowed_tts_audio(
+                compiled_assets, start, end
+            )
+            return compiled, self._prepare_windowed_reference_audio(
                 compiled_assets, start, end
             )
         finally:
@@ -14094,31 +22076,155 @@ class DirectorCutStudio(QMainWindow):
                 asset.enabled = was_enabled
 
     def generate_pre_run_preview(self) -> None:
+        self.quality_profile = "motion_preview"
+        quality_index = self.quality_profile_combo.findData(self.quality_profile)
+        self.quality_profile_combo.blockSignals(True)
+        self.quality_profile_combo.setCurrentIndex(max(0, quality_index))
+        self.quality_profile_combo.blockSignals(False)
         self.preview_seed = self._new_seed(self.preview_seed)
         self.preview_ready = False
         self.accept_preview_button.setEnabled(False)
         self.reject_preview_button.setEnabled(False)
         self._start_generation("preview", 0.2, self.preview_seed, False)
 
+    def _reconcile_speech_timing_before_run(self) -> list[str]:
+        """Apply speech budget and final-tail repair to the live Timeline."""
+        if not self.scan or not any(
+            layer.text.strip()
+            and layer.content_role in {"dialogue", "voice_over", "lyrics"}
+            for layer in self.text_layers
+        ):
+            return []
+        payload = {
+            "timeline_duration_seconds": float(self.scan.duration_seconds),
+            "work_area": [float(self.clip_start.value()), float(self.clip_end.value())],
+            "director_cues": [asdict(cue) for cue in self.director_cues],
+            "text_layers": [asdict(layer) for layer in self.text_layers],
+            "authored_text_requirements": deepcopy(self.authored_text_requirements),
+            "assets": {
+                asset.node_id: asdict(asset) for asset in self.scan.assets
+            },
+            "timeline_clips": [
+                asdict(asset) for asset in self.scan.timeline_clips
+            ],
+        }
+        repaired, report = repair_speech_timing_payload(payload)
+        if not report:
+            return []
+
+        cue_rows = {
+            str(row.get("cue_id", "")): row
+            for row in repaired.get("director_cues") or []
+            if isinstance(row, dict)
+        }
+        for cue in self.director_cues:
+            row = cue_rows.get(cue.cue_id)
+            if row:
+                cue.start_seconds = float(row.get("start_seconds", cue.start_seconds))
+                cue.end_seconds = float(row.get("end_seconds", cue.end_seconds))
+
+        layer_rows = {
+            str(row.get("layer_id", "")): row
+            for row in repaired.get("text_layers") or []
+            if isinstance(row, dict)
+        }
+        for layer in self.text_layers:
+            row = layer_rows.get(layer.layer_id)
+            if not row:
+                continue
+            layer.start_seconds = float(row.get("start_seconds", layer.start_seconds))
+            layer.end_seconds = float(row.get("end_seconds", layer.end_seconds))
+            layer.language = str(row.get("language", layer.language))
+            layer.shot_id = str(row.get("shot_id", layer.shot_id))
+            layer.speech_timing_auto_adjusted = bool(
+                row.get("speech_timing_auto_adjusted", layer.speech_timing_auto_adjusted)
+            )
+
+        asset_rows = repaired.get("assets") or {}
+        for asset in self.scan.assets:
+            row = asset_rows.get(asset.node_id) if isinstance(asset_rows, dict) else None
+            if isinstance(row, dict):
+                asset.start_seconds = float(row.get("start_seconds", asset.start_seconds))
+                asset.end_seconds = float(row.get("end_seconds", asset.end_seconds))
+        clip_rows = {
+            str(row.get("clip_id", "")): row
+            for row in repaired.get("timeline_clips") or []
+            if isinstance(row, dict)
+        }
+        for asset in self.scan.timeline_clips:
+            row = clip_rows.get(str(asset.clip_id or ""))
+            if row:
+                asset.start_seconds = float(row.get("start_seconds", asset.start_seconds))
+                asset.end_seconds = float(row.get("end_seconds", asset.end_seconds))
+
+        duration = float(repaired.get("timeline_duration_seconds", self.scan.duration_seconds))
+        work_area = repaired.get("work_area") or [0.0, duration]
+        self._set_design_duration(duration)
+        self.clip_start.setValue(max(0.0, min(duration, float(work_area[0]))))
+        self.clip_end.setValue(max(self.clip_start.value() + 0.01, min(duration, float(work_area[1]))))
+        self.authored_text_requirements = deepcopy(
+            repaired.get("authored_text_requirements") or []
+        )
+        self._sync_timeline_clip_sources()
+        self._refresh_director_cues()
+        self._refresh_text_layers()
+        self._mark_all_render_segments_dirty()
+        self._mark_dirty()
+        self.statusBar().showMessage(
+            f"Speech timing reconciled before Run · Timeline {duration:.1f}s · "
+            f"{len(report)} repair(s)"
+        )
+        return report
+
     def _validate_authored_text_before_run(self) -> bool:
         """Block silent generation when Design-authored exact text was lost."""
         if not self.authored_text_requirements:
             return True
         missing: list[dict] = []
+        timing_repairs = 0
         for required in self.authored_text_requirements:
             content = str(required.get("content", "")).strip()
             role = str(required.get("role", ""))
             start = float(required.get("start_seconds", -1.0))
             end = float(required.get("end_seconds", -1.0))
-            if not any(
+            if any(
                 layer.content_role == role
                 and layer.text.strip() == content
                 and abs(layer.start_seconds - start) <= 0.01
                 and abs(layer.end_seconds - end) <= 0.01
                 for layer in self.text_layers
             ):
-                missing.append(required)
+                continue
+            # Speech-budget repair may legitimately move an exact authored line
+            # while preserving every character.  In that case the Timeline is
+            # the new timing authority; refresh the guard contract instead of
+            # falsely reporting that the user's words disappeared.  A manual or
+            # ambiguous timing change remains blocked.
+            adjusted_matches = [
+                layer
+                for layer in self.text_layers
+                if layer.content_role == role
+                and layer.text.strip() == content
+                and layer.speech_timing_auto_adjusted
+            ]
+            if len(adjusted_matches) == 1:
+                layer = adjusted_matches[0]
+                required["start_seconds"] = float(layer.start_seconds)
+                required["end_seconds"] = float(layer.end_seconds)
+                required["track"] = str(layer.track_id)
+                required["speaker"] = str(layer.speaker)
+                required["language"] = str(layer.language)
+                required["authored_timing_locked"] = True
+                timing_repairs += 1
+                continue
+            missing.append(required)
         if not missing:
+            if timing_repairs:
+                self._mark_dirty()
+                self.statusBar().showMessage(
+                    "Authored text guard synchronized with auto-adjusted speech "
+                    f"timing · {timing_repairs} layer(s)"
+                )
             return True
         preview = "\n".join(
             f"{item.get('start_seconds', 0):.2f}-{item.get('end_seconds', 0):.2f}s "
@@ -14136,6 +22242,13 @@ class DirectorCutStudio(QMainWindow):
         return False
 
     def reject_pre_run_preview(self) -> None:
+        self._mark_latest_preview_rejected()
+        if (
+            self.production_strategy == "incremental"
+            and self.incremental_pending_end > self.incremental_pending_start
+        ):
+            self.incremental_batch_phase = "previewing"
+        self.quality_profile = "motion_preview"
         self.preview_seed = self._new_seed(self.preview_seed)
         self.preview_ready = False
         self.accept_preview_button.setEnabled(False)
@@ -14146,6 +22259,22 @@ class DirectorCutStudio(QMainWindow):
         if not self.preview_ready or self.preview_seed is None:
             QMessageBox.information(self, "Preview required", "Complete a 0.2MP preview first.")
             return
+        if (
+            self.production_strategy == "incremental"
+            and self.incremental_pending_end > self.incremental_pending_start
+        ):
+            # Preview contains only the new range.  Accepted output is always
+            # cumulative so Program Monitor and the root master remain one
+            # continuous movie; approved prior Segments are cache-reused.
+            self.incremental_batch_phase = "accepting"
+            self.clip_start.setValue(0.0)
+            self.clip_end.setValue(self.incremental_pending_end)
+            self._refresh_incremental_controls()
+        self.quality_profile = "approved_final"
+        quality_index = self.quality_profile_combo.findData(self.quality_profile)
+        self.quality_profile_combo.blockSignals(True)
+        self.quality_profile_combo.setCurrentIndex(max(0, quality_index))
+        self.quality_profile_combo.blockSignals(False)
         self._start_generation(
             "accepted",
             1.0,
@@ -14160,14 +22289,39 @@ class DirectorCutStudio(QMainWindow):
         seed: int,
         enable_rtx_vsr: bool,
     ) -> None:
+        # A real ComfyUI request always leaves source-only Storyboard playback.
+        self.storyboard_preview_active = False
+        self._reconcile_speech_timing_before_run()
         if not self._validate_authored_text_before_run():
             return
         self._read_settings_ui()
+        estimate_profile = (
+            "motion_preview" if request_kind == "preview" else "approved_final"
+        )
+        self.quality_profile = estimate_profile
+        estimate = self._resource_estimate(estimate_profile)
+        if not estimate.fits_disk_budget:
+            QMessageBox.critical(
+                self,
+                "Workspace disk reserve would be exceeded",
+                f"Estimated additional files: {estimate.additional_disk_bytes / 1024**3:.2f} GB\n"
+                f"Free space: {estimate.free_disk_bytes / 1024**3:.1f} GB\n"
+                f"Protected reserve: {estimate.reserve_disk_bytes / 1024**3:.1f} GB\n\n"
+                "Free disk space or lower the reserve in Settings. Existing approved "
+                "Shot Takes have not been changed.",
+            )
+            return
         speech_layers = self._speech_layers_for_tts()
         if (
             speech_layers
             and self.render_settings.dialogue_tts_engine == "voxcpm2_local"
             and not self._require_voxcpm_model(notify=True)
+        ):
+            return
+        if (
+            speech_layers
+            and self.render_settings.dialogue_tts_engine == "qwen3_tts_local"
+            and not self._require_qwen3_tts_model(notify=True)
         ):
             return
         if self.render_settings.dialogue_tts_engine == "h3_native":
@@ -14185,7 +22339,7 @@ class DirectorCutStudio(QMainWindow):
             QMessageBox.critical(
                 self,
                 "No Audio reference slot for authored TTS",
-                "VoxCPM2/Edge TTS needs one free physical Audio slot. Clear one Media Pool "
+                "Qwen3-TTS/VoxCPM2/Edge TTS needs one free physical Audio slot. Clear one Media Pool "
                 "Audio slot, or select MiniMax H3 Native Dialogue (Ori).",
             )
             return
@@ -14209,6 +22363,16 @@ class DirectorCutStudio(QMainWindow):
                 self,
                 "Design media running",
                 "Wait for the AI Design reference images to finish first.",
+            )
+            return
+        if (
+            self.media_regeneration_runner
+            and self.media_regeneration_runner.is_running()
+        ):
+            QMessageBox.information(
+                self,
+                "Reference regeneration running",
+                "Wait for the Media Pool Z-Image regeneration to finish first.",
             )
             return
         if self.design_tts_runner and self.design_tts_runner.is_running():
@@ -14253,7 +22417,6 @@ class DirectorCutStudio(QMainWindow):
                         runtime_loader_node_ids=runtime_ids,
                     )
             else:
-                # Native-length projects deliberately retain the original one-job path.
                 compiled, assets = self._compiled_job(
                     megapixels=megapixels,
                     seed=seed,
@@ -14262,7 +22425,12 @@ class DirectorCutStudio(QMainWindow):
                 media = media_upload_manifest(assets)
                 patch_media_upload_names(compiled, media)
                 validate_portable_media_manifest(compiled, media)
-                job_path = CACHE_ROOT / "comfy_submit_job.json"
+                workspace = self._ensure_project_workspace()
+                render_jobs = workspace / "project" / "render_jobs"
+                render_jobs.mkdir(parents=True, exist_ok=True)
+                job_path = render_jobs / (
+                    f"native_{request_kind}_{seed}_{time.time_ns()}.job.json"
+                )
                 job = {
                     "action": "queue",
                     "server": self.server_url.text().strip(),
@@ -14272,8 +22440,11 @@ class DirectorCutStudio(QMainWindow):
                     "history_poll_interval": self.render_settings.history_poll_interval,
                     "generation_timeout": self.render_settings.generation_timeout,
                     "http_timeout": self.render_settings.http_request_timeout,
+                    "connection_recovery_timeout": (
+                        self.render_settings.connection_recovery_timeout
+                    ),
                     "download_dir": str(
-                        CACHE_ROOT / "generated_outputs" / request_kind / str(seed)
+                        workspace / "cache" / "generated_outputs" / request_kind / str(seed)
                     ),
                     "request_kind": request_kind,
                     "seed": seed,
@@ -14282,7 +22453,14 @@ class DirectorCutStudio(QMainWindow):
                     "progress_shots": self._progress_shot_rows(
                         self.clip_start.value(), self.clip_end.value()
                     ),
+                    "ffmpeg": str(self.runtime.ffmpeg),
+                    "ffprobe": str(self.runtime.ffprobe),
                 }
+                job.update(
+                    self._immutable_final_hold_spec(
+                        self.clip_start.value(), self.clip_end.value()
+                    )
+                )
                 job_path.write_text(json.dumps(job, ensure_ascii=False), encoding="utf-8")
         except Exception as exc:
             QMessageBox.critical(self, "Queue error", str(exc))
@@ -14293,6 +22471,10 @@ class DirectorCutStudio(QMainWindow):
         self.submit_runner = runner
         self.submit_result = {}
         self.submit_request_kind = request_kind
+        self.active_generation_started_at = time.monotonic()
+        self.active_generation_profile = estimate_profile
+        self.active_generation_duration_seconds = duration
+        self.active_generation_job_path = job_path.resolve()
         if not is_smart_render:
             for segment in self._planned_render_segments():
                 self.render_runtime_status[segment.segment_id] = "running"
@@ -14301,6 +22483,8 @@ class DirectorCutStudio(QMainWindow):
         self.preview_button.setEnabled(False)
         self.accept_preview_button.setEnabled(False)
         self.reject_preview_button.setEnabled(False)
+        self.project_storage_button.setEnabled(False)
+        self._refresh_incremental_controls()
         self.queue_button.setText("GENERATING…")
         label = {
             "preview": "0.2MP preview without upscaling",
@@ -14352,13 +22536,15 @@ class DirectorCutStudio(QMainWindow):
             self.generation_overlay.stop()
             self._restore_monitor_after_generation()
             self.queue_button.setEnabled(True)
-            self.queue_button.setText("UPLOAD + QUEUE")
+            self.queue_button.setText("RUN+QUEUE")
             self.preview_button.setEnabled(True)
+            self.project_storage_button.setEnabled(True)
             self.submit_runner = None
             for segment_id, status in list(self.render_runtime_status.items()):
                 if status == "running":
                     self.render_runtime_status.pop(segment_id, None)
             self._refresh_render_status_bar()
+            self._refresh_incremental_controls()
             runner.deleteLater()
             QMessageBox.critical(self, "ComfyUI worker failed", str(exc))
 
@@ -14390,7 +22576,7 @@ class DirectorCutStudio(QMainWindow):
             segment_id = str(segment_status.get("segment_id", ""))
             status = str(segment_status.get("status", "")).lower()
             if segment_id:
-                if status in {"running", "failed"}:
+                if status in {"running", "reconnecting", "failed"}:
                     self.render_runtime_status[segment_id] = status
                 elif status in {"reusable", "cached", "complete", "completed"}:
                     self.render_runtime_status.pop(segment_id, None)
@@ -14412,10 +22598,20 @@ class DirectorCutStudio(QMainWindow):
                     if status in {"cached", "complete", "completed", "reusable"}:
                         self.render_dirty_segment_ids.discard(segment_id)
                         self.render_runtime_status.pop(segment_id, None)
+                    elif status in {"monitoring", "reconnecting", "running"}:
+                        self.render_runtime_status[segment_id] = "reconnecting"
                     elif status == "failed":
                         self.render_runtime_status[segment_id] = "failed"
             self._refresh_render_status_bar()
             self._mark_dirty()
+            try:
+                self._checkpoint_smart_render_state()
+            except OSError as exc:
+                # Keep ComfyUI running, but expose that this particular
+                # checkpoint could not be made resumable.
+                self.statusBar().showMessage(
+                    f"Smart Render checkpoint could not be saved: {exc}"
+                )
         if payload.get("queued") or payload.get("error") or payload.get("completed"):
             self.submit_result = payload
 
@@ -14449,16 +22645,55 @@ class DirectorCutStudio(QMainWindow):
         )
         self.generation_overlay.raise_()
 
+    def _apply_incremental_generation_success(
+        self,
+        kind: str,
+        seed: int | None,
+        shown: bool,
+    ) -> None:
+        """Advance a batch only after its durable output is visible."""
+        if not shown:
+            return
+        if kind == "preview":
+            if seed is not None:
+                self.preview_seed = int(seed)
+            self.preview_ready = True
+            if (
+                self.production_strategy == "incremental"
+                and self.incremental_pending_end > self.incremental_pending_start
+            ):
+                self.incremental_batch_phase = "preview_ready"
+            return
+        if (
+            self.production_strategy == "incremental"
+            and self.incremental_batch_phase == "accepting"
+            and self.incremental_pending_end > self.incremental_pending_start
+        ):
+            self.incremental_approved_horizon = min(
+                self._timeline_duration_seconds(),
+                self.incremental_pending_end,
+            )
+            self.incremental_pending_start = 0.0
+            self.incremental_pending_end = 0.0
+            self.incremental_batch_phase = ""
+        self.preview_ready = False
+
     def _generation_finished(self, exit_code: int, log: str) -> None:
         self.generation_overlay.stop()
         self.queue_button.setEnabled(True)
-        self.queue_button.setText("UPLOAD + QUEUE")
+        self.queue_button.setText("RUN+QUEUE")
         self.preview_button.setEnabled(True)
+        self.project_storage_button.setEnabled(True)
         result = self.submit_result
         if exit_code == 0 and result.get("queued") and result.get("completed"):
             prompt_id = result["queued"].get("prompt_id", "unknown")
             kind = result.get("request_kind", self.submit_request_kind)
             seed = result.get("seed")
+            render_cache_root = self._render_cache_root_from_manifest(
+                result.get("manifest")
+                if isinstance(result.get("manifest"), dict)
+                else None
+            )
             if result.get("smart_render") and isinstance(result.get("manifest"), dict):
                 self.smart_render_manifest = dict(result["manifest"])
                 cache_key = "preview" if kind == "preview" else "production"
@@ -14479,9 +22714,32 @@ class DirectorCutStudio(QMainWindow):
             except OSError as exc:
                 archive_warning = str(exc)
             result["outputs"] = outputs
+            try:
+                self._record_generation_takes(
+                    kind,
+                    int(seed) if seed is not None else None,
+                    outputs,
+                    result.get("manifest") if isinstance(result.get("manifest"), dict) else None,
+                )
+            except OSError as exc:
+                archive_warning = " | ".join(
+                    item for item in (archive_warning, f"Shot Take: {exc}") if item
+                )
+            self._make_render_manifest_portable(
+                result.get("manifest")
+                if isinstance(result.get("manifest"), dict)
+                else None,
+                outputs,
+            )
             shown = self._show_generated_output(
                 outputs,
                 timeline_start=self.clip_start.value(),
+            )
+            # Persist the approval state before the automatic project snapshot
+            # is written.  A reload therefore resumes the exact batch instead
+            # of silently returning to an all-at-once render.
+            self._apply_incremental_generation_success(
+                str(kind), int(seed) if seed is not None else None, shown
             )
             if kind != "preview":
                 for segment in self._planned_render_segments():
@@ -14495,7 +22753,35 @@ class DirectorCutStudio(QMainWindow):
             project_copy = None
             if shown:
                 try:
+                    elapsed = max(
+                        0.0,
+                        time.monotonic() - self.active_generation_started_at,
+                    ) if self.active_generation_started_at else 0.0
+                    output_bytes = sum(
+                        Path(str(item.get("local_path", ""))).stat().st_size
+                        for item in outputs
+                        if Path(str(item.get("local_path", ""))).is_file()
+                        and media_type_for_path(Path(str(item.get("local_path", "")))) == "video"
+                    )
+                    if self.active_generation_profile and elapsed > 0:
+                        update_resource_calibration(
+                            self._ensure_project_workspace(),
+                            self.active_generation_profile,
+                            output_duration_seconds=max(
+                                0.01, self.active_generation_duration_seconds
+                            ),
+                            wall_seconds=elapsed,
+                            output_bytes=output_bytes,
+                        )
                     project_copy = self._auto_save_example_project()
+                    self._cleanup_completed_render_cache(
+                        render_cache_root,
+                        result.get("manifest")
+                        if isinstance(result.get("manifest"), dict)
+                        else None,
+                    )
+                    if self.active_generation_job_path:
+                        self.active_generation_job_path.unlink(missing_ok=True)
                 except OSError as exc:
                     archive_warning = " | ".join(
                         item for item in (archive_warning, str(exc)) if item
@@ -14552,11 +22838,18 @@ class DirectorCutStudio(QMainWindow):
             self._refresh_render_status_bar()
             if self.submit_request_kind == "preview" and self.preview_seed is not None:
                 self.reject_preview_button.setEnabled(True)
+                if self.incremental_batch_phase == "previewing":
+                    self.incremental_batch_phase = "preview_failed"
             error = result.get("error") or log[-1200:] or "Unknown ComfyUI error"
             QMessageBox.critical(self, "ComfyUI generation failed", str(error))
         if self.submit_runner:
             self.submit_runner.deleteLater()
         self.submit_runner = None
+        self.active_generation_started_at = 0.0
+        self.active_generation_profile = ""
+        self.active_generation_duration_seconds = 0.0
+        self.active_generation_job_path = None
+        self._refresh_incremental_controls()
 
     def _restore_monitor_after_generation(self) -> None:
         previous = self.generation_previous_monitor
@@ -14597,6 +22890,36 @@ class DirectorCutStudio(QMainWindow):
         folder.mkdir(parents=True, exist_ok=True)
         return folder / f"{source.stem}_{token}.mp4"
 
+    def _generated_monitor_proxy_is_valid(self, source: Path, proxy: Path) -> bool:
+        """Reject interrupted proxy files before Qt tries to open them.
+
+        MP4 writes place the ``moov`` index near the end.  If Studio closes
+        while FFmpeg is still encoding, a non-empty file may remain but it is
+        not playable.  Existence alone therefore cannot be used as the cache
+        validity contract.
+        """
+        try:
+            if not proxy.is_file() or proxy.stat().st_size < 1024:
+                return False
+            proxy_info = probe_media(proxy, self.runtime)
+            proxy_streams = proxy_info.get("streams", [])
+            if not any(stream.get("codec_type") == "video" for stream in proxy_streams):
+                return False
+            proxy_duration = float(proxy_info.get("duration") or 0.0)
+            if proxy_duration <= 0.0:
+                return False
+            source_info = probe_media(source, self.runtime)
+            source_duration = float(source_info.get("duration") or 0.0)
+            if source_duration > 0.0:
+                tolerance = max(1.0, min(3.0, source_duration * 0.02))
+                if proxy_duration < source_duration - tolerance:
+                    return False
+                if proxy_duration > source_duration + tolerance:
+                    return False
+            return True
+        except (OSError, RuntimeError, ValueError, TypeError):
+            return False
+
     def _load_generated_player_source(self, source: Path, *, autoplay: bool) -> None:
         self.generated_playback_path = source.resolve()
         self.generated_pending_position_ms = max(
@@ -14614,14 +22937,32 @@ class DirectorCutStudio(QMainWindow):
 
     def _prepare_generated_monitor_video(self, source: Path, *, autoplay: bool) -> None:
         proxy = self._generated_monitor_proxy_path(source)
-        if proxy is None or proxy.is_file():
-            playback_source = proxy if proxy and proxy.is_file() else source
+        proxy_ready = bool(
+            proxy is not None
+            and self._generated_monitor_proxy_is_valid(source, proxy)
+        )
+        if proxy is None or proxy_ready:
+            playback_source = proxy if proxy_ready and proxy is not None else source
             self.generated_output_label.setText(
                 f"Generated output · {source.name}"
                 + (" · Monitor Proxy" if playback_source != source else "")
             )
             self._load_generated_player_source(playback_source, autoplay=autoplay)
             return
+
+        # A prior interrupted encode can leave a non-empty MP4 without its
+        # moov atom.  Remove only that disposable cache entry and rebuild it.
+        try:
+            proxy.unlink(missing_ok=True)
+        except OSError:
+            pass
+        working = proxy.with_name(
+            f"{proxy.stem}.{os.getpid()}.building.mp4"
+        )
+        try:
+            working.unlink(missing_ok=True)
+        except OSError:
+            pass
 
         # Keep the original master as a paused poster while FFmpeg builds a
         # lightweight editing proxy in the background. Export always continues
@@ -14637,6 +22978,7 @@ class DirectorCutStudio(QMainWindow):
         self.render_timeline_at(self.playhead_seconds, force_seek=True)
         self.generated_proxy_source = source.resolve()
         self.generated_proxy_target = proxy.resolve()
+        self.generated_proxy_working = working.resolve()
         self.generated_proxy_autoplay_pending = bool(autoplay)
         self.generated_output_label.setText(
             f"Generated output · {source.name} · Preparing Monitor Proxy…"
@@ -14648,10 +22990,11 @@ class DirectorCutStudio(QMainWindow):
         self.generated_proxy_runner = runner
         runner.finished.connect(
             lambda exit_code, log, instance=runner, expected_source=source.resolve(),
-            expected_target=proxy.resolve(): self._generated_proxy_finished(
+            expected_target=proxy.resolve(), expected_working=working.resolve(): self._generated_proxy_finished(
                 instance,
                 expected_source,
                 expected_target,
+                expected_working,
                 exit_code,
                 log,
             )
@@ -14682,12 +23025,17 @@ class DirectorCutStudio(QMainWindow):
                     "128k",
                     "-movflags",
                     "+faststart",
-                    str(proxy),
+                    str(working),
                 ],
             )
         except Exception as exc:
             self.generated_proxy_runner = None
+            self.generated_proxy_working = None
             runner.deleteLater()
+            try:
+                working.unlink(missing_ok=True)
+            except OSError:
+                pass
             self.generated_proxy_autoplay_pending = False
             self.generated_output_label.setText(
                 f"Generated output · {source.name} · Proxy failed"
@@ -14700,21 +23048,33 @@ class DirectorCutStudio(QMainWindow):
         runner: JsonLineProcess,
         expected_source: Path,
         expected_target: Path,
+        expected_working: Path,
         exit_code: int,
         log: str,
     ) -> None:
         if self.generated_proxy_runner is not runner:
+            try:
+                expected_working.unlink(missing_ok=True)
+            except OSError:
+                pass
             runner.deleteLater()
             return
         self.generated_proxy_runner = None
+        self.generated_proxy_working = None
         autoplay = self.generated_proxy_autoplay_pending
         self.generated_proxy_autoplay_pending = False
         runner.deleteLater()
-        if (
-            exit_code == 0
-            and expected_target.is_file()
-            and self.generated_output_path == expected_source
+        proxy_published = False
+        if exit_code == 0 and self._generated_monitor_proxy_is_valid(
+            expected_source,
+            expected_working,
         ):
+            try:
+                os.replace(expected_working, expected_target)
+                proxy_published = True
+            except OSError as exc:
+                log = f"{log}\nCould not publish Monitor Proxy atomically: {exc}".strip()
+        if proxy_published and self.generated_output_path == expected_source:
             self.generated_output_label.setText(
                 f"Generated output · {expected_source.name} · Monitor Proxy"
             )
@@ -14724,8 +23084,7 @@ class DirectorCutStudio(QMainWindow):
             self._load_generated_player_source(expected_target, autoplay=autoplay)
             return
         try:
-            if expected_target.is_file():
-                expected_target.unlink()
+            expected_working.unlink(missing_ok=True)
         except OSError:
             pass
         if self.generated_output_path == expected_source:
@@ -14760,6 +23119,7 @@ class DirectorCutStudio(QMainWindow):
         if kind not in {"video", "image"} or (kind == "image" and image_pixmap.isNull()):
             return False
         self._stop_all_timeline_media()
+        self.storyboard_preview_active = False
         self.generated_output_path = path.resolve()
         self.generated_output_locked = True
         if timeline_start is not None:
@@ -14770,6 +23130,11 @@ class DirectorCutStudio(QMainWindow):
         self.monitor_display_stack.setCurrentWidget(self.monitor_compare_splitter)
         if kind == "video":
             self._prepare_generated_monitor_video(path, autoplay=autoplay)
+            if self.render_settings.dialogue_tts_engine == "h3_native":
+                self._start_native_audio_qc(
+                    path,
+                    self.generated_output_timeline_start,
+                )
         elif kind == "image":
             self.generated_monitor_image.setPixmap(
                 image_pixmap.scaled(
@@ -14817,7 +23182,7 @@ class DirectorCutStudio(QMainWindow):
 
     def _connection_finished(self, exit_code: int, log: str) -> None:
         self.test_connection_button.setEnabled(True)
-        self.test_connection_button.setText("TEST CONNECTION")
+        self.test_connection_button.setText("TEST")
         if exit_code == 0 and self.connection_result.get("connected"):
             devices = self.connection_result.get("devices") or []
             device_name = devices[0].get("name", "ComfyUI device") if devices else "ComfyUI"
@@ -14832,6 +23197,13 @@ class DirectorCutStudio(QMainWindow):
         self.connection_runner = None
 
     def queue_to_comfyui(self) -> None:
+        """Queue a settings-quality render independently of preview mode.
+
+        PREVIEW and ACCEPT retain their seed-reuse workflow through their own
+        toolbar buttons. RUN+QUEUE must not be redirected by a previously
+        selected Storyboard or Motion Preview state.
+        """
+        self.storyboard_preview_active = False
         seed = self._new_seed()
         if self.clip_end.value() - self.clip_start.value() > MAX_NATIVE_SECONDS + 1e-6:
             previous = self.smart_render_manifests.get("production", {})
@@ -14844,37 +23216,6 @@ class DirectorCutStudio(QMainWindow):
             seed,
             self.settings_rtx_vsr.isChecked(),
         )
-        return
-        if self.submit_runner and self.submit_runner.is_running():
-            QMessageBox.information(self, "Upload running", "The current ComfyUI upload is still running.")
-            return
-        try:
-            compiled, assets = self._compiled_job()
-            media = media_upload_manifest(assets)
-            patch_media_upload_names(compiled, media)
-            job_path = CACHE_ROOT / "comfy_submit_job.json"
-            job_path.write_text(
-                json.dumps(
-                    {"server": self.server_url.text().strip(), "workflow": compiled, "media": media},
-                    ensure_ascii=False,
-                ),
-                encoding="utf-8",
-            )
-        except Exception as exc:
-            QMessageBox.critical(self, "Queue error", str(exc))
-            return
-        runner = JsonLineProcess(self)
-        runner.message.connect(self._submit_message)
-        runner.finished.connect(self._submit_finished)
-        self.submit_runner = runner
-        self.submit_result = {}
-        self.queue_button.setEnabled(False)
-        self.queue_button.setText("UPLOADING…")
-        self.statusBar().showMessage(f"Uploading {len(media)} local active reference(s) to ComfyUI…")
-        runner.start(
-            str(self.runtime.python),
-            [str(PROJECT_ROOT / "comfy_submit_worker.py"), str(job_path)],
-        )
 
     def _submit_message(self, payload: dict) -> None:
         if payload.get("progress"):
@@ -14884,7 +23225,7 @@ class DirectorCutStudio(QMainWindow):
 
     def _submit_finished(self, exit_code: int, log: str) -> None:
         self.queue_button.setEnabled(True)
-        self.queue_button.setText("UPLOAD + QUEUE")
+        self.queue_button.setText("RUN+QUEUE")
         result = self.submit_result
         if exit_code == 0 and result.get("queued"):
             prompt_id = result["queued"].get("prompt_id", "unknown")

@@ -1,5 +1,7 @@
 import json
 import sys
+import shutil
+import subprocess
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -8,14 +10,62 @@ from smart_render_worker import (
     _patch_continuity,
     build_render_progress,
     build_assembly_command,
+    assemble_master,
+    classify_generation_error,
     extract_tail_frames,
     main,
     preflight_smart_render,
+    queue_segment,
 )
 from runtime_paths import PROJECT_ROOT, load_runtime_paths
 
 
 class SmartRenderWorkerTests(unittest.TestCase):
+    def test_oom_is_classified_released_and_retried_without_quality_change(self):
+        root = PROJECT_ROOT / ".director_cache" / "smart_render_oom_retry_test"
+        root.mkdir(parents=True, exist_ok=True)
+        video = root / "segment.mp4"
+        video.write_bytes(b"video")
+        job = {
+            "server": "http://127.0.0.1:8188",
+            "http_timeout": 1,
+            "segment_attempts": 3,
+            "segment_count": 1,
+            "history_poll_interval": 0.1,
+            "generation_timeout": 10,
+        }
+        segment = {
+            "segment_id": "seg-oom",
+            "index": 0,
+            "download_dir": str(root),
+        }
+        with (
+            patch(
+                "smart_render_worker._request_json",
+                side_effect=[
+                    RuntimeError("CUDA out of memory"),
+                    RuntimeError("allocation on device failed"),
+                    {"prompt_id": "recovered"},
+                ],
+            ) as request_json,
+            patch("smart_render_worker.wait_for_history", return_value=({}, {})),
+            patch(
+                "smart_render_worker.download_outputs",
+                return_value=[{"kind": "videos", "local_path": str(video)}],
+            ),
+            patch("smart_render_worker.release_comfy_memory", return_value="released") as release,
+            patch("smart_render_worker.time.sleep"),
+            patch("smart_render_worker.emit"),
+        ):
+            result = queue_segment(job, segment, {}, [])
+        self.assertEqual(classify_generation_error("CUDA out of memory"), "oom")
+        self.assertEqual(result["attempts_used"], 3)
+        self.assertEqual(result["failure_class"], "")
+        self.assertEqual(request_json.call_count, 3)
+        self.assertEqual(release.call_count, 2)
+        video.unlink(missing_ok=True)
+        root.rmdir()
+
     def test_render_progress_uses_authored_shot_duration_weights(self):
         segments = [
             {
@@ -156,6 +206,29 @@ class SmartRenderWorkerTests(unittest.TestCase):
             ],
         )
 
+    def test_visual_continuity_never_patches_paired_audio(self):
+        workflow = {
+            "9": {"inputs": {"file": "old.mp4"}, "class_type": "LoadVideo"},
+            "136": {
+                "inputs": {"prompt": ["138", 0]},
+                "class_type": "MiniMaxH3ReferenceToVideo",
+            },
+        }
+        continuity = {
+            "kind": "video",
+            "visual_only": True,
+            "loader_node_id": "9",
+            "loader_input": "file",
+            "h3_node_id": "136",
+            "binding": "ref_videos.ref_video_0",
+            "connection": ["9", 0],
+            "paired_audio_binding": "ref_video_audios.ref_video_audio_0",
+            "paired_audio_connection": ["9", 1],
+        }
+        _patch_continuity(workflow, continuity, "visual_tail.mp4")
+        inputs = workflow["136"]["inputs"]
+        self.assertEqual(inputs["ref_videos.ref_video_0"], ["9", 0])
+        self.assertNotIn("ref_video_audios.ref_video_audio_0", inputs)
     def test_continuity_never_overwrites_an_active_compacted_video_slot(self):
         workflow = {
             "9": {"inputs": {"file": "old.mp4"}, "class_type": "LoadVideo"},
@@ -273,8 +346,65 @@ class SmartRenderWorkerTests(unittest.TestCase):
         self.assertIn("[0:v]trim=start=0.000000:end=15.000000", filters)
         self.assertIn("[1:v]trim=start=1.000000:end=15.000000", filters)
         self.assertIn("[2:a]atrim=start=1.000000:end=15.000000", filters)
+        self.assertIn("afade=t=out:st=14.960000:d=0.040000", filters)
+        self.assertIn("afade=t=in:st=0:d=0.040000", filters)
         self.assertIn("concat=n=3:v=1:a=1", filters)
         self.assertIn("43.000000", command)
+
+    def test_assembly_ignores_legacy_plate_and_preserves_native_tail(self):
+        from PIL import Image
+
+        runtime = load_runtime_paths()
+        root = PROJECT_ROOT / ".director_cache" / "final_hold_video_test"
+        shutil.rmtree(root, ignore_errors=True)
+        root.mkdir(parents=True, exist_ok=True)
+        source = root / "source.mp4"
+        plate = root / "plate.png"
+        Image.new("RGB", (160, 90), (20, 80, 220)).save(plate)
+        try:
+            created = subprocess.run(
+                [
+                    str(runtime.ffmpeg), "-hide_banner", "-loglevel", "error", "-y",
+                    "-f", "lavfi", "-i", "color=c=red:s=160x90:r=24:d=2",
+                    "-f", "lavfi", "-i", "sine=frequency=440:duration=2",
+                    "-c:v", "libx264", "-pix_fmt", "yuv420p", "-c:a", "aac",
+                    "-shortest", str(source),
+                ],
+                capture_output=True,
+                text=True,
+                timeout=60,
+            )
+            self.assertEqual(created.returncode, 0, created.stderr)
+            original_bytes = source.read_bytes()
+            result = assemble_master({
+                "master_output": str(root / "out.mp4"),
+                "ffmpeg": str(runtime.ffmpeg), "ffprobe": str(runtime.ffprobe),
+                "target_duration_seconds": 2.0,
+                "final_hold_plate": str(plate), "final_hold_seconds": .5,
+            }, [{"output_path": str(source), "start_seconds": 0.0, "end_seconds": 2.0}])
+            self.assertEqual(source.read_bytes(), original_bytes)
+            audio_probe = subprocess.run(
+                [
+                    str(runtime.ffprobe), "-v", "error", "-select_streams", "a:0",
+                    "-show_entries", "stream=index", "-of", "csv=p=0", str(result),
+                ],
+                capture_output=True, text=True, timeout=30,
+            )
+            self.assertTrue(audio_probe.stdout.strip())
+            frame = root / "tail.png"
+            extracted = subprocess.run(
+                [
+                    str(runtime.ffmpeg), "-hide_banner", "-loglevel", "error", "-y",
+                    "-ss", "1.75", "-i", str(result), "-frames:v", "1", str(frame),
+                ],
+                capture_output=True, text=True, timeout=60,
+            )
+            self.assertEqual(extracted.returncode, 0, extracted.stderr)
+            pixel = Image.open(frame).convert("RGB").getpixel((80, 45))
+            self.assertGreater(pixel[0], 180)
+            self.assertLess(pixel[2], 80)
+        finally:
+            shutil.rmtree(root, ignore_errors=True)
 
     def test_worker_emits_running_and_failed_segment_status(self):
         events = []
@@ -332,6 +462,8 @@ class SmartRenderWorkerTests(unittest.TestCase):
             self.assertEqual(progress_events[-1]["remaining_shots"], 1)
             manifest = json.loads((root / "manifest.json").read_text(encoding="utf-8"))
             self.assertEqual(manifest["segments"][0]["status"], "failed")
+            self.assertEqual(manifest["segments"][0]["failure_class"], "oom")
+            self.assertEqual(manifest["segments"][0]["retry_budget"], 3)
         finally:
             (root / "job.json").unlink(missing_ok=True)
             (root / "manifest.json").unlink(missing_ok=True)

@@ -18,8 +18,11 @@ import time
 import urllib.error
 import urllib.request
 import uuid
+from datetime import datetime, timezone
 
 from comfy_submit_worker import (
+    ComfyConnectionRecoveryTimeout,
+    DEFAULT_RECONNECT_TIMEOUT_SECONDS,
     _direct_urlopen,
     _request_json,
     download_outputs,
@@ -31,7 +34,8 @@ from workflow_engine import validate_portable_media_manifest
 
 VIDEO_SUFFIXES = {".mp4", ".mov", ".mkv", ".webm", ".avi", ".m4v"}
 MINIMUM_FREE_DISK_BYTES = 2 * 1024**3
-SMART_RENDER_POLICY_VERSION = 11
+SMART_RENDER_POLICY_VERSION = 22
+AUDIO_JOIN_FADE_SECONDS = 0.04
 
 
 def emit(payload: dict) -> None:
@@ -265,10 +269,49 @@ def _primary_video(outputs: list[dict]) -> Path | None:
 
 
 def _write_manifest(path: Path, payload: dict) -> None:
+    payload = dict(payload)
+    payload["updated_at"] = datetime.now(timezone.utc).isoformat(timespec="seconds")
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = path.with_suffix(path.suffix + ".tmp")
     temporary.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
     temporary.replace(path)
+
+
+def classify_generation_error(error: object) -> str:
+    """Classify retry/failure evidence without weakening output quality."""
+    text = str(error or "").casefold()
+    if any(
+        marker in text
+        for marker in (
+            "out of memory",
+            "oom",
+            "cuda oom",
+            "allocation on device",
+            "not enough memory",
+            "memory allocation",
+        )
+    ):
+        return "oom"
+    if any(marker in text for marker in ("timed out", "timeout")):
+        return "timeout"
+    if any(
+        marker in text
+        for marker in (
+            "connection reset",
+            "connection refused",
+            "connection did not recover",
+            "remote end closed",
+            "temporarily unavailable",
+            "urlopen error",
+        )
+    ):
+        return "transport"
+    if any(
+        marker in text
+        for marker in ("no such file", "missing media", "produced no downloadable video")
+    ):
+        return "media"
+    return "unknown"
 
 
 def preflight_smart_render(job: dict) -> dict:
@@ -301,6 +344,12 @@ def preflight_smart_render(job: dict) -> dict:
         raise FileNotFoundError(
             "Reference media is missing before ComfyUI upload. Re-link the "
             "Media Pool source or reopen the portable project folder:\n" + preview
+        )
+    final_hold_plate = str(job.get("final_hold_plate", "")).strip()
+    if final_hold_plate and not Path(final_hold_plate).is_file():
+        raise FileNotFoundError(
+            "Immutable P1 final-hold plate is missing before render: "
+            + final_hold_plate
         )
 
     manifest_rows = [
@@ -373,6 +422,13 @@ def _patch_continuity(workflow: dict, continuity: dict, uploaded_name: str) -> N
             + "; refusing to overwrite an active Timeline reference."
         )
     h3_inputs[binding] = connection
+    # The preceding tail exists strictly as visual motion context.  Even a
+    # loader capable of exposing synchronized sound must never feed old audio
+    # into the next H3 segment, where it can duplicate dialogue or create an
+    # audible tail.
+    if bool(continuity.get("visual_only", False)):
+        _canonicalize_reference_input_order(h3_node)
+        return
     paired = str(continuity.get("paired_audio_binding", ""))
     paired_connection = continuity.get("paired_audio_connection")
     if paired and isinstance(paired_connection, list):
@@ -537,9 +593,19 @@ def build_assembly_command(
         )
         concat_inputs.append(f"[v{index}]")
         if include_audio:
+            audio_filters = [
+                f"[{index}:a]atrim=start={trim:.6f}:end={trim_end:.6f}",
+                "asetpts=PTS-STARTPTS",
+            ]
+            fade = min(AUDIO_JOIN_FADE_SECONDS, core_duration / 4.0)
+            if index > 0 and fade > 0.0:
+                audio_filters.append(f"afade=t=in:st=0:d={fade:.6f}")
+            if index < len(segments) - 1 and fade > 0.0:
+                audio_filters.append(
+                    f"afade=t=out:st={max(0.0, core_duration - fade):.6f}:d={fade:.6f}"
+                )
             filters.append(
-                f"[{index}:a]atrim=start={trim:.6f}:end={trim_end:.6f},"
-                f"asetpts=PTS-STARTPTS[a{index}]"
+                ",".join(audio_filters) + f"[a{index}]"
             )
             concat_inputs.append(f"[a{index}]")
     filters.append(
@@ -579,47 +645,90 @@ def assemble_master(job: dict, segments: list[dict]) -> Path:
     completed = subprocess.run(command, capture_output=True, text=True, timeout=1800)
     if completed.returncode:
         raise RuntimeError("FFmpeg master assembly failed: " + completed.stderr[-1200:])
+    # Preserve the assembled native ending, including for older saved jobs.
     return destination.resolve()
 
 
-def queue_segment(job: dict, segment: dict, workflow: dict, uploaded: list[dict]) -> dict:
+def queue_segment(
+    job: dict,
+    segment: dict,
+    workflow: dict,
+    uploaded: list[dict],
+    *,
+    on_queued=None,
+) -> dict:
     server = job["server"].rstrip("/")
     http_timeout = max(1, int(job.get("http_timeout", 30)))
-    attempts = max(1, int(job.get("segment_attempts", 2)))
+    attempts = max(1, min(5, int(job.get("segment_attempts", 3))))
+    reconnect_timeout = max(
+        1,
+        int(job.get("connection_recovery_timeout", DEFAULT_RECONNECT_TIMEOUT_SECONDS)),
+    )
     last_error: Exception | None = None
-    for attempt in range(1, attempts + 1):
+    resumed_prompt_id = str(segment.get("prompt_id", "")).strip()
+    resume_status = str(segment.get("status", "")).strip().lower()
+    resume_existing = bool(
+        resumed_prompt_id
+        and resume_status in {"queued", "monitoring", "reconnecting", "running"}
+    )
+    first_attempt = max(1, int(segment.get("attempts_used", 1) or 1))
+    attempt_range = [first_attempt] if resume_existing else range(1, attempts + 1)
+    for attempt in attempt_range:
+        prompt_id = resumed_prompt_id if resume_existing else ""
         try:
-            payload = json.dumps(
-                {"prompt": workflow, "client_id": "h3-smart-render-" + uuid.uuid4().hex},
-                ensure_ascii=False,
-            ).encode("utf-8")
-            request = urllib.request.Request(
-                server + "/prompt",
-                data=payload,
-                headers={"Content-Type": "application/json"},
-                method="POST",
-            )
-            queued = _request_json(request, http_timeout)
-            prompt_id = str(queued.get("prompt_id", ""))
-            if not prompt_id:
-                raise RuntimeError("ComfyUI did not return a prompt_id.")
-            emit({
-                "progress": f"Segment {segment['index'] + 1}/{job['segment_count']} queued · {prompt_id}",
-                "segment_index": segment["index"],
-                "queued": queued,
-            })
+            if resume_existing:
+                emit({
+                    "progress": (
+                        f"Segment {segment['index'] + 1}/{job['segment_count']} resumed from "
+                        f"server prompt · {prompt_id}"
+                    ),
+                    "segment_index": segment["index"],
+                    "connection_state": "reconnected",
+                    "segment_status": {
+                        "segment_id": segment["segment_id"],
+                        "status": "running",
+                        "prompt_id": prompt_id,
+                    },
+                })
+            else:
+                payload = json.dumps(
+                    {"prompt": workflow, "client_id": "h3-smart-render-" + uuid.uuid4().hex},
+                    ensure_ascii=False,
+                ).encode("utf-8")
+                request = urllib.request.Request(
+                    server + "/prompt",
+                    data=payload,
+                    headers={"Content-Type": "application/json"},
+                    method="POST",
+                )
+                queued = _request_json(request, http_timeout)
+                prompt_id = str(queued.get("prompt_id", ""))
+                if not prompt_id:
+                    raise RuntimeError("ComfyUI did not return a prompt_id.")
+                if on_queued is not None:
+                    on_queued(prompt_id, attempt, queued)
+                emit({
+                    "progress": f"Segment {segment['index'] + 1}/{job['segment_count']} queued · {prompt_id}",
+                    "segment_index": segment["index"],
+                    "queued": queued,
+                })
             history, outputs = wait_for_history(
                 server,
                 prompt_id,
                 poll_interval=max(0.1, float(job.get("history_poll_interval", 1.0))),
                 generation_timeout=max(10, int(job.get("generation_timeout", 1800))),
                 http_timeout=http_timeout,
+                reconnect_timeout=reconnect_timeout,
+                segment_id=str(segment.get("segment_id", "")),
             )
             downloaded = download_outputs(
                 server,
                 outputs,
                 Path(segment["download_dir"]),
                 http_timeout,
+                reconnect_timeout=reconnect_timeout,
+                prompt_id=prompt_id,
+                segment_id=str(segment.get("segment_id", "")),
             )
             video = _primary_video(downloaded)
             if video is None:
@@ -634,17 +743,65 @@ def queue_segment(job: dict, segment: dict, workflow: dict, uploaded: list[dict]
                 "history_status": history.get("status", {}),
                 "uploaded": uploaded,
                 "error": "",
+                "attempts_used": attempt,
+                "failure_class": "",
             }
         except Exception as exc:
             last_error = exc
+            failure_class = classify_generation_error(exc)
             emit({
                 "progress": f"Segment {segment['index'] + 1} attempt {attempt}/{attempts} failed: {exc}",
                 "segment_index": segment["index"],
+                "failure_class": failure_class,
+                "attempt": attempt,
+                "attempts": attempts,
             })
-            emit({"progress": release_comfy_memory(server, http_timeout)})
+            # The remote server may still be rendering this accepted prompt.
+            # Never submit a duplicate merely because the monitoring channel
+            # exceeded its recovery window; preserve prompt_id for later resume.
+            if isinstance(exc, ComfyConnectionRecoveryTimeout):
+                raise
+            released = release_comfy_memory(server, http_timeout)
+            emit({
+                "progress": (
+                    f"{released} · retry class {failure_class}"
+                    if attempt < attempts
+                    else f"{released} · retry budget exhausted"
+                ),
+                "failure_class": failure_class,
+            })
             if attempt < attempts:
-                time.sleep(1.0)
+                # OOM often needs a little longer for ComfyUI/PyTorch to return
+                # released allocations to the driver. Never lower megapixels
+                # or silently change the accepted quality contract.
+                time.sleep(2.0 if failure_class == "oom" else 1.0)
+        finally:
+            resume_existing = False
     raise RuntimeError(str(last_error or "Unknown segment generation error"))
+
+
+def uploaded_media_for_workflow(workflow: dict, uploaded: list[dict]) -> list[dict]:
+    """Return only uploads actually referenced by this Segment workflow.
+
+    Files may be uploaded once for the whole job, but the manifest is a
+    mapping audit.  Recording the global upload union on every Segment made
+    inactive Pictures appear active and concealed reference-slot leaks.
+    """
+    referenced: set[str] = set()
+    for node in workflow.values():
+        if not isinstance(node, dict):
+            continue
+        inputs = node.get("inputs") or {}
+        if not isinstance(inputs, dict):
+            continue
+        for value in inputs.values():
+            if isinstance(value, str):
+                referenced.add(value.replace("\\", "/").rsplit("/", 1)[-1])
+    return [
+        row for row in uploaded
+        if str(row.get("upload_name") or row.get("file") or "")
+        .replace("\\", "/").rsplit("/", 1)[-1] in referenced
+    ]
 
 
 def main() -> int:
@@ -718,8 +875,13 @@ def main() -> int:
             continue
 
         workflow = deepcopy(segment["workflow"])
+        resume_existing = bool(
+            str(segment.get("prompt_id", "")).strip()
+            and str(segment.get("status", "")).strip().lower()
+            in {"queued", "monitoring", "reconnecting", "running"}
+        )
         continuity = segment.get("continuity") or {}
-        if previous_video is not None and continuity:
+        if previous_video is not None and continuity and not resume_existing:
             kind = str(continuity.get("kind", "image")).lower()
             if kind == "video":
                 anchor_path = Path(segment["download_dir"]) / "continuity_tail.mp4"
@@ -759,22 +921,87 @@ def main() -> int:
             )
         })
         try:
-            result = queue_segment(job, segment, workflow, uploaded)
+            def checkpoint_queued(prompt_id: str, attempt: int, queued: dict) -> None:
+                pending = {
+                    key: value for key, value in segment.items() if key != "workflow"
+                }
+                pending.update(
+                    status="monitoring",
+                    prompt_id=prompt_id,
+                    attempts_used=attempt,
+                    queued_at=datetime.now(timezone.utc).isoformat(timespec="seconds"),
+                    error="",
+                    failure_class="",
+                )
+                checkpoint_manifest = {
+                    "format": "h3-smart-render-manifest",
+                    "version": 1,
+                    "render_policy_version": int(
+                        job.get("render_policy_version", SMART_RENDER_POLICY_VERSION)
+                    ),
+                    "server": server,
+                    "request_kind": job.get("request_kind", "final"),
+                    "master_seed": job.get("seed"),
+                    "megapixels": job.get("megapixels"),
+                    "target_duration_seconds": job.get("target_duration_seconds"),
+                    "active_prompt_id": prompt_id,
+                    "segments": completed + [pending] + [
+                        {key: value for key, value in row.items() if key != "workflow"}
+                        for row in segments[index + 1 :]
+                    ],
+                }
+                _write_manifest(manifest_path, checkpoint_manifest)
+                emit({
+                    "segment_status": {
+                        "segment_id": segment["segment_id"],
+                        "status": "running",
+                        "prompt_id": prompt_id,
+                    },
+                    "partial_manifest": checkpoint_manifest,
+                    "connection_state": "monitoring",
+                    "progress": (
+                        f"Segment {index + 1}/{len(segments)} server Job checkpointed · "
+                        f"prompt_id {prompt_id}"
+                    ),
+                })
+
+            result = queue_segment(
+                job,
+                segment,
+                workflow,
+                uploaded_media_for_workflow(workflow, uploaded),
+                on_queued=checkpoint_queued,
+            )
         except Exception as exc:
+            failure_class = classify_generation_error(exc)
             failed = {
                 key: value for key, value in segment.items() if key != "workflow"
             }
-            failed.update(status="failed", error=str(exc))
+            recovery_pending = isinstance(exc, ComfyConnectionRecoveryTimeout)
+            accepted_prompt_id = (
+                str(getattr(exc, "prompt_id", ""))
+                or str(segment.get("prompt_id", ""))
+            )
+            failed.update(
+                status="monitoring" if recovery_pending else "failed",
+                error=str(exc),
+                failure_class=failure_class,
+                retry_budget=max(1, min(5, int(job.get("segment_attempts", 3)))),
+            )
+            if accepted_prompt_id:
+                failed["prompt_id"] = accepted_prompt_id
             manifest = {
                 "format": "h3-smart-render-manifest",
                 "version": 1,
                 "render_policy_version": int(
                     job.get("render_policy_version", SMART_RENDER_POLICY_VERSION)
                 ),
+                "server": server,
                 "request_kind": job.get("request_kind", "final"),
                 "master_seed": job.get("seed"),
                 "megapixels": job.get("megapixels"),
                 "target_duration_seconds": job.get("target_duration_seconds"),
+                "active_prompt_id": accepted_prompt_id if recovery_pending else "",
                 "segments": completed + [failed] + [
                     {key: value for key, value in row.items() if key != "workflow"}
                     for row in segments[index + 1 :]
@@ -784,14 +1011,23 @@ def main() -> int:
             emit({
                 "segment_status": {
                     "segment_id": segment["segment_id"],
-                    "status": "failed",
+                    "status": "reconnecting" if recovery_pending else "failed",
                     "error": str(exc),
+                    "failure_class": failure_class,
                 },
                 "partial_manifest": manifest,
                 "render_progress": build_render_progress(
-                    job, segments, completed_indexes, stage="failed", current_index=index
+                    job,
+                    segments,
+                    completed_indexes,
+                    stage="reconnecting" if recovery_pending else "failed",
+                    current_index=index,
                 ),
-                "progress": f"Segment {index + 1}/{len(segments)} failed",
+                "progress": (
+                    f"Segment {index + 1}/{len(segments)} saved for prompt reconnect"
+                    if recovery_pending
+                    else f"Segment {index + 1}/{len(segments)} failed"
+                ),
             })
             raise
         completed.append(result)
@@ -803,6 +1039,7 @@ def main() -> int:
             "render_policy_version": int(
                 job.get("render_policy_version", SMART_RENDER_POLICY_VERSION)
             ),
+            "server": server,
             "request_kind": job.get("request_kind", "final"),
             "master_seed": job.get("seed"),
             "megapixels": job.get("megapixels"),
@@ -839,6 +1076,7 @@ def main() -> int:
         "render_policy_version": int(
             job.get("render_policy_version", SMART_RENDER_POLICY_VERSION)
         ),
+        "server": server,
         "request_kind": job.get("request_kind", "final"),
         "master_seed": job.get("seed"),
         "megapixels": job.get("megapixels"),
@@ -847,6 +1085,9 @@ def main() -> int:
         "segments": completed,
     }
     _write_manifest(manifest_path, final_manifest)
+    # The full workflow-bearing job can be large. Keep it only for interrupted
+    # recovery; a successful final manifest is the compact durable record.
+    Path(args.job).unlink(missing_ok=True)
     emit({
         "smart_render": True,
         "queued": {"prompt_id": "smart-render-master"},

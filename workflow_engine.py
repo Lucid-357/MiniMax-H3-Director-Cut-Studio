@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from copy import deepcopy
+import hashlib
 import json
 from pathlib import Path
 import re
@@ -15,6 +16,37 @@ MEDIA_LOADERS = {
     "LoadVideo": ("video", "file"),
     "LoadAudio": ("audio", "audio"),
 }
+
+
+_SUPPORT_IDENTITY_MARKER = "supporting environment or action-state reference only"
+_APPENDED_ANCHOR_MARKER = "the authoritative recurring face identity is the user-supplied"
+_EXCLUSIVE_P1_SCENE_STATE_MARKER = "exclusive p1-derived scene-state replacement"
+_IDENTITY_DEPENDENCY_RE = re.compile(
+    r"(?:face|facial|identity|same\s+(?:person|character)|look\s+exactly|consistent|match(?:es|ing)?)",
+    re.I,
+)
+
+
+def _conflicting_generated_identity_support(asset: "MediaAsset") -> bool:
+    """Detect a T2I pose Picture that tries to reconstruct an existing face.
+
+    These files are useful as Design thumbnails but unsafe H3 references: the
+    independently generated face competes directly with the real @P anchor.
+    """
+    if asset.media_type != "image":
+        return False
+    prompt = str(asset.clip_prompt or "")
+    lower = prompt.casefold()
+    if _SUPPORT_IDENTITY_MARKER not in lower:
+        return False
+    marker_index = lower.find(_APPENDED_ANCHOR_MARKER)
+    original = prompt[:marker_index] if marker_index >= 0 else prompt
+    for match in re.finditer(r"(?:@?P\d+\b|<Picture\s+\d+>)", original, re.I):
+        start = max(0, match.start() - 120)
+        end = min(len(original), match.end() + 120)
+        if _IDENTITY_DEPENDENCY_RE.search(original[start:end]):
+            return True
+    return False
 
 
 @dataclass(slots=True)
@@ -122,7 +154,12 @@ class WorkflowScan:
 
     def timeline_assets(self) -> list[MediaAsset]:
         """Return legacy first uses plus independent repeated clip instances."""
-        return [*self.assets, *self.timeline_clips]
+        # Retired auto-generated P1 end plates remain in the pool/project, but
+        # must not become visual references when an older project is rendered.
+        return [asset for asset in [*self.assets, *self.timeline_clips]
+                if not (asset.media_type == "image"
+                        and "AUTO TERMINAL KEYFRAME" in str(asset.clip_prompt or "")
+                        and "IMMUTABLE P1 SCENE PLATE" in str(asset.clip_prompt or ""))]
 
 
 def load_workflow(path: str | Path) -> WorkflowScan:
@@ -577,7 +614,27 @@ def compile_active_workflow(
         raise ValueError("生成时间窗必须满足 0 ≤ 开始时间 < 结束时间。")
 
     compiled = deepcopy(scan.nodes)
-    active_source_assets = scan.active_assets(clip_start, clip_end)
+    active_source_assets = [
+        asset for asset in scan.active_assets(clip_start, clip_end)
+        if not _conflicting_generated_identity_support(asset)
+    ]
+    # Drone scene-chain Pictures are low-denoise descendants of P1. Loading
+    # P1 together with the current descendant makes Ref2VA treat two views of
+    # the same landmark as two separate landmark instances. When a current
+    # interval owns an explicit P1-derived replacement, keep only that one
+    # scene plate in the executable request. P1 remains the lineage/source in
+    # the Project and Design data; it is not duplicated as a second H3 image.
+    exclusive_p1_scene_states = [
+        asset for asset in active_source_assets
+        if asset.media_type == "image"
+        and _EXCLUSIVE_P1_SCENE_STATE_MARKER in str(asset.clip_prompt or "").casefold()
+    ]
+    if exclusive_p1_scene_states:
+        active_source_assets = [
+            asset for asset in active_source_assets
+            if stable_reference_id(asset).upper() != "P1"
+            or asset in exclusive_p1_scene_states
+        ]
     # Preserve the editor objects in the return value for Timeline selection,
     # Undo/Redo and repeated-use compatibility. Request allocation metadata is
     # transient and excluded from equality/serialization semantics.
@@ -970,7 +1027,7 @@ def media_upload_manifest(assets: list[MediaAsset]) -> list[dict[str, str]]:
     name and repeated Timeline instances collapse back to that same source.
     """
     loader_inputs = {"image": "image", "video": "file", "audio": "audio"}
-    rows: dict[tuple[str, str], dict[str, str]] = {}
+    rows: dict[tuple[str, str], list[dict[str, str]]] = {}
     for asset in assets:
         local_path = str(asset.local_path or "").strip()
         if not local_path:
@@ -984,7 +1041,19 @@ def media_upload_manifest(assets: list[MediaAsset]) -> list[dict[str, str]]:
         basename = Path(local_path).name
         safe_node = re.sub(r"[^A-Za-z0-9_-]+", "_", logical_id).strip("_") or "node"
         safe_name = re.sub(r"[^A-Za-z0-9._-]+", "_", basename).strip("_") or "media"
-        upload_name = f"h3ref_{asset.media_type}_{safe_node}_{safe_name}"
+        source = Path(local_path).expanduser()
+        try:
+            resolved = source.resolve()
+            stat = resolved.stat()
+            source_identity = (
+                f"{str(resolved).casefold()}|{stat.st_size}|{stat.st_mtime_ns}"
+            )
+        except OSError:
+            source_identity = str(source).casefold()
+        source_token = hashlib.sha256(source_identity.encode("utf-8")).hexdigest()[:12]
+        upload_name = (
+            f"h3ref_{asset.media_type}_{safe_node}_{source_token}_{safe_name}"
+        )
         rows[key] = {
             "path": local_path,
             "loader_node_id": loader_node_id,
@@ -1040,7 +1109,7 @@ def validate_portable_media_manifest(
         path = Path(path_text)
         if not path.is_file():
             missing_paths.append(path_text)
-        rows[(loader_id, loader_input)] = row
+        rows.setdefault((loader_id, loader_input), []).append(row)
     if missing_paths:
         raise FileNotFoundError(
             "Reference media is missing on this computer before ComfyUI upload. "
@@ -1056,16 +1125,19 @@ def validate_portable_media_manifest(
         if loader is None or str(node_id) in runtime_ids:
             continue
         media_type, loader_input = loader
-        row = rows.get((str(node_id), loader_input))
-        if row is None:
+        candidates = rows.get((str(node_id), loader_input), [])
+        if not candidates:
             value = str((node.get("inputs") or {}).get(loader_input, "")).strip()
             unbacked.append(
                 f"{media_type} loader {node_id} ({value or 'empty filename'})"
             )
             continue
-        expected = str(row["upload_name"])
         actual = str((node.get("inputs") or {}).get(loader_input, "")).strip()
-        if actual != expected:
+        expected_names = {
+            str(candidate["upload_name"]) for candidate in candidates
+        }
+        if actual not in expected_names:
+            expected = " | ".join(sorted(expected_names))
             stale.append(f"loader {node_id}: {actual or '<empty>'} -> {expected}")
     if unbacked:
         raise FileNotFoundError(
@@ -1107,6 +1179,12 @@ def assign_local_media(scan: WorkflowScan, asset: MediaAsset, path: str | Path) 
     if not local_path.is_file():
         raise FileNotFoundError(local_path)
     if asset.local_path != str(local_path):
+        # Recognition belongs to the previous file, not to the permanent P/V/A
+        # slot.  Clearing it is particularly important for scene-keyframe
+        # chains: when a user replaces an AI-generated terminal Picture, the
+        # replacement must become a real authored scene anchor instead of
+        # inheriting the old "AI DESIGN GENERATED REFERENCE" classification.
+        asset.recognition = ""
         asset.semantic_enrichment = ""
         asset.semantic_enrichment_source_hash = ""
         asset.semantic_enrichment_model = ""

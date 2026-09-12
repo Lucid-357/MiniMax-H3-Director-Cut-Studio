@@ -3,7 +3,12 @@ from copy import deepcopy
 import re
 import unittest
 
-from design_engine import normalize_design_plan
+from design_engine import (
+    build_design_system_prompt,
+    normalize_design_plan,
+    render_special_design_requirement_template,
+    street_fighter_character_bindings,
+)
 
 from media_semantic_enrichment import enrichment_fingerprint
 from prompt_engine import PromptSpec
@@ -75,10 +80,92 @@ class SkillEngineTests(unittest.TestCase):
         self.assertTrue(profile.description)
         self.assertIn("Music Video", profile.display_name)
 
+    def test_analysis_only_special_discovery_text_never_primes_h3_pixels(self):
+        special = self.profiles["drone-fly-on-city"]
+        self.assertIn("red route", special.description.lower())
+        skill_text = special.path.read_text(encoding="utf-8-sig")
+        self.assertIn(
+            "Clean photographic scene with unobstructed architecture",
+            skill_text,
+        )
+        self.assertIn("visible flight path, orbit ring, circular light trail", skill_text)
+        self.assertIn("Still-reference Isolation", skill_text)
+        self.assertIn("pure camera-only optical viewpoint", skill_text)
+        self.assertIn("no drone body, nose, arms, rotors, propellers", skill_text)
+        self.assertIn("专用Z-Image负面词", special.design_requirement_template)
+        self.assertIn("P3至P9", special.design_requirement_template)
+        self.assertNotIn("Kuala Lumpur", special.instruction)
+        self.assertNotIn("Petronas", special.instruction)
+        prompt = build_ref2va_prompt(
+            PromptSpec(
+                brief="A clean city flyover.",
+                style="Photoreal skyline. No visible route graphics or waypoint markers.",
+                shots=["Camera arcs left, then right with a stable horizon."],
+            ),
+            [],
+            6.0,
+            self.profiles[DEFAULT_SKILL],
+            special,
+        )
+        self.assertNotIn("red route", prompt.lower())
+        self.assertNotIn("route graphics", prompt.lower())
+        self.assertNotIn("waypoint marker", prompt.lower())
+        self.assertNotIn(special.description, prompt)
+        self.assertIn("approved Drone Fly On City Director cues", prompt)
+        self.assertIn("PURE CAMERA-ONLY POV", prompt)
+        self.assertIn("carrier stay outside every image boundary", prompt)
+        self.assertNotIn("drone's instantaneous forward tangent", prompt)
+
+    def test_drone_fireworks_profile_preserves_route_isolation_and_effect_ledger(self):
+        special = self.profiles["drone-fly-on-city-fireworks"]
+        self.assertFalse(special.standalone)
+        self.assertIn("fireworks", special.description.lower())
+        self.assertIn("Fireworks Physics and Continuity Ledger", special.instruction)
+        self.assertIn("pure camera-only optical viewpoint", special.instruction)
+        self.assertIn("Camera-only POV is preserved", special.instruction)
+        self.assertIn("separate radial particle bursts", special.instruction)
+        self.assertIn("analysis_only/whole_design", special.instruction)
+        self.assertIn("P3至P9", special.design_requirement_template)
+        self.assertRegex(special.design_requirement_template, r"离散(?:烟花|粒子)")
+        self.assertIn("绿色圆点标记起点", special.design_requirement_template)
+        self.assertIn("蓝色圆点标记终点", special.design_requirement_template)
+        self.assertIn("P1实际图片", special.design_requirement_template)
+        self.assertIn("ROUTE NEEDS REVIEW", special.design_requirement_template)
+        self.assertNotIn("Kuala Lumpur", special.instruction)
+        self.assertNotIn("Petronas", special.instruction)
+        prompt = build_ref2va_prompt(
+            PromptSpec(
+                brief="A photoreal night skyline celebration.",
+                style="Cool blue city light with warm gold fireworks.",
+                shots=[
+                    "A smooth clockwise orbit rises while discrete fireworks bloom behind the towers."
+                ],
+            ),
+            [],
+            15.0,
+            self.profiles[DEFAULT_SKILL],
+            special,
+        )
+        self.assertNotIn("red route", prompt.lower())
+        self.assertNotIn("route graphics", prompt.lower())
+        self.assertIn("approved Drone Fly On City Fireworks Director cues", prompt)
+        self.assertIn("PURE CAMERA-ONLY POV", prompt)
+        self.assertIn("never cut to an exterior chase", prompt)
+
+    def test_every_special_skill_has_an_editable_design_requirement_template(self):
+        special_profiles = [profile for profile in self.profiles.values() if profile.special]
+        self.assertTrue(special_profiles)
+        for profile in special_profiles:
+            with self.subTest(skill=profile.key):
+                self.assertTrue(profile.design_requirement_template.strip())
+                self.assertLessEqual(len(profile.design_requirement_template), 20_000)
+
     def test_wuxia_special_binds_default_h3_skill(self):
         profile = self.profiles["wuxia-blade-film"]
         self.assertTrue(profile.special)
         self.assertFalse(profile.standalone)
+        self.assertIn("45秒的唐朝写实高速武侠刺杀视频", profile.design_requirement_template)
+        self.assertIn("没有明确写出的 @P／@V／@A 时不得虚构素材编号", profile.design_requirement_template)
         system = profile_system_prompt(self.profiles[DEFAULT_SKILL], profile)
         self.assertIn("DEFAULT H3 SKILL", system)
         self.assertIn("SPECIAL SCENE SKILL (wuxia-blade-film)", system)
@@ -110,7 +197,6 @@ class SkillEngineTests(unittest.TestCase):
             "one frozen instant",
         ):
             self.assertIn(phrase, system)
-
     def test_short_drama_special_has_chinese_mirror_and_upstream_license(self):
         folder = self.profiles["short-drama-h3-director"].path.parent
         chinese = (folder / "SKILL.cn.md").read_text(encoding="utf-8-sig")
@@ -119,6 +205,481 @@ class SkillEngineTests(unittest.TestCase):
             self.assertIn(phrase, chinese)
         self.assertIn("MIT License", license_text)
         self.assertIn("POUND0423/AI-drama-pound", license_text)
+
+    def test_dark_rescue_special_is_default_bound_and_uses_proven_scene_grammar(self):
+        profile = self.profiles["dark-rescue-h3"]
+        self.assertTrue(profile.special)
+        self.assertFalse(profile.standalone)
+        self.assertIn("华尔街建筑风格", profile.design_requirement_template)
+        self.assertIn("45秒救援视频", profile.design_requirement_template)
+        system = profile_system_prompt(self.profiles[DEFAULT_SKILL], profile)
+        self.assertIn("DEFAULT H3 SKILL", system)
+        self.assertIn("SPECIAL SCENE SKILL (dark-rescue-h3)", system)
+        for phrase in (
+            "Use Only the Proven Visual-effect Palette",
+            "Abandoned academic building",
+            "Bangkok Yaowarat back lanes",
+            "Kuala Lumpur Petaling Street back lanes",
+            "Historical Kowloon dense interior",
+            "Damaged high-rise office or Wall Street-inspired tower",
+            "MUSIC AUTO",
+            "must never cause the Skill to invent `@P1`",
+            "preceding 24 frames are visual motion context only",
+            "Director Design JSON",
+        ):
+            self.assertIn(phrase, system)
+
+    def test_dark_rescue_special_has_matching_chinese_operational_contract(self):
+        folder = self.profiles["dark-rescue-h3"].path.parent
+        chinese = (folder / "SKILL.cn.md").read_text(encoding="utf-8-sig")
+        for phrase in (
+            "只使用已验证的光影效果库",
+            "曼谷耀华力路后巷",
+            "吉隆坡茨厂街后巷",
+            "历史九龙密集室内",
+            "受损高层办公室／华尔街风格大楼",
+            "不能自行发明 `@P1`",
+            "MUSIC TIMELINE",
+            "Director Design JSON",
+        ):
+            self.assertIn(phrase, chinese)
+
+    def test_dark_rescue_profiles_separate_physical_pov_from_external_camera(self):
+        pov = self.profiles["dark-rescue-h3"]
+        no_pov = self.profiles["dark-rescue-h3-no-pov"]
+        for phrase in (
+            "Prove POV Positively in the Image",
+            "POV proof object",
+            "extreme foreground",
+            "body-caused parallax",
+            "victim looks toward S2's eye line",
+        ):
+            self.assertIn(phrase, pov.instruction)
+        self.assertIn("严格第一人称视角", pov.design_requirement_template)
+        self.assertIn("External-camera Contract", no_pov.instruction)
+        self.assertIn("No rescuer-eye POV", no_pov.instruction)
+        self.assertIn("no-POV外部电影摄影机", no_pov.design_requirement_template)
+        self.assertNotIn("The camera is physically inside S2", no_pov.instruction)
+
+    def test_live_action_arcade_fighter_special_has_executable_short_fight_contract(self):
+        profile = self.profiles["street-fighter-live-action-h3"]
+        self.assertTrue(profile.special)
+        self.assertFalse(profile.standalone)
+        self.assertIn("准确45.00秒的电影级真人街机格斗短片", profile.design_requirement_template)
+        self.assertIn("12个编号近身攻防Beat", profile.design_requirement_template)
+        self.assertIn("36个编号动作且不得重复", profile.design_requirement_template)
+        self.assertIn("MMA抱摔", profile.design_requirement_template)
+        self.assertIn("受控降服", profile.design_requirement_template)
+        self.assertIn("两人全程完全徒手", profile.design_requirement_template)
+        self.assertIn("每15秒闭拳Punch最多两次", profile.design_requirement_template)
+        self.assertIn("三个连续15秒Segment", profile.design_requirement_template)
+        self.assertIn("香港九龙城寨风格的湿滑鱼类／海鲜／蔬菜市场", profile.design_requirement_template)
+        self.assertIn("动作节奏为之前全速设定的2倍", profile.design_requirement_template)
+        self.assertIn("Z-Image只生成两张", profile.design_requirement_template)
+        self.assertIn("围绕S1与S2共同中点持续实体飞行", profile.design_requirement_template)
+        self.assertIn("每个Shot都必须是正在发生的格斗", profile.design_requirement_template)
+        self.assertIn("每15秒累计完成一次", profile.design_requirement_template)
+        self.assertIn("Environmental Combat Physics", profile.design_requirement_template)
+        self.assertIn("室外雨夜后巷", profile.design_requirement_template)
+        self.assertIn("舞台Spot Light", profile.design_requirement_template)
+        system = profile_system_prompt(self.profiles[DEFAULT_SKILL], profile)
+        for phrase in (
+            "Live-action Arcade Fighter H3 Director",
+            "15-second structure",
+            "30-second structure",
+            "45-second structure — three different phases, 36 non-repeating beats",
+            "Action Ledger",
+            "bare-handed by default",
+            "Action-variety contract",
+            "Hong Kong Kowloon wet-market arena",
+            "Environment Ledger",
+            "fish, seafood and vegetable wet market",
+            "exactly 12 numbered combat beats",
+            "Four-style Close-combat Grammar",
+            "Karate",
+            "Judo",
+            "Jeet Kune Do",
+            "Wing Chun",
+            "MMA Ground-game Variant",
+            "single- or double-leg capture",
+            "Grappling control",
+            "Ground-and-pound",
+            "Submission",
+            "visible tap and immediate release",
+            "At least 80%",
+            "no more than 1.0 second",
+            "Camera Ledger",
+            "Visible continuous FPV-orbit contract",
+            "Full 360-degree fight orbit",
+            "physically flies clockwise",
+            "same straight-on frontal angle in consecutive Shots",
+            "Arcade combat coverage inside the FPV orbit",
+            "Side-axis exchange",
+            "Signature-move detail",
+            "Full 360-degree fight orbit",
+            "Do not use a theatre spotlight",
+            "body load → release trajectory → contact point → recovery/result",
+            "Projectile palm burst",
+            "Rotating kick",
+            "preceding 24 frames are silent visual motion context only",
+            "two principal fighters only",
+            "Never bake uncontrolled text",
+            "Director Design JSON Contract",
+        ):
+            self.assertIn(phrase, system)
+        folder = profile.path.parent
+        chinese = (folder / "SKILL.cn.md").read_text(encoding="utf-8-sig")
+        for phrase in (
+            "15秒", "30秒", "45秒——三个不同阶段、36个不重复Beat",
+            "Action Ledger", "默认**完全徒手**", "动作多样性合约",
+            "香港九龙城寨湿货市场格斗场", "Environment Ledger", "海鲜通道",
+            "准确12个", "四种近身攻防语法", "空手道", "柔道", "截拳道", "咏春",
+            "MMA地面战变体", "抱摔（Takedown）", "地面压制（Grappling Control）",
+            "地面打击（Ground and Pound）", "关节／绞技（Submission）", "至少80%",
+            "Camera Ledger", "持续可见的FPV实体环绕合约", "每个15秒Segment至少依次经过五个机位区域",
+            "FPV环绕中的街机格斗覆盖", "侧轴对拆", "招牌技局部",
+            "全速360度格斗环绕",
+            "舞台Spot Light", "身体蓄力", "掌心能量弹", "旋转踢", "Virtual Media Pool",
+        ):
+            self.assertIn(phrase, chinese)
+
+    def test_street_fighter_template_binds_p1_p2_from_blip_then_ai_enrich(self):
+        profile = self.profiles["street-fighter-live-action-h3"]
+        media = [
+            {
+                "media_id": "P1", "media_type": "image", "loaded": True,
+                "raw_analysis_summary": (
+                    "BLIP VISUAL SUMMARY · CUDA\n"
+                    "BLIP · Overview: a focused woman with braided black hair in a white gi"
+                ),
+                "semantic_enrichment": "SUMMARY\nThis fallback must not replace BLIP.",
+            },
+            {
+                "media_id": "P2", "media_type": "image", "loaded": True,
+                "raw_analysis_summary": "MEDIA\nNo BLIP overview yet.",
+                "semantic_enrichment": (
+                    "MEDIA: P2 (image)\n\nSUMMARY\nA muscular man in a red jacket.\n\n"
+                    "SUBJECTS\n- fighter | appearance: muscular man with cropped hair | "
+                    "wardrobe: red jacket and black trousers\n\nOBJECTS / PROPS\nNone established."
+                ),
+            },
+        ]
+        bindings = street_fighter_character_bindings(media)
+        self.assertEqual([row["media_id"] for row in bindings], ["P1", "P2"])
+        self.assertEqual(bindings[0]["evidence_source"], "BLIP · Overview")
+        self.assertEqual(bindings[1]["evidence_source"], "AI Enrich")
+        rendered = render_special_design_requirement_template(
+            profile.design_requirement_template,
+            profile.key,
+            media,
+        )
+        self.assertNotIn("{{STREET_FIGHTER_CAST_BINDINGS}}", rendered)
+        self.assertIn("S1是@P1（BLIP · Overview：a focused woman", rendered)
+        self.assertIn("S2是@P2（AI Enrich：fighter | appearance: muscular man", rendered)
+        self.assertIn("@P1只定义S1，@P2只定义S2", rendered)
+
+    def test_hong_kong_comic_template_lists_panel_evidence_without_cast_binding(self):
+        profile = self.profiles["hong-kong-comic-fighter"]
+        media = [
+            {
+                "media_id": "P1", "media_type": "image", "loaded": True,
+                "local_path": "page1.jpg",
+                "raw_analysis_summary": "BLIP · Overview: two fighters on a rocky mountain under a blue sky",
+            },
+            {
+                "media_id": "P2", "media_type": "image", "loaded": True,
+                "local_path": "page2.jpg",
+                "semantic_enrichment": "SUMMARY\nThe same fighters collide above broken stone.",
+            },
+            {
+                "media_id": "P3", "media_type": "image", "loaded": True,
+                "local_path": "project/media/generated_references/old_market.png",
+                "recognition": "AI DESIGN GENERATED REFERENCE\nA wet market created by an older Skill.",
+            },
+        ]
+        rendered = render_special_design_requirement_template(
+            profile.design_requirement_template, profile.key, media
+        )
+        self.assertNotIn("{{HONG_KONG_COMIC_SOURCE_EVIDENCE}}", rendered)
+        self.assertIn("@P1（BLIP · Overview：two fighters on a rocky mountain", rendered)
+        self.assertIn("@P2（AI Enrich：The same fighters collide", rendered)
+        self.assertIn("source_file=page1.jpg", rendered)
+        self.assertIn("仅用于把剧本页码映射到@P1", rendered)
+        self.assertNotIn("@P3", rendered)
+        self.assertNotIn("older Skill", rendered)
+        self.assertIn("P编号只是图片编号，不代表S1=P1或S2=P2", rendered)
+
+    def test_street_fighter_normalization_forces_whole_design_cast_references(self):
+        media = [
+            {
+                "media_id": "P1", "media_type": "image", "loaded": True,
+                "raw_analysis_summary": "BLIP · Overview: a woman in a white sleeveless gi",
+            },
+            {
+                "media_id": "P2", "media_type": "image", "loaded": True,
+                "semantic_enrichment": "SUMMARY\nA man in a dark red jacket and black trousers.",
+            },
+        ]
+        source = {
+            "title": "Reference fighters",
+            "creative_brief": "S1 and S2 exchange one close-range technique.",
+            "global_visual_style": "Photoreal live-action fight.",
+            "overall_soundscape": "Diegetic room tone and contact Foley.",
+            "non_diegetic_music": "N/A",
+            "constraints": "Two fighters only.",
+            "duration_seconds": 5.0,
+            "shots": [{
+                "start_seconds": 0.0, "end_seconds": 5.0, "track": "V1",
+                "preset": "Fight", "framing": "Close-up", "camera_angle": "Side",
+                "camera_movement": "Lateral track", "movement_speed": "Fast",
+                "movement_amplitude": "Medium", "subject_action": "S1 parries S2.",
+                "environment_response": "Cloth snaps once.",
+                "continuity_state": "S1 left, S2 right.", "optional_flourish": "",
+                "additional_direction": "Keep the fight axis clear.",
+            }],
+            "text_layers": [], "transitions": [], "markers": [],
+            "existing_media_uses": [], "media_requests": [{
+                "requirement_id": "generic_male_female_fighters",
+                "media_type": "image", "usage": "h3_reference",
+                "reuse_policy": "whole_design", "start_seconds": 0.0,
+                "end_seconds": 5.0, "track": "V3",
+                "subject_keywords": ["two generic fighters"],
+                "prompt": "Two generic fighters, one man and one woman, in a fighting pose.",
+            }],
+        }
+        plan = normalize_design_plan(
+            source,
+            {"image": 9, "video": 3, "audio": 3},
+            existing_media=media,
+            special_skill_key="street-fighter-live-action-h3",
+        )
+        uses = {row["media_id"]: row for row in plan["existing_media_uses"]}
+        self.assertEqual(set(uses), {"P1", "P2"})
+        for media_id in ("P1", "P2"):
+            self.assertEqual(uses[media_id]["reuse_policy"], "whole_design")
+            self.assertEqual((uses[media_id]["start_seconds"], uses[media_id]["end_seconds"]), (0.0, 5.0))
+            self.assertTrue(uses[media_id]["identity_anchor"])
+        self.assertIn("S1 is exclusively @P1", plan["shots"][0]["additional_direction"])
+        self.assertIn("S2 is exclusively @P2", plan["shots"][0]["additional_direction"])
+        self.assertIn("P1/P2 ABSOLUTE CAST LOCK", plan["shots"][0]["additional_direction"])
+        self.assertIn("HONG KONG KOWLOON WET-MARKET ARENA", plan["shots"][0]["additional_direction"])
+        self.assertIn("2X ACTION CADENCE", plan["shots"][0]["additional_direction"])
+        self.assertEqual(
+            [row["requirement_id"] for row in plan["media_requests"]],
+            [
+                "street_fighter_kowloon_market_indoor_spectators",
+                "street_fighter_kowloon_alley_outdoor_spectators",
+            ],
+        )
+        indoor, outdoor = plan["media_requests"]
+        self.assertEqual(indoor["reuse_policy"], "time_scoped")
+        self.assertEqual((indoor["start_seconds"], indoor["end_seconds"]), (0.0, 3.5))
+        self.assertIn("Twelve to eighteen", indoor["prompt"])
+        self.assertIn("no principal fighter", indoor["prompt"])
+        self.assertEqual(outdoor["reuse_policy"], "time_scoped")
+        self.assertEqual((outdoor["start_seconds"], outdoor["end_seconds"]), (3.5, 5.0))
+        self.assertIn("rainy Hong Kong", outdoor["prompt"])
+        self.assertNotIn("generic_male_female_fighters", str(plan["media_requests"]))
+        self.assertEqual(plan["environment_physics_schema_version"], 1)
+        self.assertIn("environment_interaction", plan["shots"][0])
+        self.assertIn("contact_target_id=env_", plan["shots"][0]["environment_interaction"])
+        self.assertEqual(plan["markers"][-1]["preset"], "Final Combat Resolve")
+        self.assertIn("settle both fighters", plan["markers"][-1]["direction"])
+        system = build_design_system_prompt({
+            "character_reference_bindings": street_fighter_character_bindings(media),
+        })
+        self.assertIn("CHARACTER REFERENCE BINDING CONTRACT", system)
+        self.assertIn("S1 is exclusively @P1", system)
+        self.assertIn("S2 is exclusively @P2", system)
+
+    def test_street_fighter_normalization_forces_full_speed_fpv_combat_only(self):
+        source = {
+            "title": "Legacy camera repair",
+            "creative_brief": "Two fighters in one arena.",
+            "global_visual_style": "Photoreal live-action fight.",
+            "overall_soundscape": "Diegetic contact Foley.",
+            "non_diegetic_music": "N/A",
+            "constraints": "Two fighters only.",
+            "duration_seconds": 5.0,
+            "shots": [{
+                "start_seconds": 0.0, "end_seconds": 5.0, "track": "V1",
+                "preset": "Fight", "framing": "Medium", "camera_angle": "Front",
+                "camera_movement": "Slow pull-back zoom out", "movement_speed": "Slow",
+                "movement_amplitude": "Small", "subject_action": "S1 walks slowly into frame.",
+                "environment_response": "Room tone.", "continuity_state": "S1 left, S2 right.",
+                "optional_flourish": "Bullet-time impact freeze.",
+                "additional_direction": "Use slow motion and then walk away.",
+            }],
+            "text_layers": [], "transitions": [],
+            "markers": [{
+                "time_seconds": 4.0, "preset": "Final Hold",
+                "direction": "Settle into a stable hold.",
+            }],
+            "existing_media_uses": [], "media_requests": [],
+        }
+        plan = normalize_design_plan(
+            source,
+            {"image": 9, "video": 3, "audio": 3},
+            special_skill_key="street-fighter-live-action-h3",
+        )
+        shot = plan["shots"][0]
+        self.assertEqual(shot["movement_speed"], "Very fast")
+        self.assertEqual(shot["movement_amplitude"], "Large")
+        self.assertIn("physical FPV clockwise orbital translation", shot["camera_movement"])
+        self.assertNotIn("pull-back", shot["camera_movement"].casefold())
+        self.assertNotIn("zoom out", shot["camera_movement"].casefold())
+        self.assertIn("straight lead palm", shot["subject_action"])
+        self.assertNotIn("immediate full-speed attack", shot["subject_action"])
+        self.assertNotIn("walk", shot["subject_action"].casefold())
+        self.assertNotIn("slowly", shot["subject_action"].casefold())
+        self.assertIn("CONTINUOUS FPV COMBAT ORBIT:", shot["additional_direction"])
+        self.assertEqual(plan["markers"][0]["preset"], "Final Combat Resolve")
+        self.assertNotIn("Final Hold", [row["preset"] for row in plan["markers"]])
+        system = build_design_system_prompt({
+            "bound_h3_skills": {
+                "binding_mode": "default_plus_special",
+                "special": {"key": "street-fighter-live-action-h3"},
+            }
+        })
+        self.assertIn("STREET FIGHTER ENDING CONTRACT", system)
+        self.assertIn("Add a Final Combat Resolve marker", system)
+        self.assertIn("stable eye-level three-quarter composition", system)
+
+    def test_hong_kong_comic_normalization_keeps_drawn_sources_analysis_only(self):
+        media = [{
+            "media_id": "P1", "media_type": "image", "loaded": True,
+            "raw_analysis_summary": (
+                "BLIP · Overview: a printed Hong Kong comic panel with two fighters on a rocky mountain"
+            ),
+        }, {
+            "media_id": "P4", "media_type": "image", "loaded": True,
+            "local_path": "project/media/generated_references/old_market.png",
+            "recognition": "AI DESIGN GENERATED REFERENCE; Kowloon Walled City-style wet market with fish tanks",
+        }]
+        source = {
+            "title": "Comic source mapping",
+            "creative_brief": "Two named fighters collide on the source mountain.",
+            "global_visual_style": "Photoreal live-action conversion of the loaded panel.",
+            "overall_soundscape": "Wind, impact and rock debris.",
+            "non_diegetic_music": "N/A", "constraints": "Keep the source world.",
+            "duration_seconds": 5.0,
+            "shots": [{
+                "start_seconds": 0.0, "end_seconds": 5.0, "track": "V1",
+                "preset": "Collision", "framing": "Close-up", "camera_angle": "Side",
+                "camera_movement": "Track contact", "movement_speed": "Fast",
+                "movement_amplitude": "Medium",
+                "subject_action": "S1 drives a palm at S2; S2 redirects and counters.",
+                "environment_response": "Rock dust follows contact.",
+                "continuity_state": "S1 left; S2 right.", "optional_flourish": "",
+                "additional_direction": "Preserve the mountain.",
+            }],
+            "text_layers": [], "transitions": [], "markers": [],
+            "existing_media_uses": [{
+                "requirement_id": "model_wrongly_used_comic_as_h3",
+                "media_id": "P1", "media_type": "image", "usage": "h3_reference",
+                "reuse_policy": "whole_design", "start_seconds": 0.0,
+                "end_seconds": 5.0, "track": "V1",
+            }, {
+                "requirement_id": "legacy_market_plate",
+                "media_id": "P4", "media_type": "image", "usage": "h3_reference",
+                "reuse_policy": "whole_design", "start_seconds": 0.0,
+                "end_seconds": 5.0, "track": "V3",
+            }],
+            "media_requests": [{
+                "requirement_id": "live_action_collision",
+                "media_type": "image", "usage": "h3_reference",
+                "reuse_policy": "time_scoped", "start_seconds": 0.0,
+                "end_seconds": 5.0, "track": "V2",
+                "source_plate_media_id": "P1", "derived_from_media_id": "P1",
+                "source_plate_mode": "source_img2img", "source_image_denoise": 0.58,
+                "prompt": "Photoreal live-action frozen fist collision on the same rocky mountain.",
+            }],
+        }
+        plan = normalize_design_plan(
+            source, {"image": 9, "video": 3, "audio": 3},
+            existing_media=media,
+            special_skill_key="hong-kong-comic-fighter",
+            authored_requirement="Convert the current Hong Kong comic panels to live action.",
+        )
+        comic_use = next(row for row in plan["existing_media_uses"] if row["media_id"] == "P1")
+        self.assertEqual(comic_use["usage"], "analysis_only")
+        self.assertEqual(comic_use["reuse_policy"], "analysis_only")
+        self.assertFalse(comic_use["identity_anchor"])
+        self.assertIn("COMIC SOURCE ANALYSIS ONLY", comic_use["instruction"])
+        legacy_use = next(row for row in plan["existing_media_uses"] if row["media_id"] == "P4")
+        self.assertEqual(legacy_use["usage"], "analysis_only")
+        self.assertIn("LEGACY GENERATED VENUE EXCLUDED", legacy_use["instruction"])
+        self.assertEqual(plan["media_requests"][0]["source_plate_mode"], "source_img2img")
+        self.assertEqual(plan["reference_environment_fact_ledger"]["location"], "rocky mountain or cliff terrain")
+        self.assertNotIn("street_fighter_kowloon", str(plan))
+        self.assertEqual(plan["markers"][-1]["preset"], "Final Combat Resolve")
+
+    def test_ref2va_prompt_emits_two_exclusive_subject_definitions_for_fighters(self):
+        p1 = MediaAsset(
+            "137", "LoadImage", "image", "p1.png", "<Picture 1>",
+            reference_id="P1", end_seconds=15.0,
+            clip_prompt=(
+                "CAST IDENTITY LOCK: S1 is exclusively @P1. Use @P1 as S1's authoritative "
+                "face, hair, body, complete wardrobe, footwear and accessory reference."
+            ),
+        )
+        p2 = MediaAsset(
+            "139", "LoadImage", "image", "p2.png", "<Picture 2>",
+            reference_id="P2", end_seconds=15.0,
+            clip_prompt=(
+                "CAST IDENTITY LOCK: S2 is exclusively @P2. Use @P2 as S2's authoritative "
+                "face, hair, body, complete wardrobe, footwear and accessory reference."
+            ),
+        )
+        prompt = build_ref2va_prompt(
+            PromptSpec(
+                brief="S1 and S2 perform one close-range exchange.",
+                shots=["S1 parries S2 while both identities remain stable."],
+            ),
+            [p1, p2],
+            15.0,
+            self.profiles[DEFAULT_SKILL],
+            self.profiles["street-fighter-live-action-h3"],
+        )
+        self.assertIn("<Subject 1> is the fighter", prompt)
+        self.assertIn("come exclusively from <Picture 1>", prompt)
+        self.assertIn("<Subject 2> is the fighter", prompt)
+        self.assertIn("come exclusively from <Picture 2>", prompt)
+        self.assertIn("Never assign this identity to <Subject 2>", prompt)
+        self.assertIn("Never assign this identity to <Subject 1>", prompt)
+        self.assertIn("never swap or blend the assigned fighters", prompt)
+
+    def test_long_form_special_is_default_bound_and_batch_boundary_safe(self):
+        profile = self.profiles["long-form-h3-director"]
+        self.assertTrue(profile.special)
+        self.assertFalse(profile.standalone)
+        system = profile_system_prompt(self.profiles[DEFAULT_SKILL], profile)
+        self.assertIn("DEFAULT H3 SKILL", system)
+        self.assertIn("SPECIAL SCENE SKILL (long-form-h3-director)", system)
+        for phrase in (
+            "Plan Approval Horizons",
+            "24 frames at 24 fps",
+            "Incoming and Outgoing State",
+            "never repeat, recap or re-perform",
+            "exactly one Final Hold",
+            "Segment-scoped media use",
+            "one schema-valid Director Design JSON",
+        ):
+            self.assertIn(phrase, system)
+
+    def test_long_form_special_has_chinese_mirror(self):
+        folder = self.profiles["long-form-h3-director"].path.parent
+        chinese = (folder / "SKILL.cn.md").read_text(encoding="utf-8-sig")
+        for phrase in (
+            "长片 H3 导演",
+            "30 秒作为批准点",
+            "最后 24 帧",
+            "Incoming State",
+            "Outgoing State",
+            "逐字放进 `text_layers`",
+            "Final Hold 只存在于真正项目终点",
+        ):
+            self.assertIn(phrase, chinese)
 
     def test_wuxia_english_and_chinese_skills_share_asymmetry_guardrails(self):
         profile = self.profiles["wuxia-blade-film"]
@@ -212,7 +773,9 @@ class SkillEngineTests(unittest.TestCase):
             ["P1", "P2", "P3", "P4", "P5", "P6"],
         )
         self.assertEqual(plan["existing_media_uses"], [])
-        self.assertEqual(plan["design_warnings"], [])
+        self.assertTrue(
+            any("primary character identity anchor" in row for row in plan["design_warnings"])
+        )
         self.assertEqual(
             [row["time_seconds"] for row in plan["transitions"]],
             [15.0, 30.0],
@@ -235,7 +798,83 @@ class SkillEngineTests(unittest.TestCase):
         ]
         positions = [prompt.index(section) for section in sections]
         self.assertEqual(positions, sorted(positions))
+        self.assertIn("summary:\n[reference generation]", prompt)
         self.assertIn("[Shot 2] At 00:05.000", prompt)
+
+    def test_user_face_anchor_is_authoritative_and_support_picture_cannot_compete(self):
+        spec = PromptSpec(brief="The same child runs throughout.", shots=["She runs."])
+        face = MediaAsset(
+            "1", "LoadImage", "image", "child.png", "<Picture 1>",
+            "ref_images.ref_image_0", end_seconds=5.0,
+            clip_prompt=(
+                "Use this image as the strict identity anchor. Preserve the exact face throughout."
+            ),
+        )
+        support = MediaAsset(
+            "2", "LoadImage", "image", "track.png", "<Picture 2>",
+            "ref_images.ref_image_1", end_seconds=5.0,
+            clip_prompt=(
+                "PRIMARY RECURRING CHARACTER IDENTITY ANCHOR. Show one clear, unobstructed, "
+                "recognizable face with exact age range, facial structure, hair, skin tone, wardrobe "
+                "and owned props suitable for reuse through the full story. "
+                "SUPPORTING ENVIRONMENT OR ACTION-STATE REFERENCE ONLY. "
+                "Do not define a different prominent human face."
+            ),
+        )
+        prompt = build_ref2va_prompt(
+            spec, [face, support], 5.0, self.profiles[DEFAULT_SKILL]
+        )
+        self.assertIn(
+            "<Picture 1> is a reference image", prompt
+        )
+        self.assertIn(
+            "<Subject 1> is the recurring human character whose exact recognizable face identity",
+            prompt,
+        )
+        self.assertIn("come exclusively from <Picture 1>", prompt)
+        self.assertIn("<Picture 2> may provide environment, prop, body-pose", prompt)
+        self.assertIn("authoritative recurring face-identity source", prompt)
+        self.assertIn("must not redefine the recurring character's face identity", prompt)
+        self.assertIn("CHARACTER CONTINUITY CONTRACT", prompt)
+        self.assertIn("upper and lower wardrobe style/color", prompt)
+        self.assertIn("Expression, pose, arm/leg angles", prompt)
+        self.assertIn("Never invent an appearance reset", prompt)
+        self.assertNotIn("PRIMARY RECURRING CHARACTER IDENTITY ANCHOR", prompt)
+        self.assertIn("summary:\n[reference generation]", prompt)
+
+    def test_support_prompt_quoting_authority_cannot_steal_user_picture_identity(self):
+        spec = PromptSpec(brief="The same child runs throughout.", shots=["She runs."])
+        face = MediaAsset(
+            "1", "LoadImage", "image", "child.png", "<Picture 1>",
+            "ref_images.ref_image_0", end_seconds=5.0,
+            clip_prompt=(
+                "Use <Picture 1> as the authoritative identity reference. "
+                "Use <Picture 1> as the authoritative whole-design face identity anchor."
+            ),
+        )
+        support = MediaAsset(
+            "2", "LoadImage", "image", "pose.png", "<Picture 2>",
+            "ref_images.ref_image_1", end_seconds=5.0,
+            clip_prompt=(
+                "The authoritative recurring face identity is the user-supplied <Picture 1>. "
+                "SUPPORTING ENVIRONMENT OR ACTION-STATE REFERENCE ONLY."
+            ),
+        )
+        prompt = build_ref2va_prompt(
+            spec, [face, support], 5.0, self.profiles[DEFAULT_SKILL]
+        )
+        self.assertIn("come exclusively from <Picture 1>", prompt)
+        self.assertNotIn("come exclusively from <Picture 2>", prompt)
+        self.assertIn(
+            "<Picture 2> may provide environment, prop, body-pose or composition guidance",
+            prompt,
+        )
+        picture_2_retention = next(
+            line for line in prompt.splitlines()
+            if line.startswith("<Picture 2> (active from")
+        )
+        self.assertIn("does not redefine", picture_2_retention)
+        self.assertNotIn("authoritative recurring face-identity source", picture_2_retention)
 
     def test_repeated_timeline_uses_share_one_h3_tag_and_keep_both_ranges(self):
         spec = PromptSpec(brief="A subject returns later in the story.")
@@ -513,6 +1152,41 @@ class SkillEngineTests(unittest.TestCase):
         self.assertIn("<Audio 1> is the enabled synchronized soundtrack", prompt)
         self.assertIn("<Audio 1>: fully_copy", prompt)
         self.assertIn("<Audio 2>: fully_copy", prompt)
+
+    def test_native_acoustic_reference_does_not_copy_words_or_voice_identity(self):
+        video = MediaAsset(
+            "20", "LoadVideo", "video", "location.mp4", "<Video 1>",
+            "ref_videos.ref_video_0",
+            paired_audio_binding="ref_video_audios.ref_video_audio_0",
+            start_seconds=0.0, end_seconds=5.0,
+        )
+        audio = MediaAsset(
+            "30", "LoadAudio", "audio", "room-tone.wav", "<Audio 2>",
+            "ref_audios.ref_audio_1", start_seconds=0.0, end_seconds=5.0,
+        )
+        spec = PromptSpec(
+            brief="A conversation in the referenced location.",
+            native_audio_ranges=[{
+                "cue_id": "S1",
+                "start_seconds": 0.0,
+                "end_seconds": 5.0,
+                "native_audio_direction": "Generate diegetic location sound.",
+                "environment_continuity": "Establish this room from frame one.",
+                "audio_reference_intent": (
+                    "Active acoustic references: <Video 1>, <Audio 2>. Use active real-world "
+                    "Audio or Video reference sound only to infer spatial acoustics."
+                ),
+            }],
+        )
+        prompt = build_ref2va_prompt(
+            spec, [video, audio], 5.0, self.profiles[DEFAULT_SKILL]
+        )
+        self.assertIn("reference generation + acoustic reference", prompt)
+        self.assertIn("<Audio 1>: acoustic_reference_only", prompt)
+        self.assertIn("<Audio 2>: acoustic_reference_only", prompt)
+        self.assertIn("Never copy its dialogue or voice identity", prompt)
+        self.assertNotIn("<Audio 1>: fully_copy", prompt)
+        self.assertNotIn("<Audio 2>: fully_copy", prompt)
 
     def test_fresh_semantic_enrichment_reaches_h3_prompt_but_stale_does_not(self):
         asset = MediaAsset(

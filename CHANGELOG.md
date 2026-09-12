@@ -2,6 +2,1043 @@
 
 Every user-visible correction receives an application version and a dated entry in this file. Application versions follow Semantic Versioning pre-release notation. The `.h3director.json` project-format version is maintained separately and changes only when the saved schema changes.
 
+## [0.3.2-alpha.7] - 2026-09-09
+
+### Independent overlapping speech layers
+
+- Added an editable `Overlap Policy` to every Dialogue, Voice-over and Lyrics Text Layer. `AUTO` preserves authored timing and routes a collision to another same-role track; `OVERLAP` explicitly authorizes simultaneous performances; `SEQUENTIAL` moves the later line after earlier speech without shortening either line.
+- Added automatic role-specific speech lanes: `D1 / D2...`, `VO1 / VO2...` and `L1 / L2...`. A one-second performance-tail guard also separates immediately adjacent lines, preventing the previous H3 delivery from hiding or cutting the next cue.
+- Kept each authored line as an independent editable Text Layer with its own role, speaker, language, delivery, timing, Shot binding, track and overlap policy. Automatic routing never merges, rewrites or truncates authored text.
+- Reworked speech-aware Segment boundaries around overlapping speech groups. A later Speaker start can no longer split an earlier line while both are audible; one H3 Job receives the complete authorized overlap and its exact Timeline windows.
+- Added `AUTHORIZED SPEECH OVERLAPS` and track/layer identity to the actual MiniMax H3 prompt. H3 is told to preserve the simultaneous performances while prohibiting merged, reordered, duplicated, translated or invented dialogue.
+- Applied the new behavior to Design-created layers, Type Tool editing, Timeline tooltips, save/load, TTS job metadata and prompt reconciliation. Old Projects that do not contain `overlap_policy` load as `AUTO` and are normalized in memory before the next save.
+
+### Reusable 60-second cinematic story adaptation
+
+- Added the Default-bound `cinematic-story-60s-director` Special Skill with English and Chinese production instructions plus an auto-filled `DESIGN_REQUIREMENT.txt` template.
+- The Skill treats pasted prose as adaptation material, extracts its causal conflict and ending, targets eight to twelve Shots around 60 seconds, generates concise Mandarin Dialogue and Voice-over as independent protected Text Layers, and leaves room for visual action, ambience, Foley and Final Hold.
+- Explicit Media Pool references remain the highest visual evidence. Missing identity or scene facts may be designed from the current story without inventing `@P/@V/@A` IDs or generating one reference image for every Shot.
+- Speech is compressed before the Timeline is extended; if further compression would damage natural delivery or the central reversal, the owning Shot and all downstream ranges extend together so no speech-only Segment is created.
+
+### Beat-synchronized 19-second character entrance
+
+- Added the Default-bound `beat-synced-entrance-18s` Special Skill with English/Chinese instructions and an auto-filled Design Requirement requiring P1, P2, P3, P4 and A1.
+- Corrected the reusable grammar to five causally connected beats: P1 walks around a real corridor corner and meets P2; P2 continues around a second corner and meets P3; an eyeline cut returns to P1, who physically exits to campus and completes an architectural wipe before P4 appears.
+- Added a deterministic Design normalizer for this Skill so stale or contradictory model output cannot silently turn P3 into architecture, omit P3, keep fashion-model faces turned away, leak identities across beats, request a redundant corridor image, or describe slow camera movement as final-scene slow motion.
+- Passing models now turn naturally toward the lens for a short readable interval. During the campus bridge, the camera faces P1 from outside: P1 crosses the threshold with both eyes readable, shows an unmistakable surprised expression, and only then completes the architectural wipe.
+- Added physical per-Segment audio source windowing for ordinary Timeline references. A later H3 Segment now uploads the matching A1 source slice instead of the complete file from source zero, preventing the reproduced 13-second music restart while preserving H3-native ambience and Foley.
+- Bumped the internal Smart Render policy to invalidate previously cached Segments built with the restarted-audio behavior; no application version or project-format migration is required.
+- Reworked the opening corridor extras as slow, readable activity performers instead of fast passers. Models now use locker/book handling, conversation, shoulder contact, watch checks and side-stepping, while holding a frontal or three-quarter face toward the lens for 1.0–1.5 seconds.
+- Replaced the earlier full-scene P4 reset after reviewing `a_cartoon_character_with_headphones_on_5`. Design now creates exactly one P5 Z-Image school-exterior environment-population plate (or reuses a loaded P5), containing the campus exit, road, bus-stop zone and varied dismissal-time background activity.
+- Added source-isolated P4+P5 compositing instructions. P5 owns architecture, ground plane, daylight, camera axis and background school-life people; P4 owns only foreground subject identity, appearance, count and arrangement. P4's original background is discarded, and its subjects are relit and grounded into P5 with coherent scale, perspective, foot contact, shared shadows, colour temperature and atmospheric depth.
+- Restricted the bridge's final 24 silent frames to architectural-wipe timing and camera-motion continuity. They no longer own or synthesize the final campus environment, preventing the former corridor background from leaking into the P4 reveal.
+- Fixed the missing 12.00–14.00-second causal bridge found in `a_cartoon_character_with_headphones_on_4`. Although the Timeline contained the P1 corridor-exit Shot, the former combined H3 request spent its action budget on the character encounters and omitted the two-second transition.
+- The entrance Skill now compiles exactly three Render Segments: 0.00–12.00, 12.00–14.00 and 14.00–19.00 seconds. The middle Segment hard-resets to P1, starts with P1 already crossing the exit, visibly establishes P5's outdoor campus, rounds the adjacent corner and ends only after a full architectural wipe. The final camera uses a very slow horizontal slide instead of FPV or orbit.
+- Removed the contradictory template rule that required the corridor to remain unchanged through Beat 4. Corridor continuity now ends after Beat 3; Beat 4 explicitly performs the indoor-to-outdoor change.
+- Raised Smart Render policy to 22 so Segments cached under the former encounter, back-only campus exit, corridor-leaking P4 reset or policy-21 Motion-Reference-owned environment grammar are regenerated instead of being silently reused.
+
+### Compatibility and verification
+
+- Raised Director Project format from `23` to `24` for the persisted Text Layer overlap policy. The addition is backward compatible; no media, Take or approved Segment file is deleted during migration.
+- Verified two complete 169-test suites: Timeline/UI/save-load/render-state coverage and Design/Prompt/Segment/Standard Pipeline coverage. All four modified runtime modules also pass Python bytecode compilation.
+
+## [0.3.2-alpha.6] - 2026-09-08
+
+### Hong Kong Comic Fighter production grammar
+
+- Added `hong-kong-comic-fighter` as a reusable image-led Hong Kong manhua production profile. Loaded panels and explicit user mappings own character, costume, location, weather, palette and material facts; filenames and Skill examples cannot silently replace the current source world.
+- Added comic-to-live-action source-plate rules: original printed pages remain analysis-only, while the minimum required photoreal identity and action-state keyframes use traceable source-image derivation instead of unconstrained text-to-image substitution.
+- Reworked short combat pacing around immediate superhero pressure arrival, full-speed causal exchanges and persistent world-scale force from the first active attack. Every Beat must expose load, attack line or grip, defence, contact or miss, force, displacement, source-grounded environment response and the next trigger.
+- Added action-triggered close moving-camera coverage, source-derived material/weather propagation, synchronized native technique sound, editable move-title/text layers and a stable causal final resolve. Fixed-market scenery, arbitrary spectators, graphic energy rings, slow-motion padding and non-causal background explosions are prohibited unless the current source or user explicitly requires them.
+- Added a reusable universal Design Requirement and a complete 27-line narration/dialogue production script for the current Hong Kong comic workflow.
+
+### Timeline Voice-over language control
+
+- Added an editable `Language` field to every Timeline Voice-over layer. The selector includes Auto, Mandarin Chinese, Cantonese, Malay and the stable H3 dialogue-language set; custom values remain editable for forward compatibility.
+- Persisted the selected language through Director Project save/load and passed it unchanged into H3 text ranges and the selected TTS job. Voice-over clips now expose their active language in the Timeline tooltip.
+- Editing a Voice-over language no longer resets its hidden Speaker, Delivery or Shot binding. Lip synchronization remains Dialogue-only, while Lyrics also gain the same per-layer language control.
+- Added regressions for Voice-over field visibility, value preservation, old-project restoration and H3 prompt/TTS data flow. The full 168-test Timeline suite passes.
+
+### Compatibility
+
+- Kept Director Project format at `23` because the persisted `language` field already existed in the schema; old projects therefore require no migration and retain their previous language/default behavior.
+
+## [0.3.2-alpha.5] - 2026-09-06
+
+### High-density Combat Action Continuity
+
+- Added the structured v2 combat ledger: authority-ranked P1/P2 facts with BLIP/AI Enrich provenance, five duty labels per 15-second window, strict physical action-carrier routing, action-triggered FPV camera directions and screen-space force vectors. The new fields are additive and remain compatible with existing Director Project files.
+- Material responses now consume the force vector and a material response table (water, ice, plastic, metal, hanging hardware, tank frames and carts), so splash, skid, dent, swing and roll directions follow the visible contact instead of a generic round-robin effect.
+
+- Fused the useful causal/state ideas from the reviewed high-density fight reference into the existing Studio JSON workflow without importing its unrelated BUNNY wrapper, dual-format output, weapon/creature/giant routing or third-party platform contracts.
+- Added a Street-Fighter-only Combat Action Continuity engine. Each Shot now carries two numbered executable Beats plus editable Combat Action Chain, Incoming Combat State, Outgoing Combat State and Next Action Trigger data; clear self-defence actor errors are corrected, while repeated exchanges and unexplained ground-position reversals are flagged.
+- Standardized the proven 45-second baseline at six executable action Shots per 15-second Segment: 18 Shots and 36 non-repeating Beats. Dialogue may still extend the final Timeline, but combat timing and the indoor-to-outdoor threshold remain anchored to the authored 45.00-second baseline.
+- Added red `ACTION RISK` visibility in Timeline and Storyboard, along with full Combat state editing in the Shot inspector. Storyboard reorder/trim reruns Combat state before Environmental state in the same Undoable transaction.
+- Compacted actual H3 Segment prompts so FPV, P1/P2, market and causality invariants appear once at Segment level; Shot descriptions retain only executable action and local state deltas. Timeline source text remains intact and editable.
+- Improved environment-target causality: authored stall, gate, tank, ice, crate, scale, puddle, awning, cart or bin contact now overrides round-robin prop selection. A dialogue extension no longer shifts the 30.0-second market-gate transition.
+- Raised Director Project format to `23` for persisted Combat Action Continuity fields. Older projects load with safe defaults and can acquire the new state through a fresh Design Apply or Street-Fighter Storyboard Apply.
+- Verified the completed integration with 508/508 bundled tests and all 13 Standard Pipeline Release Gates, including Storyboard/Segment Mapping and project save/reload coverage.
+
+### Environmental Combat Physics
+
+- Added a deterministic, Timeline-owned environment state engine for `street-fighter-live-action-h3`. Each Shot now carries an editable cause/contact record, one primary response, at most one secondary response, delayed perimeter-crowd reaction, incoming state, outgoing state and location transition.
+- Assigned stable environment object IDs and persistent damage/displacement history. Missing contact produces a warning instead of spontaneous destruction; critical collapse and unrelated explosions are never authored automatically.
+- Compiled the structured environment fields into every real H3 Segment prompt, in addition to the existing visual action and continuity text. User-edited environment fields are protected from later automatic reconciliation.
+- Added Timeline warning/transition colours, Storyboard interaction/crowd/route badges and a scrollable Shot editor for the new fields. Storyboard and Smart Cut Apply recalculate the chronological state chain inside their existing single Undo transaction.
+
+### Indoor-to-outdoor combat continuity
+
+- Reworked the 45-second Street Fighter route into one connected Hong Kong Kowloon-style wet market: indoor seafood aisle, fish/vegetable junction, loading threshold, then the rainy exterior service alley beyond the same visibly forced-open gate.
+- Time-isolated Z-Image into one indoor environment/spectator plate for the first two thirds and one matching exterior plate for the final third. P1 and P2 remain the only principal fighter identity anchors; each Segment receives only its currently relevant background plate.
+- Added distinct H3-native acoustic profiles for the cramped indoor market and open rainy alley, including a doorway transition from pumps, drainage and short stall reflections into rain, traffic and reduced enclosure. No TTS replacement, FFmpeg reverb or post-generated remix was added.
+- Updated the English/Chinese Skill and its editable `DESIGN_REQUIREMENT.txt` with causal object/crowd response, persistent state and active-combat route rules.
+
+### Compatibility and cache safety
+
+- Raised Director Project format to `22` for persisted environmental fields at the original alpha.5 checkpoint; the later Combat Action Continuity addition above advances the current format to `23`. Older Projects load with dataclass defaults, while unknown future Director Cue metadata is safely ignored instead of causing an `unexpected keyword argument` load failure.
+- Kept Smart Render policy at `16`: the new environment fields are part of the per-Segment prompt fingerprint, so affected Street Fighter Segments invalidate precisely without discarding reusable cache from unrelated projects or Skills.
+- Added focused environment-engine, native-acoustic, real-H3-prompt and Storyboard/Undo regressions. The original checkpoint passed 493/493 bundled tests; the current Combat Action Continuity checkpoint passes 508/508 bundled tests, 13/13 Standard Pipeline Release Gates and the UTF-8 Skill Creator validator. Full acceptance evidence is tracked in `V0.3.2-ALPHA.5_ENVIRONMENTAL_COMBAT_ACCEPTANCE_CHECKLIST.md`.
+
+## [0.3.2-alpha.4] - 2026-09-05
+
+### Global Design duration safety and image-generation regression release
+
+- Applied the duration-range disambiguation globally to Design with no Special Skill and to every Special Skill, so camera angles, pixel ranges, percentages, frame counts and image dimensions cannot inflate the authored video duration or trigger runaway Picture generation.
+- Preserved the existing reference-planning policy: ordinary Design remains story-, dialogue- and Shot-aware with an approximate five-second fallback coverage floor; only the two Drone Skills enforce an exact P1-derived five-second Picture chain.
+- Kept the Virtual Media Pool unlimited at project scope. The physical 9 Image / 3 Video / 3 Audio limits remain Segment-local and are assigned dynamically during workflow compilation.
+- Fixed the equivalent Segment prompt-scoping collision: bracketed camera degrees, pixel ranges, percentages and frame counts now remain visual instructions instead of being rebased or deleted as if they were Timeline ranges.
+- Added this release checkpoint for focused Design-to-Timeline, Storyboard, Segment reference mapping, Workflow loader and Drone P1/P2/P3+ regression verification.
+
+### Transactional post-Apply RAM/VRAM cleanup
+
+- Moved Design cleanup behind the durable `APPLY TO H3 WORKSPACE` commit. The Design dialog now queues cleanup intent; Timeline, Mapping and Workspace persistence finish before any model is unloaded.
+- Added local Python garbage collection plus ComfyUI `/free` with `unload_models=true` and `free_memory=true`, followed by a deferred Qt-side collection pass. LM Studio unload remains limited to an actually loaded matching instance.
+- A failed Apply cancels its queued cleanup. Cleanup warnings never roll back a successful Apply, and temporary cleanup job files are removed after completion or worker-start failure.
+- Added regression coverage proving cleanup remains idle while queued, starts only after the success gate and is discarded after a simulated Apply failure.
+- Added a homepage `UNLOAD ALL` control beside `STORAGE` for safe manual Studio DRAM/cache cleanup, ComfyUI model/VRAM release, and unloading every LM Studio model instance actually reported as loaded.
+
+### Sequential ground-launch / orbit / route FPV mission
+
+- Updated both `drone-fly-on-city` profiles so the executable H3 camera instruction uses three ordered phases: near-ground P1 takeoff, one translated 360-degree orbit around P1's primary scene subject, then verified P2 route travel to its endpoint. Orbit and route movement are no longer issued simultaneously.
+- Replaced the ambiguous orbit sentence with a physical flight contract: one complete, smooth, wide clockwise lap at a constant safe radius, advancing through front, right, rear, left and front positional checkpoints while background parallax proves translation.
+- Removed the subject-centred look-at instruction that still made the camera appear to rotate around the landmark. The rigid FPV camera now follows the drone nose and instantaneous flight tangent; it cannot independently yaw, pan or gimbal-lock toward the landmark, which moves naturally along the inside frame edge and may pass behind the camera.
+- Explicitly rejected in-place camera rotation, panoramic yaw, optical spin, barrel roll and rotating-background interpretations during the orbit. The orbit permits moderate coordinated banking only; dives, inversion and up to 180-degree rolls are delayed until the later verified-route or FPV-fallback phase.
+- Expanded the 12-second orbit budget from the former 3.5 seconds to 7 seconds (0–2 launch, 2–9 orbit, 9–12 route) and added a hard phase-completion gate. The 15-second fireworks template uses 0–2, 2–10 and 10–15 seconds.
+- Restored the executable Scene Keyframe Chain marker so Drone renders split at each five-second boundary. Each interval now uses only its exclusive current P1-derived scene state instead of loading P1 plus P3/P4/P5 together, preventing Ref2VA from multiplying one landmark reference into repeated buildings.
+- Added a single-scene-instance contract and duplicate-building negative conditioning. A paired landmark such as twin towers is preserved exactly once, never as a second pair, mirrored clone or repeated landmark.
+- Replaced the old unverified-route camera hold. A failed P2 analysis now keeps the takeoff and orbit, then uses a bounded collision-safe FPV fallback: ground skim, left climbing arc, brief inverted dive, right counter-roll, figure-eight crossover and level exit. It never claims an unreadable P2 endpoint.
+- Changed P3 into the P1-derived near-ground takeoff anchor while retaining the exact five-second P1 scene-chain budget, P2 analysis-only isolation and ordinary/fireworks visual continuity contracts.
+- Updated English/Chinese Skills and both automatic Design Requirement templates, plus executable-plan regressions for phase order, verified endpoint travel, fallback behavior and repeated normalization.
+
+## [0.3.2-alpha.3] - 2026-09-03
+
+### Design duration range disambiguation and mass-image guard — 2026-09-05
+
+- Fixed a duration-parser collision where camera angles such as `0-360 degrees` were accepted as a 360-second Timeline range. The 12-second `drone-fly-on-city` template consequently scheduled 72 five-second references (P3-P74).
+- Direct authored duration declarations now outrank later Skill examples and Timeline ranges. The ordinary Drone template resolves to 12 seconds and the Fireworks template to 15 seconds even though their documentation also mentions 35-second allocation examples.
+- Time-range recognition now excludes degrees, pixels, percentages, FPS, frame counts and ordinary numeric dimensions while retaining bracketed timecodes, `HH:MM:SS`, `0-5s` and `0-5秒` speech/Shot ranges.
+- Added a pre-generation Drone budget gate. Before any Z-Image request starts, the Plan must contain P1 as `h3_reference`, P2 as `analysis_only`, and exactly one uniquely timed P1-derived Picture per five-second interval. A malformed Plan remains editable but cannot launch mass generation.
+- Added regression coverage for both Drone Skills, erroneous 360-second model output, P3-P5 allocation, non-time numeric ranges, missing P2 and a simulated 72-request Plan.
+
+### Remote ComfyUI prompt-ID reconnect recovery — 2026-09-05
+
+- Separated client transport loss from server generation failure. After ComfyUI accepts a prompt, native and Smart Render workers keep polling the same `prompt_id` for up to the configurable recovery window instead of posting duplicate work.
+- Checkpointed accepted native prompts in the Job JSON and active Smart Render Segments in the project-scoped Manifest immediately after `/prompt` succeeds. A resumed worker reuses that persisted server Job when its server and Segment fingerprint still match.
+- Added orange reconnecting Timeline status, live disconnect/reconnect progress messages and the `Connection recovery window` setting (`H3_CONNECTION_RECOVERY_TIMEOUT`, default 3600 seconds).
+- Made output retrieval reconnect-safe with temporary `.part` files and atomic publication. A broken transfer retries the same ComfyUI output and cannot replace a valid MP4 with a partial file.
+- Added regression tests for history polling across LAN failure, interrupted downloads, prompt checkpoint/restart recovery and the no-duplicate-queue guarantee.
+
+### Route-controlled 360° drone scene chain — 2026-09-05
+
+- Replaced the fixed seven-reference allocation with a five-second scene chain: P3 is the 0–5 second P1-derived opening anchor, P4 starts at 5 seconds, and later Pictures continue every five seconds without a P9 cap. A 35-second mission uses P3–P9; a 45-second mission reaches P11.
+- Fixed the inverted orbit gate that disabled an explicit 360-degree request whenever P2 was loaded. A 360 mission now requires both an affirmative user request and a locally verified P2 start/direction/end; each Shot receives its proportional 0–360-degree phase plus the actual overlapping P2 path legs.
+- Strengthened every generated Picture prompt to preserve P1's primary building, scene and composition, roads, sky, weather, colour palette, colour temperature, exposure, atmosphere and lens. P3 uses lower denoise than later scene states.
+- Kept camera-motion language out of static Picture prompts and keywords, so the route-controlled orbit remains an H3 video instruction and cannot prime Z-Image to draw a glowing path or ring.
+- Updated the ordinary and fireworks Skills, Chinese counterparts and Design Requirement templates, plus regression coverage for 35-second P3–P9 allocation, route-controlled orbit phases, P1 pixel binding and Segment Mapping.
+
+### Withdraw automatic drone end-plate replacement — 2026-09-05
+
+- At the user's request after visual review, removed automatic P1 terminal-image requests, the reserved last-second range, and the native-render/master-assembly calls that overwrote the ending with a still plate.
+- Old `final_hold_*` render-job metadata no longer triggers output replacement. Legacy automatically marked immutable P1 tail assets are excluded from Timeline/render reference selection, while their Media Pool entries and files remain available.
+- Both drone Skills and Design Requirement templates now direct a natural H3-generated ending, not a forced P1 return, local fireworks composite or one-second image freeze. The earlier immutable-tail entries below describe withdrawn behavior, not the current pipeline.
+- Reference review used `generated_output_6.mp4` (12.256 s): low-to-high camera travel, shifting parallax and evolving fireworks are the visual target; automated test success is not a substitute for real-video acceptance.
+
+### Drone pixel conditioning and route verification — 2026-09-05 correction
+
+- Fixed a real data-flow gap: P3–P9 previously used only BLIP/AI text. They now upload the locally bound P1 image and connect `LoadImage → ImageScale → VAEEncode → KSampler` with low denoise. Missing P1 never silently falls back to text-to-image; scene backgrounds are not removed. Stage references retain source composition and are not claimed to reconstruct unseen camera views or preserve pixels exactly.
+- Removed orbit/ring/trajectory vocabulary from positive still prompts (including Chinese), keeping exclusions in the dedicated negative field. P2 remains analysis-only and is never uploaded as a scene image. Existing contaminated images must be regenerated; artifacts already in P1 require a clean source.
+- Added green-start/blue-end direction verification, bend-preserving path simplification and all-leg Shot motion clauses. Unreadable, ambiguous, branched or unmarked routes produce `ROUTE NEEDS REVIEW` and a camera hold, not an invented orbit. A loop needs a small gap and separate endpoint markers. Map Y no longer implies altitude.
+- Updated both drone Skills and Design Requirement templates with the supported drawing convention and fidelity limits. The previous caption-only/new-view and automatic closed-loop claims below are superseded by this correction. Pixel-derived reference conditioning and prompt routing still require real render acceptance; unit tests are not video-quality certification.
+- Added `test_drone_reference_pipeline.py` covering actual sampler source wiring, upload identity, background preservation, absent-source safety, route direction/bends, ambiguous-route handling and multilingual positive/negative isolation.
+
+### P1/P2 drone route authority correction
+
+- Replaced the example-biased drone plan with a deterministic P1/P2 contract: P1 remains the sole full-duration scene master, while P2 is locally analysed as non-visual red-path control data and never becomes an H3 or Z-Image Loader.
+- Added local red-stroke skeleton extraction and ordered camera-stage language. Open, S-shaped and point-to-point paths retain visible translation and are no longer converted into a default 360-degree orbit; an orbit is allowed only for a closed P2 path or an explicit user request.
+- Added seven time-scoped P1-derived route-stage references, normally P3-P9. Their prompts use only P1 BLIP/AI evidence and forbid example locations from replacing P1; Segment jobs retain P1 plus only the relevant stage reference.
+- Removed the fixed Kuala Lumpur/Petronas example from the fireworks Design Requirement and generalized both English/Chinese Skills and Clean Frame contracts to any P1 scene.
+
+### Drone still-reference orbit-ring isolation
+
+- Split camera-motion planning from Z-Image still composition for `drone-fly-on-city`. Sentences and subject keywords describing a 360-degree orbit, orbital yaw, route or trajectory are removed from generated still-reference requests while the real H3 video Shot keeps its intended orbit movement.
+- Added a mandatory clean-frame contract stating that the drone path is implied only through camera motion, plus a request-scoped Z-Image negative prompt covering visible flight paths, orbit rings, circular light trails, glowing ellipses, HUD graphics and neon loops.
+- The active Z-Image ComfyUI template now receives request-specific negative conditioning instead of silently ignoring it. Right-click Z-Image regeneration applies the same protection to old drone reference Pictures without changing their stable `P` mapping.
+
+### Drone city-fireworks Special Skill
+
+- Added `drone-fly-on-city-fireworks`, a Default-bound night-city aerial celebration Skill that combines the proven P1 scene-master/P2 analysis-only route contract with one physically plausible 360-degree landmark orbit.
+- Added a per-Shot fireworks continuity ledger covering launch and burst position, gold/white/deep-red particle phase, smoke drift, façade/wet-street reflections, exposure response and distance-delayed native firework sound.
+- Added fireworks-aware Z-Image still isolation. Static references retain discrete chrysanthemum bursts and smoke while camera-orbit clauses are removed; an additional request-scoped negative contract rejects continuous firework rings, tower-wrapping effects, fused landmarks and solid neon fireworks.
+- Added English/Chinese Skill instructions, an editable 15-second Petronas Twin Towers Design Requirement template, common Scene Keyframe Chain support and regression coverage for Design normalization, H3 motion retention and right-click Z-Image regeneration.
+- Replaced the generative terminal-reference rule in both drone Skills with an immutable P1 Scene Plate contract. The ordinary Skill copies P1 without T2I reinterpretation; the fireworks Skill composites only discrete firework particles, thin smoke and physically plausible illumination over the unchanged P1 pixels.
+- Both single-scene and multi-scene plans now reserve one terminal range, return the moving camera to P1's exact composition, and mark the final plate with explicit `source_plate_*` metadata. Local P1 paths are bound only after planning and are removed from the LM context.
+- Preview, native renders and Smart Long Render masters now enforce the last one-second freeze during local FFmpeg output assembly while stream-copying the original audio. Partial ranges ending before the terminal plate are not modified.
+
+### Live-action arcade fighter Special Skill
+
+- Added `street-fighter-live-action-h3`, a Default-bound Special Skill for 15-45 second live-action arcade martial-arts film scenes. It distils the supplied 2026 trailer reference into reusable original production grammar rather than copying its edit: two readable fighters, grounded live-action materials, bold tournament staging and selectively heightened signature attacks.
+- Added a deterministic seven-Shot, 12-Beat close-combat structure per 15 seconds: one eye-level establishing Wide capped at 1.0 second followed by six Close-up/Extreme close-up action Shots carrying two beats each. A 30-second design uses two continuous, non-repeating 12-Beat Segments and a stable two-fighter identity/style/ability ledger.
+- Added move-specific execution rules for compact palm projectiles, rotating kicks, forward rolling attacks, close electric strikes and rapid hand strikes, with physically motivated light, Foley and post-contact environment response.
+- Added English/Chinese Skill instructions, an editable 15-second Design Requirement template and regression coverage for profile loading, binding, action budgeting, Segment continuity, visible-text control and Virtual Media Pool mapping.
+- Added fixed Karate, Judo, Jeet Kune Do and Wing Chun attack/defence reversals, contact-driven water splashes, sourced smoke, grounded cyberpunk practical lighting and an explicit ban on stage spotlights.
+- Added an optional MMA ground-game branch inside the same 12-Beat budget: visible level change and single/double-leg capture, controlled takedown, locked top/bottom control, a maximum two-contact ground-and-pound burst, controlled submission, visible tap and immediate release. Ground-state continuity now records top/bottom identity, head direction, screen side, grip ownership and simple leg position across cuts.
+- Extended the Skill to 45 seconds using three connected native Segments, 21 Shots and a 36-entry global Action Ledger. Duplicate technique/target/outcome combinations must be rewritten rather than disguised through a new camera angle or visual effect.
+- Replaced generic gloves with locked open-finger MMA glove geometry: visible separate fingers for grappling, compact padded knuckles, rounded streamlined shell, secured wrist wrap and persistent wet grime along the lower cuff.
+- Added a reference-derived fictional sealed industrial vertical-maze environment across a lower service corridor, flooded utility landing and upper maintenance catwalk. Per-Shot environment state now preserves gates, cable/pipe landmarks, wet patches, mould/rust, IES-profiled practical lights, alarms, steam sources and contact-displaced debris while allowing one causal environment change per Shot.
+
+## [0.3.2-alpha.2] - 2026-09-03
+
+### Dark rescue camera-mode repair
+
+- Repaired the invalid mixed-case `dark-rescue-h3-no-POV` folder as the creator-valid `dark-rescue-h3-no-pov` profile and separated its behavior from the first-person Skill. The no-POV version now explicitly uses an external cinematic observer camera with a visible rescuer instead of accidentally inheriting rescuer-eye instructions.
+- Strengthened `dark-rescue-h3` with positive in-frame POV evidence distilled from the five supplied production references: near-lens glove/forearm/tool/helmet anchors, eye-height geometry, body-motivated parallax, victim-to-eye-line interaction and reachable exterior/Final Hold viewpoints.
+- Added deterministic Design normalization for `dark-rescue-h3`. Every Shot's framing, angle, movement, executable action, continuity and additional direction now carries the physical S2 eye-line contract; generated image references receive the same perspective proof and external-camera language is neutralized before H3 compilation.
+- Updated both English/Chinese Skill files and their distinct Design Requirement templates, plus regression coverage proving the first-person and no-POV profiles cannot collapse into the same camera mode.
+
+### Drone scene keyframe chain
+
+- Added an ordered user-authored scene chain for `drone-fly-on-city`: P1 and later selected P3/P4/P5 Pictures now own disjoint Timeline ranges instead of being loaded together for the complete clip. A future Picture can no longer alter the earlier P1 scene.
+- Added exactly one environment-only automatic terminal keyframe after the latest user scene. It has no forced Picture number, so the Virtual Media Pool assigns the next truly empty slot automatically: P4 after P1/P2/P3, or P6 after P1-P5.
+- Each keyframe interval is compiled as an independent native H3 Job even inside a 12-second work area. Only the preceding final 24 silent video frames cross the boundary as motion context; future Pictures and previous audio never cross it.
+- Replaced automatic terminal Pictures remain inactive history. If the user manually replaces one with a local image, stale generated-reference analysis is cleared and the new image becomes an authored scene anchor.
+- Updated the English/Chinese Skill and `DESIGN_REQUIREMENT.txt` with the new keyframe ownership, terminal-frame and continuity contracts.
+
+### Analysis-only route controls
+
+- Added a real `analysis_only` Media Pool usage for planning maps, route drawings, masks and other control images. The compatibility alias `route_control_analysis_only` is accepted and normalized automatically.
+- Analysis-only sources remain available to Design intelligence but are never placed on the Timeline, counted against per-Segment H3 capacity, uploaded to ComfyUI/MiniMax, treated as identity anchors or assigned an H3 Picture slot. Reapplying a Design also removes a control image that an older build mistakenly placed on a V track.
+- Removed analysis-only `@P/@V/@A` labels from every H3-renderable Shot, cue and creative field, replacing them with the already extracted abstract control instruction so reference-token parsing cannot reactivate the source.
+- Updated `drone-fly-on-city` in English, Chinese and its Design Requirement template. The former long negative-prompt catalogue repeated route-artifact vocabulary inside H3's single prompt and could visually prime the model; it is now replaced by a positive clean-frame/off-screen-control contract.
+- Fixed a second prompt-priming path found during real-output acceptance: Special Skill frontmatter descriptions are discovery metadata and are no longer copied verbatim into the H3 render prompt. Control-only Skills also scrub legacy route-graphic vocabulary from loaded older Projects at final prompt compilation.
+- Extended analysis-only isolation to generated-reference prompts and subject keywords, preventing a Z-Image continuation reference from inheriting control-image labels or visual annotation vocabulary.
+- Reject incorrect `identity_anchor=true` metadata on environment-only image requests. Pure skyline, room, prop and landscape references now receive an environment-only subject-count guard instead of generating an unrelated prominent person.
+- Added Design normalization and end-to-end workflow regressions proving a loaded P2 route-control picture remains in the Media Pool while its filename, loader and pixels are absent from the compiled H3 job.
+
+### Design JSON completion reliability
+
+- Removed the hidden 12,000-token completion bottleneck that could truncate a valid 45-second Special Skill plan even when LM Studio had a 100k context window. Director Design now allows up to 32,768 output tokens for its schema response.
+- Added provider-neutral `finish_reason`, output-size and usage diagnostics so a completion stopped by `length` is distinguishable from a Design Requirement text-box problem.
+- Added one automatic compact full-plan recovery pass when Qwen returns malformed or truncated JSON. The first failure no longer immediately blocks Apply; a second failure reports its exact line, column, finish reason and output size.
+- Added a compact-output contract to every Design planning and BLIP-refinement prompt: required Shots, editable speech, continuity and media ranges are preserved while repeated prose and formatting overhead are removed.
+- Refinement JSON failure is non-destructive: the already validated first Design Plan is retained instead of being replaced by incomplete BLIP-refinement output.
+
+### Special Skill Design Requirement templates
+
+- Added optional per-Skill `DESIGN_REQUIREMENT.txt` starter templates. Selecting a Special Skill and opening `DESIGN` now fills an empty Design Requirement with that Skill's editable production example.
+- Existing authored Design Requirement text always has priority and is never overwritten. Skills without a template remain compatible and continue to open with an empty requirement.
+- Added a `DESIGN REQUIREMENT TEMPLATE` editor to `SPECIAL SKILL CREATOR`; templates are loaded and saved independently from `SKILL.md` and the optional `SKILL.cn.md`.
+- Added tailored templates for all 12 bundled Special Skills: 3D animation, brand promo, co-op game intro, dark rescue, hand-drawn/live-action fusion, long-form production, minimalist product advertising, music video, paper collage, papercraft stop-motion, short drama and wuxia blade film.
+- Added the new `dark-rescue-h3` Default-bound Special Skill, distilled from five user-tested first-person rescue structures and their proven environmental-lighting vocabulary. Its starter request demonstrates a fictional Wall Street-inspired damaged office tower without inventing unloaded Media Pool IDs.
+- Added a 45-second Tang-dynasty courtyard starter requirement to `wuxia-blade-film`, including executable action budgets, character/weapon/prop ledgers, native 15-second boundary contracts and non-magical physical combat constraints.
+- Increased the Studio Special Skill Creator description limit from 600 to 1,200 characters so every bundled Skill can be edited and saved without rejecting its existing metadata.
+
+### Verification and compatibility
+
+- Added regressions proving every bundled Special Skill has a non-empty editable template, all templates load through the Studio profile system, and `dark-rescue-h3` opens Design with the expected starter requirement under `Default + Special` binding.
+- All 38 focused Skill store, profile, creator compatibility and Design UI tests pass.
+- Project format remains `21`; Workspace layout, Timeline mapping, Segment compilation, render policy, saved Projects and generated media are unchanged.
+
+## [0.3.2-alpha.1] - 2026-09-01
+
+### MiniMax H3 native production sound
+
+- Added a three-state `MUSIC AUTO / OFF / TIMELINE` selector beside Design Requirement, defaulting to AUTO. AUTO sends Qwen's scene-aware score direction into every actual H3 segment prompt, OFF deterministically compiles `non_diegetic_music: N/A`, and TIMELINE enables music only for active Timeline Music Cues. The project-scoped policy persists through save/load and safely defaults old projects to AUTO.
+- Added per-Shot prompt-only `Native Audio Direction`, `Environment Continuity`, `Audio Reference Intent`, and `Native Audio QC status` fields. Auto-derived values survive Timeline/segment compilation, while user edits are protected from automatic refresh.
+- H3 Ref2VA prompts now time-align acoustic space, speaker-to-camera distance, screen position, natural speaking state, continuous ambience, picture-synchronous Foley and explicit diegetic-source rules with exact Dialogue Text Layers.
+- Prohibited narration/announcer tone, recording-booth close-mic sound, dry studio voice and extra dialogue. Background music now follows the explicit project policy: AUTO, OFF or TIMELINE-only.
+- Long renders preserve written acoustic continuity across same-space cuts, describe perspective changes for wide/close cuts, and declare interior/exterior acoustic transitions. The preceding 24-frame continuity clip is explicitly visual-only and never attaches paired audio.
+- Real-world Audio/Video assets marked as acoustic references guide space, room tone, distance and location texture only; their words and voice identity cannot replace Timeline Dialogue/Speaker assignments.
+- Reused the existing VAD/Whisper service for read-only Native Audio QC of expected dialogue, unauthorized speech and missing ambience. No repair, remix, filtering, TTS substitution or generated-audio rewrite was added.
+
+### Compatibility and verification
+
+- Project format is `21`; format 20 projects load with safe defaults for every new field. Smart Render policy is `16`, so cached segments built before the native-audio prompt contract are regenerated instead of silently reused.
+- Added native-audio unit, workflow-prompt, user-override, visual-only continuity and no-external-effects regressions. Mapping, long-segment scheduling and MP4 assembly behavior remain unchanged.
+
+## [0.3.2] - 2026-09-01
+
+### Qwen3-TTS Local
+
+- Added Qwen3-TTS Local as a fourth editable Dialogue Text Layer engine beside Ori, VoxCPM2 and Edge TTS. Design exposes a `Qwen` button and Settings exposes runtime/model health.
+- Integrated the official `qwen-tts 0.1.1` API with the resource-efficient `Qwen3-TTS-12Hz-0.6B-CustomVoice` model, deterministic Studio Speaker mapping, exact authored words and Timeline WAV rebuilding.
+- Isolated Qwen's pinned `transformers 4.57.3` / `accelerate 1.12.0` stack under `ai_libraries_common/qwen_tts_runtime` so the existing BLIP/Vox environment is not downgraded.
+- Added CUDA-first loading, same-line CPU retry after CUDA load/inference failure, and immediate VRAM/RAM release before FFmpeg Timeline composition.
+- Fixed the shared authored-TTS compositor so Edge, VoxCPM2 and Qwen WAV stems are padded to the exact Timeline duration instead of ending a fraction of a second early after the final line.
+- Added verified Windows SoX support, runtime/model readiness warnings, one-command runtime/model setup helpers and a cross-computer transfer procedure. Large model weights remain outside GitHub under `models/`.
+
+### Long Production Reliability
+
+- Promoted the 120-second Long Timeline pipeline to a formal reliability baseline: approved prefixes remain reusable, Segment-local rerenders replace only the affected Take, and Preview/Final masters assemble selectively.
+- Moved Smart Render jobs and worker manifests into each fixed Workspace under `project/render_jobs/`, using unique run tokens so two Projects or Studio instances cannot overwrite one another.
+- Added a source fingerprint to every ComfyUI media upload name. Two concurrent Projects may now use different files with the same logical ID and basename (for example `P1/shared.png`) without colliding in the server's shared input directory.
+- Added a bounded three-attempt Segment policy. CUDA out-of-memory, timeout, transport, media and unknown failures are classified; ComfyUI memory is released between retries, and the final failure class/retry budget is persisted without silently reducing quality.
+- Project Load now evaluates every canonical and worker checkpoint and prefers the checkpoint containing the most durable completed Segment Takes. A newer failed/empty manifest can no longer hide an older recoverable run.
+- Successful durable publication removes the large job file; interrupted or failed jobs remain available for diagnosis and resume.
+- Storyboard and Smart Cut structural edits now detach the obsolete assembled Master while retaining reusable Segment checkpoints. Changed Shots dirty both their previous and remapped ranges; unchanged prefix Segments remain eligible for fingerprint reuse.
+- Removed a UI-signal side effect that conservatively marked the entire Timeline dirty whenever the structural editor restored its Undo/Redo snapshot.
+
+### Storage Optimization & Acceptance
+
+- Added the `STORAGE` workspace with logical/physical byte reporting, Hard Link savings, category totals, SHA-256 duplicate groups and a conservative reclaim estimate.
+- Added `SAFE CLEANUP` with dry-run output and confirmation. Masters, Media Pool sources, Project data, Segment Preview/Approved Takes and cache referenced by an interrupted job or standalone worker manifest are protected.
+- Added verified `.h3project.zip` archives. Disposable cache/proxy/logs are excluded by default; external workflow/media are consolidated while preserving media basenames; `archive_manifest.json` records SHA-256 for every archived file.
+- Archive is blocked while active/interrupted recovery data still lives only in excluded cache, preventing an apparently valid but non-resumable backup.
+
+### Verification
+
+- Added Standard Pipeline Release Gate 11 for interrupted cache protection, Archive blocking, durable publication and OOM classification. All eleven gates pass independently.
+- Added a deterministic 120-second H.264/AAC acceptance fixture: an approved 45-second prefix is extended by five 15-second Segments, the complete Master is assembled, one middle Segment is replaced, and every outer Take hash remains unchanged.
+- Added a 90-minute metadata-only stress fixture covering 900 Shots, Segment planning, fingerprints, Take state normalization, JSON save/reload and a 64 MB peak-memory ceiling without invoking H3 or the network.
+- Added three focused simulations covering Storyboard reorder mapping, Smart Cut ripple/local reuse, and two separate Projects creating same-seed jobs/manifests without path or recovery contamination.
+- All `401` bundled tests pass after adding Qwen runtime, CUDA fallback, exact WAV composition, Settings and Design UI regressions. A separate 31-test global Segment Mapping suite also passes.
+
+### Compatibility and scope
+
+- Project format remains `20`, Workspace layout remains `2`, and Smart Render policy remains `15`; existing saved Projects remain forward-compatible.
+- One Studio instance still executes one ComfyUI job at a time. Centralized concurrent multi-Project scheduling and a full Scene/Sequence editing UI are explicitly deferred; project-scoped recovery and separate Studio instances are safe.
+
+## [0.3.1-alpha.4.8.0] - 2026-09-01
+
+### Fixed
+
+- Fixed Qt playback failing with `moov atom not found` after Studio was closed while a high-resolution Monitor Proxy was still being encoded.
+- Cached Monitor Proxies are now validated with FFprobe for a video stream, positive duration and duration agreement with the source master before Qt is allowed to open them. A non-empty filename alone is no longer considered a valid cache hit.
+- Monitor Proxy encoding now writes to a process-specific `.building.mp4` and publishes the final cache path only with an atomic replace after successful validation. Closing Studio removes the active temporary proxy without touching the generated master.
+- Existing interrupted／truncated proxies are automatically discarded and rebuilt from the intact `generated_output.mp4` or `generated_preview.mp4`.
+
+### Compatibility
+
+- Generated masters, Segment Takes, Project JSON, Reference Mapping and Timeline timing are unchanged. Only disposable `.director_cache/monitor_proxies` files are repaired.
+- Project format remains `20`, Workspace layout remains `2`, and Smart Render policy remains `15`.
+
+### Verification
+
+- Confirmed the original `the_black_panther_in_the_sun_3A/generated_output.mp4` is a valid 30.00-second H.264/AAC 2752×1536 master.
+- Reproduced the failure in its 1.31 MB proxy, which FFprobe reported as missing the `moov` atom, then rebuilt and validated a 30.016-second H.264/AAC 1280×714 proxy.
+- Added regressions for interrupted proxy rejection and atomic publication.
+- All `380` bundled tests and all ten Standard Pipeline Release Gates pass.
+
+## [0.3.1-alpha.4.7.9] - 2026-09-01
+
+### Fixed
+
+- Fixed completed Preview／Final masters reopening as `No generated output` when the Project JSON's `generated_output`, `smart_render` and `smart_render_manifests` fields were empty or stale even though durable Workspace files still existed.
+- Project Load now treats `generated_output.mp4`, `generated_preview.mp4`, `project/render_manifest.json`, root `render_manifest.json` and durable Segment Takes as authoritative recovery sources without requiring a non-empty saved output path first.
+- Copied／renamed Workspaces automatically rebase a recovered manifest's master and Segment output paths away from the previous computer or source folder.
+- Recovered output immediately restores Program Monitor playback, Export, request kind and render status. The Project is marked modified so one Save persists the canonical paths.
+
+### Compatibility
+
+- No MP4 is duplicated, moved or regenerated. Recovery reads the existing master and Take files in place.
+- Project format remains `20`, Workspace layout remains `2`, and Smart Render policy remains `15`.
+
+### Verification
+
+- Confirmed `the_black_panther_in_the_sun_3A` contains a valid 30.00-second 2752×1536 `generated_output.mp4` despite empty output fields. It now reopens as the active generated output, enables Export, restores the Production manifest and prepares its Monitor Proxy.
+- Added a current-format Project regression with deliberately empty output/manifest fields and a stale `D:\\...` manifest path; the Workspace master is recovered without regeneration.
+- All `378` bundled tests and all ten Standard Pipeline Release Gates pass.
+
+## [0.3.1-alpha.4.7.8] - 2026-08-31
+
+### Fixed
+
+- Picture cards now display a valid local image immediately and no longer depend on the asynchronous Media Preparation worker to obtain their first thumbnail.
+- The direct-image fallback runs for old-Project path rebasing, Design-generated references, manual replacement, Z-Image regeneration and automatic transparent-background derivatives.
+- The original source Picture is registered in the in-memory preview cache immediately. Media Preparation may later replace it with an optimized or transparent derivative without flashing `DROP MEDIA` or changing the logical P mapping.
+
+### Compatibility
+
+- This is a UI-preview correction only. It does not modify Picture files, Reference Mapping, Timeline placement, Segment fingerprints or generated video.
+- Project format remains `20`, Workspace layout remains `2`, and Smart Render policy remains `15`.
+
+### Verification
+
+- Reopened `the_black_panther_in_the_sun_3` with its old `D:\\...` paths on the current `C:\\...` Workspace. P1 was visible immediately while Media Preparation jobs were still active.
+- Added a regression proving a newly resolved local P1 is placed into both the MediaCard pixmap and preview cache before any background preparation response.
+- All `377` bundled tests and all ten Standard Pipeline Release Gates pass.
+
+## [0.3.1-alpha.4.7.7] - 2026-08-31
+
+### Added
+
+- Generation Work Area End is no longer capped by the current Timeline endpoint. A default 12-second project can be extended directly by typing or clicking 45s, 120s or another larger End value.
+- Increasing End beyond the current endpoint expands the Timeline, mapped workflow duration node, transport range and saved Project duration together. Reducing End only selects a shorter render range and never trims existing Timeline content.
+- Manual Timeline extension supports up to six hours for future long-form structures. End is automatically kept at least one 0.5-second grid step after Start.
+- Added a complete tooltip explaining the editable End behavior and a status message when the Timeline is extended.
+
+### Compatibility
+
+- New Project default remains `12.0s`. Existing Project Work Area values and Timeline durations remain unchanged when loaded.
+- Project format remains `20`, Workspace layout remains `2`, and Smart Render policy remains `15`.
+
+### Verification
+
+- Added a UI regression covering `12s → 120s` Timeline expansion, non-destructive `120s → 45s` Work Area reduction, workflow duration-node synchronization and invalid End-before-Start correction.
+- All `376` bundled tests passed; the focused post-validation for the final input guard also passed.
+
+## [0.3.1-alpha.4.7.6] - 2026-08-31
+
+### Fixed
+
+- Fixed native H3 speech-tail protection moving a safe Segment boundary forward across the next authored line. A line starting at 8.50, 22.00 or 41.00 seconds can no longer be compiled into the preceding Segment and then disappear from its own Segment.
+- Added dialogue-turn-aware Segment planning. Nearby safe boundaries align to on-camera speaker changes, so alternating S1/S2 lines are not compressed into one H3 generation window when a clean split is available.
+- Added an explicit speaker-to-face identity contract to every native H3 Segment prompt: S1 is the female character and S2 is the male character; each is bound to the actual dynamically mapped Picture reference. Only the scheduled speaker may move lips or jaw, while listeners keep a closed, still mouth and voice-over never drives visible lip sync.
+- Added a Run／Preview speech preflight against the live Timeline. Unsafe Dialogue／Voice-over／Lyrics durations, CJK layers mislabeled as English, downstream timing and the final 1.5-second breath／room-tone tail are repaired even when the Project was already open before this version.
+- Fixed endpoint repair leaving Work Area and ending media at the old duration. Projects whose Work Area previously reached the endpoint now expand through the repaired final speech and decay tail.
+
+### Compatibility
+
+- Smart Render policy is now `15`; policy 14 Segment caches with shifted speech ownership or ambiguous speaker-face animation are intentionally invalidated.
+- Project format remains `20` and Workspace layout remains `2`. Existing Projects are repaired in memory and remain loadable; Save Project persists the corrected Timeline.
+
+### Verification
+
+- Offline transcription of `那个替他说“不”的_AI_4/generated_preview.mp4` confirmed the 8.50-second narration had been pulled into the first Segment, the 41.00-second narration began around 38 seconds, later dialogue was compressed early, and the final phrase remained active through 69.99 seconds before the 70.00-second hard cut.
+- The repaired Project is 72.00 seconds with render windows `0–8.5 / 8.5–22 / 22–25.5 / 25.5–28 / 28–32.5 / 32.5–41 / 41–50.5 / 50.5–54.5 / 54.5–60.5 / 60.5–72s`; every authored speech layer belongs to exactly one Segment and the last line has a 1.5-second tail.
+- All `375` bundled tests and all ten Standard Pipeline Release Gates pass.
+
+## [0.3.1-alpha.4.7.5] - 2026-08-31
+
+### Fixed
+
+- Fixed `Project load error: TextLayer.__init__() got an unexpected keyword argument 'speech_timing_auto_adjusted'` after the final-speech timing repair.
+- `speech_timing_auto_adjusted` is now a first-class persisted Text Layer field.
+- Project, Undo/Redo and Storyboard Text Layer restoration now accept known fields while safely ignoring additive metadata from newer Project versions, preventing future repair markers from blocking Load Project.
+- Added a short retry for atomic provisional-workspace renames when Windows, OneDrive or a thumbnail scanner briefly retains a directory handle.
+
+### Verification
+
+- Added a real old-Project load regression that creates an undersized final Mandarin voice-over, runs automatic endpoint repair, then restores the resulting Text Layer into the Timeline.
+- All `372` bundled tests and all ten Standard Pipeline Release Gates pass.
+
+## [0.3.1-alpha.4.7.4] - 2026-08-31
+
+### Fixed
+
+- Fixed a confirmed hard cut at the 70.00-second Project endpoint while the final authored Mandarin voice-over was still active.
+- Existing Projects now receive conservative speech-budget repair at 3.6 CJK characters per second. Unsafe Dialogue／Voice-over／Lyrics extends on the 0.5-second grid and ripples its owning Shot, later Shots, Text Layers, authored requirements, media clips and Work Area.
+- The Project endpoint now reserves a 1.5-second final breath, room-tone and reverb tail after the last authored utterance.
+- Fixed stale Prompt timing after an automatic Project repair; editable Prompt fields are rebuilt from the repaired Timeline during Load Project.
+- Native H3 Segment prompts now include an exact speech-window whitelist and explicitly forbid filler syllables, false starts, repeated or translated words, commentary, whisper, crowd speech and phone voices in every vocal-silence gap.
+- Removed orphan quoted words and all untracked visible-text directions from compiled Shot and global prompts. Exact visible text must be owned by an editable `on_screen_text` Timeline layer.
+
+### Compatibility
+
+- Smart Render policy is now `14`; policy 12/13 Segment caches containing cut dialogue, polluted speech or burned typography are intentionally invalidated.
+- Project format remains `20` and Workspace layout remains `2`. Opening the affected 70-second Project repairs it in memory; Save Project persists the new timing.
+
+### Verification
+
+- Offline transcription of the supplied output confirmed non-authored speech at 25.23–26.91, 27.30–29.01, 32.00–32.63 and 55.08–55.83 seconds, plus active final speech through the exact 70.00-second endpoint.
+- Verified `那个替他说“不”的_AI_2` repairs from 70.0 to 77.5 seconds; its final voice-over moves to 66.5–76.0 seconds and receives a 1.5-second tail.
+- All `371` bundled tests and all ten Standard Pipeline Release Gates pass.
+
+## [0.3.1-alpha.4.7.3] - 2026-08-31
+
+### Fixed
+
+- Fixed abrupt native dialogue／voice-over starts and cut-offs at independently generated H3 Segment boundaries.
+- Authored Dialogue／Voice-over／Lyrics now protect every internal render cut through the complete utterance plus a 1.0-second breath, room-reverb and ambience decay tail when Timeline capacity permits.
+- A fully packed 15-second sequence now inserts an additional safe Segment when moving one boundary would exceed H3's native limit; it no longer cuts the authored line merely to preserve the old Segment count.
+- Every native Segment prompt now forbids unlisted speech, requires continuous location ambience, completes authored words by the Text Layer end, and forbids a new word, music cue or Foley transient in the final second.
+- Preview／Final assembly applies a 40ms audio de-click fade at internal joins without changing video timing, Segment duration or Reference Mapping.
+
+### Compatibility
+
+- Smart Render policy is now `13`; old Preview／Final Segment caches are intentionally invalidated so already-encoded hard audio cuts cannot be reused.
+- Project format remains `20` and Workspace layout remains `2`; existing Projects load without migration.
+
+### Verification
+
+- Extended Standard Pipeline Release Gate 4 with the speech-boundary case, including a fully packed 45-second Timeline that must add a fourth safe Segment.
+- Verified `那个替他说“不”的_AI_2` now plans `0-8.5`, `8.5-20.5`, `20.5-32.5`, `32.5-41`, `41-53`, `53-61`, and `61-70` seconds. The 58-60 second line belongs only to the `53-61` Segment.
+- All `371` bundled tests and all ten Standard Pipeline Release Gates pass.
+
+## [0.3.1-alpha.4.7.2] - 2026-08-31
+
+### Added
+
+- Added `REGENERATE WITH Z-IMAGE` to the right-click menu of eligible Media Pool Picture cards.
+- Regeneration reuses the Picture's original Design request metadata, including subject keywords, exact cast/count contract, identity-anchor relationship, environment, composition, time range and preferred stable P identifier.
+- Successful output replaces the same logical Picture source without changing its Loader node, P mapping, repeated Timeline occurrences or Clip Prompt. Only intersecting render Segments are marked dirty.
+- Every regenerated take is non-destructive and stored below `media/regenerated_references/P#/`; BLIP and optional semantic analysis are then refreshed against the new image.
+- Added a per-card translucent Z-Image progress overlay and worker timeout/close protection.
+
+### Verification
+
+- Verified project `那个替他说“不”的_AI_2` P5 resolves as node 153, remains P5, retains 20.00–32.50s scope, `req_man_identity`, and the exact-two-person contract.
+- Added regressions for Picture-only context-menu activation and in-place regeneration without Reference Mapping changes.
+- All `368` bundled tests and all ten Standard Pipeline Release Gates pass.
+
+## [0.3.1-alpha.4.7.1] - 2026-08-31
+
+### Fixed
+
+- Fixed cross-computer Queue failure when canonical Project JSON lives in `Workspace/project` while generated image, video or audio sources live in sibling `Workspace/media` trees.
+- Runtime media recovery now searches both the JSON directory and the complete canonical workspace, then accepts only a unique basename match.
+- Clean Project export now rewrites unavailable absolute paths to verified local workspace files instead of preserving another computer's drive path.
+
+### Verification
+
+- Strengthened Standard Pipeline Release Gate 1 with the canonical `project/` plus sibling-media layout.
+- Added regressions for runtime sibling-tree recovery and Clean Project path rebasing.
+- Rebuilt `那个替他说“不”的_AI/project/director_project.clean.h3director.json`; all nine image Loader paths exist locally.
+- Real 7-Segment Queue preflight passes with no missing media and no unresolved Loader.
+- All `366` bundled tests and all ten Standard Pipeline Release Gates pass.
+
+## [0.3.1-alpha.4.7] - 2026-08-31
+
+### Fixed
+
+- Closed a Reference Mapping leak where a generated environment still could be promoted as a whole-project character anchor and earlier airport/hotel/computer references could remain active in later story phases.
+- Added exact cast/count contracts for identity, secondary-character, two-person and environment reference images. Existing malformed project references are repaired on load without overwriting the source JSON.
+- Fixed dialogue timing expansion that increased Timeline duration without extending the owning final Shot, producing a render Segment with `shot_ids=[]` and allowing an earlier scene to reappear.
+- Preserved normalized `text_layers.shot_id` during Apply instead of ambiguously recomputing ownership on an inclusive Shot boundary.
+- Segment manifests now report only media Loader files actually connected in that Segment workflow, while uploads remain deduplicated job-wide.
+- Clean projects with invalidated render state no longer auto-load a stale root `generated_output.mp4` into Program Monitor.
+
+### Changed
+
+- Removed project-total media-request capacity checks. Virtual Media Pool IDs may continue beyond P9/V3/A3; physical 9/3/3 limits are enforced only for simultaneously active references per Segment.
+- Design/Qwen rules now require exact cast ledgers, one-location Shot Blocks, time-scoped environment references and complete Shot coverage after speech ripple.
+- Strong multi-location `Cut to` montage prose is split into executable single-location Shots during project integrity repair.
+- Added `project_integrity.py` for data-only portable Project repair and clean JSON export.
+- Smart Render policy is now `12`, so older Segment caches compiled before the mapping/coverage correction are not silently reused.
+
+### Verification
+
+- Added Standard Pipeline Release Gate 9 for Reference Mapping isolation, P10+ virtual media and Segment-local manifest reporting.
+- Added Standard Pipeline Release Gate 10 for dialogue-duration ripple, Text-to-Shot ownership and zero Shot-less render Segments.
+- Project format remains `20`; Workspace layout remains `2`.
+- All `364` bundled tests and all ten Standard Pipeline Release Gates pass.
+
+## [0.3.1-alpha.4.6] - 2026-08-31
+
+### Changed
+
+- Replaced the seven AI Design Apply popup entry families with one inline `APPLY PREFLIGHT REPORT`, grouping all findings into Auto-fix, Warning and Hard Block sections.
+- Made Apply transactional: the Design page stays open and duplicate submission stays disabled until Timeline/Workspace commit succeeds. Runtime failure returns the same JSON and page to a retryable state; only `_commit_ai_design` closes it.
+- Routed generation-state, missing model/input, unknown explicit media, invalid generated JSON, Load JSON and downstream Workspace errors into the inline report instead of modal warning chains.
+
+### Auto-repair and degradation
+
+- Explicit duration mismatch now retimes the complete Shot/Text/Media/Cue plan onto the requested duration's 0.5-second grid during Apply preflight.
+- Missing Creative Brief and Visual Style receive deterministic safe defaults; duplicate media `requirement_id` values receive stable suffixes.
+- Unsafe Z-Image requests containing H3 Picture tokens, dependent-frame wording or neutral/studio action backgrounds are rebuilt as standalone in-world frozen frames.
+- Camera overlap that cannot preserve two 0.5-second cells now merges both actions and continuity states into one executable Shot instead of blocking the whole Design.
+- Disabled non-explicit model-selected Media Pool references are removed. Explicit missing `@P/@V/@A` references remain Hard Blocks.
+- Missing VoxCPM2 models or fully occupied Audio slots now preserve exact editable speech Text Layers, defer WAV creation and mark Timeline TTS pending instead of aborting the visual Design.
+
+### Compatibility
+
+- Project format remains `20`; Workspace layout remains `2`; Smart Render policy remains `11`. Existing projects and Design JSON remain loadable without migration.
+
+### Verification
+
+- Added [`APPLY_ARCHITECTURE_ACCEPTANCE_CHECKLIST.md`](APPLY_ARCHITECTURE_ACCEPTANCE_CHECKLIST.md) with the complete 17-family policy and lifecycle contract.
+- Added Standard Pipeline Release Gate 8 for safe repair, no modal Apply chain, retry-after-failure and close-after-commit behavior.
+- All `362` bundled tests pass.
+- All eight Standard Pipeline Release Gates pass independently.
+
+## [0.3.1-alpha.4.5] - 2026-08-31
+
+### Fixed
+
+- Replaced the blocking `Shot Sx overlaps Sy` failure for repairable AI Design output with deterministic camera-cut boundary repair on the 0.5-second Timeline grid.
+- Adjacent overlapping Shots now share the nearest feasible midpoint boundary while retaining at least 0.50 seconds for each Shot. The warning records both original ranges and the repaired cut.
+- Kept Media Pool clips and Dialogue／Voice-over／Lyrics／On-screen Text ranges untouched because those layers may legitimately overlap on separate V/A tracks.
+- Retained a hard validation error only when the combined interval cannot preserve one 0.5-second Timeline cell for both camera Shots.
+
+### Compatibility
+
+- No project schema, Workspace layout or render-policy fields changed. Existing Design JSON and saved projects remain loadable; normalization repairs eligible overlap during Load／Apply.
+
+### Verification
+
+- Added regressions for automatic shared-boundary repair and irreparable sub-second overlap protection.
+- All `356` bundled tests pass.
+- All seven Standard Pipeline Release Gates pass in the complete suite.
+
+## [0.3.1-alpha.4.4] - 2026-08-31
+
+### Changed
+
+- Rebuilt Generation Work Area in the exact requested order: start, end, Aspect, Mode, Batch seconds, Next, approved seconds, Export API, server address, Test, Run+Queue, Storyboard, story duration, Auto Cut, Preview, Accept, Reject and Estimate.
+- Removed the custom `MORE ▾` control and all hover-to-expand behavior. When row one reaches the available width, every remaining control stays visible automatically on a persistent second row.
+- Added compact Work Area formatting (`0s`, `15s`, `0.5s`) without losing sub-second values, and shortened the visible controls to `TEST`, `PREVIEW 0.2M` and `ACCEPT 1.0M`.
+- Kept Batch seconds, Next and approval progress visible in both modes for a stable layout; they remain disabled in FULL and become active in BATCH.
+
+### Compatibility
+
+- No project schema or render-policy fields changed. Project format remains `20`; Workspace layout remains `2`; Smart Render policy remains `11`.
+
+### Verification
+
+- Replaced the hover-overflow regression with an ordered persistent-wrap regression that checks both rows, compact second formatting and the absence of native Qt `»` overflow buttons.
+- All `355` bundled tests pass.
+- All seven Standard Pipeline Release Gates pass independently.
+
+## [0.3.1-alpha.4.3] - 2026-08-31
+
+### Fixed
+
+- Fixed the real Generation toolbar failure shown at wide desktop resolution: Qt's native `»` extension no longer captures `AUTO CUT` or the custom `MORE ▾` control.
+- Moved `AUTO CUT` and `MORE ▾` ahead of optional server/render groups, added DPI/layout safety reserve, and allowed Batch controls to move as one complete overflow group only at constrained widths.
+- Preserved FULL/BATCH widget visibility through QWidgetAction transfers. FULL no longer re-shows Batch seconds, NEXT and progress after a responsive reflow.
+- Clicking the custom `MORE ▾` now explicitly opens the complete second row; hovering continues to open it automatically.
+
+### Compatibility
+
+- No project schema or render-policy fields changed. Project format remains `20`; Workspace layout remains `2`; Smart Render policy remains `11`.
+
+### Verification
+
+- Extended the toolbar regression to reject a visible native Qt extension button, keep `AUTO CUT` visible, retain the populated primary row, and verify both hover and click open the custom overflow row.
+- All `355` bundled tests pass.
+- All seven Standard Pipeline Release Gates pass independently.
+
+## [0.3.1-alpha.4.2] - 2026-08-31
+
+### Fixed
+
+- Restored the missing Auto Cut entry point at constrained window widths. The compact `AUTO CUT` control is now pinned to the primary Generation Work Area row instead of being moved into the hidden overflow toolbar.
+- Renamed the visible Smart Cut trigger and its Safe, Balanced and Aggressive menu entries to `AUTO CUT`, while preserving the existing protected Smart Cut planner and Manual Ripple Cut workflow.
+- Kept the entry label stable as `AUTO CUT` even when the Timeline already matches the target, and corrected the responsive `MORE ▾` action/widget visibility synchronization.
+
+### Compatibility
+
+- No project schema or render-policy fields changed. Project format remains `20`; Workspace layout remains `2`; Smart Render policy remains `11`.
+
+### Verification
+
+- Extended the responsive-toolbar regression to require `AUTO CUT` on the primary row at the minimum supported window width and to ensure it is never placed in the hidden overflow row.
+- All `355` bundled tests pass.
+- All seven Standard Pipeline Release Gates pass independently.
+
+## [0.3.1-alpha.4.1] - 2026-08-31
+
+### Added
+
+- Added a responsive two-row Generation Work Area. Complete control groups move to a hidden second toolbar row when the available window width cannot display them safely; Work Area, Aspect and Production Mode remain on the primary row.
+- Hovering the Generation toolbar or its `MORE ▾` affordance now expands the second row immediately. Moving outside both rows starts a short delayed collapse so the row does not disappear while the pointer crosses between toolbars.
+- Added immediate rich Hover Help to every compact Generation control, including complete name, purpose and expected effect for Work Area, Aspect, Full/Batch production, Export, ComfyUI connection, Run, Storyboard, Smart Cut, Preview/Accept/Reject and Estimate.
+
+### Compatibility
+
+- No project schema or render-policy fields changed. Project format remains `20`; Workspace layout remains `2`; Smart Render policy remains `11`.
+
+### Verification
+
+- Added a UI regression that forces the minimum supported window width, verifies complete control groups move to the secondary toolbar, triggers its Hover Enter event and checks rich help metadata on compact controls.
+- All `355` bundled tests pass.
+- All seven Standard Pipeline Release Gates pass independently.
+
+## [0.3.1-alpha.4] - 2026-08-31
+
+### Added
+
+- Added compact `MODE: FULL / BATCH` production controls, a configurable 30-second default Batch size, `NEXT` and live approved/total status to the Generation Work Area.
+- Incremental production previews only the next unapproved range. Accept switches to a cumulative 0-to-horizon render, reuses approved Smart Render Segments and publishes one continuous Preview/Final master in Program Monitor.
+- Added speech-safe approval horizons. A proposed Batch boundary moves past intersecting Dialogue, Voice-over or Lyrics and prefers a nearby Shot boundary instead of cutting exact authored speech.
+- Persisted the approved horizon, pending range, Batch phase, Preview seed and Preview-ready state in Project and Design Undo/Redo state. Smart Render checkpoints therefore resume an interrupted Batch without returning to all-at-once production.
+- Added the Default-bound `long-form-h3-director` English/Chinese Special Skill. It preserves the full story, plans Sequence/Shot responsibilities, Incoming/Outgoing State, 24-frame motion context, exact text layers, Segment-local references and exactly one real project-ending Final Hold.
+- Selecting `long-form-h3-director` automatically selects Incremental production; selecting None or another Special returns to Full Range while retaining manual strategy controls.
+
+### Compatibility
+
+- Existing projects without the optional Incremental fields open in `FULL RANGE` with no behavioral change.
+- Project format remains `20`; Workspace layout remains `2`; Smart Render policy remains `11`.
+
+### Verification
+
+- Added nine regressions for bilingual Skill discovery/binding, automatic strategy switching, speech-safe Batch boundaries, next-range-only Preview, cumulative Accept, durable approval advancement, project payload state and Open Project resume.
+- All `354` bundled tests pass.
+- All seven Standard Pipeline Release Gates pass independently.
+
+## [0.3.1-alpha.3] - 2026-08-30
+
+### Added
+
+- Added the three-stage Smart Cut workflow. Phase 1 uses a deterministic dynamic-programming planner on the Studio's 0.5-second grid with Safe, Balanced and Aggressive modes, explicit speech/action minimums, protected narrative roles and impossible-target warnings.
+- Added a non-destructive Smart Cut review window with Original/Edited/Target totals, per-Shot KEEP/TRIM/MERGE/REMOVE decisions, importance/risk/reason columns, manual Shot locks and duration overrides. Cancel never mutates the Timeline; Apply is one Undo/Redo transaction.
+- Added Phase 2 dependency analysis for adjacent continuity state, shared P/V/A references, visible track relationships and native 15-second boundary risk. Accepted plans remap Shot-owned cues, text, media Source In/Out and local render-dirty ranges, then save `smart_cut_plan.json` in the fixed project Workspace.
+- Added Phase 3 semantic refinement through the currently configured Design provider. Online GPT or LM Studio may classify story role, bounded importance, protection and redundancy only; its JSON schema contains no timing/edit authority and all durations are recalculated locally.
+- Preserved the original manual purple-Shot Ripple Cut in the `SMART CUT` arrow menu alongside direct Safe/Balanced/Aggressive planning and the Storyboard Editor shortcut.
+
+### Fixed
+
+- Smart Cut LM cleanup now unloads the model instance actually resolved by LM Studio when a saved/deleted model identifier was automatically replaced, preventing a stale `model_not_found` unload request.
+- Authored Dialogue, Voice-over and Lyrics cannot be removed or merged by either automatic planning or reviewed Apply. An unsafe target remains visibly over target instead of cutting words.
+
+### Verification
+
+- Added seven pure Smart Cut engine regressions and four Timeline/UI integration regressions covering exact grid targets, protected speech, deterministic critical-role floors, dependency graphs, merge audit, bounded LM hints, Cancel safety, Apply/Undo/local dirty state, legacy Manual Ripple Cut and resolved-model unload behavior.
+- All `345` bundled tests pass.
+- All seven Standard Pipeline Release Gates pass independently.
+- Project format remains `20`; Workspace layout remains `2`; Smart Render policy remains `11`.
+
+## [0.3.1-alpha.2.7] - 2026-08-30
+
+### Changed
+
+- Storyboard cards now lift three pixels with a raised border and shadow while the pointer hovers over them.
+- Starting a drag now displays a 94%-opaque lifted card ghost with a layered soft shadow under the pointer while the real grid position remains a visible `DROP HERE` target.
+- Neighboring cards now slide for 190ms as the target position changes. Releasing a card adds a 260ms lift-and-settle pulse with a fading cyan landing outline; arrow-button moves use the same landing feedback.
+
+### Verification
+
+- Expanded Storyboard interaction regressions to verify hover tracking, the dedicated card delegate, enlarged shadow ghost, reflow timing and drop-settle timing/state.
+- All `334` bundled tests pass.
+- All seven Standard Pipeline Release Gates pass independently.
+- Project format remains `20`; Workspace layout remains `2`; Smart Render policy remains `11`.
+
+## [0.3.1-alpha.2.6] - 2026-08-30
+
+### Added
+
+- Added selected-Shot left and right arrow buttons to the Storyboard Inspector. Each click moves the selected card exactly one position, animates the neighboring-card reflow and disables the unavailable direction at the first or last position.
+- Added an Explorer-style `VIEW` menu with Extra large icons, Large icons, Medium icons, Small icons, List, Details, Tiles and Content layouts. Each mode changes both card geometry and information density without modifying Timeline data.
+
+### Changed
+
+- Large icons remains the default three-column Storyboard layout. The chosen view is remembered in Undo/Redo workspace state and in saved `.h3director.json` projects; New Project restores the default.
+
+### Verification
+
+- Added regression coverage for all eight display modes, left/right reordering, boundary button states and view preference persistence.
+- All `334` bundled tests pass.
+- All seven Standard Pipeline Release Gates pass independently.
+- Project format remains `20`; Workspace layout remains `2`; Smart Render policy remains `11`.
+
+## [0.3.1-alpha.2.5] - 2026-08-30
+
+### Fixed
+
+- Fixed Storyboard cards repeatedly selecting a global full-Timeline identity Picture such as P1. Thumbnail selection now prioritizes explicit Shot semantic direction, then a Picture whose start/end exactly matches that Shot, and only falls back to the global P1 identity anchor when no dedicated Shot frame exists.
+- Verified the reported `Sam_Altman_The_Human_in_the_Machine` mapping: S2→P5, S3→P6, S4→P3, S5→P7, S6→P8, S7→P4 and S8→P9; S1/S9 correctly fall back to P1 because they have no dedicated Shot Picture.
+
+### Changed
+
+- Storyboard Drag & Drop now lifts a real card ghost under the pointer and leaves a visible `DROP HERE` placeholder in the board.
+- Crossing another card moves the placeholder immediately, reflows neighboring cards into the vacated grid position and runs a 150ms OutCubic slide animation. Releasing commits the draft order; cancelling restores the original row.
+- Every Storyboard card now displays `FRAME P#` so the exact thumbnail source is inspectable instead of being inferred from the broader `MEDIA` list.
+
+### Verification
+
+- Added a regression with a full-duration P1 plus an exact-range P5, proving S2 selects P5 and the drag placeholder changes `[S1,S2,S3]` to `[S2,S3,S1]` while preserving the selected card.
+- All `333` bundled tests pass.
+- All seven Standard Pipeline Release Gates pass independently.
+- Project format remains `20`; Workspace layout remains `2`; Smart Render policy remains `11`.
+
+## [0.3.1-alpha.2.4] - 2026-08-30
+
+### Changed
+
+- Rebuilt the Storyboard center pane as a responsive three-column visual card grid matching the requested film-board layout while retaining the duration header, selected-Shot Inspector, Add/Delete controls and Apply/Cancel workflow.
+- Every Shot card now displays its Timeline time range, duration, preset, core action, environment response, speech count and active P/V/A IDs over a 16:9 visual reference thumbnail.
+- Shot thumbnails prefer the actual overlapping Timeline image or cached video preview. A deterministic `NO VISUAL REFERENCE` card is used when that Shot has no valid visual source, preventing a neighboring Shot's image from being shown incorrectly.
+- Upgraded Shot movement to real Qt Internal Move drag-and-drop with a visible drop indicator, snap layout and immediate order/time/duration refresh after Drop.
+
+### Verification
+
+- Expanded Storyboard UI coverage to require Icon Mode, Internal Move, enabled drag/drop, a three-column wide layout and non-empty card artwork.
+- All `332` bundled tests pass.
+- All seven Standard Pipeline Release Gates pass independently.
+- Project format remains `20`; Workspace layout remains `2`; Smart Render policy remains `11`.
+
+## [0.3.1-alpha.2.3] - 2026-08-30
+
+### Added
+
+- Replaced the main `STORYBOARD` action with a dedicated Storyboard Editor window built from the current Timeline Shot, speech and media state.
+- Added draggable Shot blocks with live original duration, edited duration, target duration and over/under-target calculations.
+- Added draft-only Shot creation, deletion, title/core-action editing and 0.5-second duration adjustment. `Cancel` leaves Timeline untouched; `APPLY TO TIMELINE` commits the entire board as one Undo/Redo operation.
+- Storyboard cards report each Shot's current time range, must-complete action, editable speech-layer count and active P/V/A reference IDs.
+
+### Changed
+
+- Storyboard Apply now remaps downstream Shot ranges, Transition/Marker cues, Dialogue/Voice-over/Lyrics layers and media clips to the new order and duration.
+- Audio and video spanning multiple reordered Shots are split with adjusted source in/out and playback speed; Media Pool originals remain intact. New Story Beats intentionally return as empty Timeline Shots ready for new media or Type Tool content.
+- Any Storyboard structural edit invalidates generated output and marks render Segments dirty, while Cancel never changes render state.
+
+### Verification
+
+- Added UI coverage for live duration accounting, add/delete/reorder and the real Apply button.
+- Added dependency-remapping coverage for Shot reorder, deletion, insertion, media splitting and Undo.
+- All `332` bundled tests pass.
+- All seven Standard Pipeline Release Gates pass independently.
+- Project format remains `20`; Workspace layout remains `2`; Smart Render policy remains `11`.
+
+## [0.3.1-alpha.2.2] - 2026-08-30
+
+### Added
+
+- Added `STORY CUT` beside Storyboard with an editable target duration. Editors can select an unwanted purple Shot Block and press Delete to perform a non-destructive ripple cut across Shots, cues, speech layers and source media while retaining the original Media Pool assets.
+- Expanded Design plans now retain their original requested duration as the Storyboard target. Legacy projects recover this value from the latest Design revision, so a 107.5-second speech-safe plan can be reduced back toward the requested 45 seconds without another LM Studio pass.
+- Added a render-time visible-text whitelist. Subtitles are permitted only when a synchronized Timeline `on_screen_text` layer exists; otherwise H3 receives a hard visible-text lock that forbids captions, lower thirds and speech burned into pixels.
+
+### Fixed
+
+- Chinese generation commands such as `帮我生成45秒视频...总结以下内容如下` no longer become Workspace names. A valid AI story title now outranks the instruction, and the fallback scanner skips the command to find the first meaningful story sentence.
+- Storyboard Shot deletion now updates downstream timecodes, splits spanning audio/video safely, refreshes Shot ownership for Text Layers, invalidates only affected render state and remains fully Undo/Redo capable.
+
+### Verification
+
+- Added naming, subtitle-policy, render-whitelist, legacy-target recovery and Storyboard ripple-cut regressions.
+- All `330` bundled tests pass.
+- All seven Standard Pipeline Release Gates pass independently.
+- Project format remains `20`; Workspace layout remains `2`; Smart Render policy remains `11`.
+
+## [0.3.1-alpha.2.1] - 2026-08-30
+
+### Changed
+
+- Missing AI-authored Dialogue／Voice-over／Lyrics is no longer a dead end. Studio still retries LM Studio once; if a broad speech request returns no editable words again, the visual Director Design remains valid and can be applied to the H3 Workspace.
+- Added a red `⚠ ADD EDITABLE DIALOGUE / VOICE-OVER / LYRICS` Timeline marker at 0.00s for every unresolved requested role. The marker tells the editor to use the Type Tool, remains visible in saved projects and is deliberately excluded from H3 Prompt, TTS and technical directions.
+- Exact time-coded user-authored wording remains a hard contract: Studio deterministically restores it, and Apply/Run is still blocked only if those supplied words genuinely cannot be recovered.
+- Speech-reminder warnings are non-modal. Apply completes normally and reports the reminder in the Design Summary, Timeline and status bar instead of opening the former blocking `Invalid AI Design speech tracks` dialog.
+
+### Verification
+
+- Added regressions for generic missing-speech reconciliation, exact authored-speech protection, red Timeline rendering and exclusion of UI-only reminders from H3 Prompt compilation.
+- All `325` bundled tests pass.
+- All seven Standard Pipeline Release Gates pass independently.
+- Project format remains `20`; Workspace layout remains `2`; Smart Render policy remains `11`.
+
+## [0.3.1-alpha.2] - 2026-08-30
+
+### Added
+
+- Completed the Long Timeline Foundation for 120-second projects. Extending a 45-second Timeline now retains the existing production master seed, locks every unchanged Approved 0–45-second Segment for reuse and schedules only the new 75 seconds. Editing an older range explicitly dirties and unlocks only its affected Segment.
+- Added automatic partial Smart Render checkpoints after every completed or failed hidden Segment. The canonical Director Project and project render manifest are updated before a full Master exists, so reopening the Project can reuse valid completed work.
+- Added deterministic Workspace naming from the first loaded Picture's BLIP `Overview`. When no Picture exists, the first meaningful authored story sentence in Design Requirement becomes the name.
+
+### Fixed
+
+- Fixed provisional Workspace folders remaining named after `Create a 12.00-second full-reference video...` even though the manifest later had a descriptive name. A workspace containing only manifest/calibration/imported sources may now be safely renamed, and all in-memory imported paths are rebased to the new root.
+- Prevented imported filenames from becoming project titles when BLIP or Design subject evidence is available.
+- Expanded competing identity-reference detection to recognize `matching P1`, bare `P1` and `<Picture 1>` as well as `@P1`; old Design plans can no longer load a separately generated P1-lookalike action frame merely because the `@` was omitted.
+
+### Changed
+
+- Program Monitor, Timeline scene, millisecond scrubber, Render Status Bar and duration-weighted Shot progress now have explicit 120-second regression coverage.
+- Resource Estimate now reports cached, non-dirty Segment core time as reusable; the 45→120-second regression reports exactly `75s new / 45s reusable`.
+- The existing `_4` project folder is intentionally not moved automatically because it already contains a saved Project and approved render. The new naming policy applies to new or imported-only provisional Workspaces without risking broken saved paths.
+
+### Verification
+
+- Added regressions for P1 Overview extraction, Unicode story-sentence naming, imported-only Workspace rename/rebase, bare-P1 identity filtering, 45-to-120-second approved Segment reuse and partial-render resume checkpoints.
+- All `321` bundled tests pass.
+- All seven Standard Pipeline Release Gates pass independently.
+- Project format remains `20`; Workspace layout remains `2`; Smart Render policy remains `11`.
+
+## [0.3.1-alpha.1.9] - 2026-08-30
+
+### Fixed
+
+- Fixed the real P1 identity-routing defect found in `Create_a_12.00-second_full-reference_video._Treat_the_current_Timeline_its_activ_3`: support prompts that quoted the words “authoritative recurring face identity” could be promoted ahead of P1. The compiler now gives the explicit support declaration precedence and recognizes `authoritative identity reference` / `authoritative whole-design face identity anchor` on the actual user Picture.
+- Prevented an independently generated action-state Picture such as “girl, face matching @P1” from entering the H3 request as a competing face. The real P1 remains the only face source; the Shot action supplies pose and movement. This filter also protects previously saved projects at compile time.
+- Kept genuinely separate generated actors available as distinct secondary-character references instead of incorrectly forcing their faces to replace P1 or hiding them as P1 support art.
+- Fixed instruction-derived Workspace folders that were allocated before Design completed. If the provisional Workspace contains only its manifest/resource estimate, Apply now renames it to the descriptive generated-reference keyword name before references or project files are written. Durable, saved and legacy Workspaces are never moved automatically.
+
+### Verification
+
+- Replayed the reported project data. Before the fix, the prompt stated that `<Subject 1>` came from `<Picture 2>` and marked Pictures 2-5 as authoritative; after the fix, `<Subject 1>` comes exclusively from `<Picture 1>` and only P1 is authoritative.
+- Recompiled the saved project: the two independently generated P1 pose images are excluded, leaving P1 plus the separate adult runner and environment references in the H3 request.
+- Added regressions for quoted-authority support prompts, redundant P1 pose generation, distinct secondary actors, provisional Workspace refinement and durable-Workspace protection.
+- All `314` bundled tests pass.
+- All seven Standard Pipeline Release Gates pass independently.
+- Project format remains `20`; Workspace layout remains `2`; Smart Render policy remains `11`.
+
+## [0.3.1-alpha.1.8] - 2026-08-30
+
+### Added
+
+- Upgraded every recurring-character identity anchor into a deterministic Character Continuity Contract. Face, age, skin tone, hairstyle and hair color, body proportions, upper/lower wardrobe style and color, trousers or skirt, shoes and accessory ownership are fixed by default.
+- Explicitly separated motion-safe variation: expressions, poses, arm/leg angles, walking/running phase and physically caused hair or clothing motion remain free to change with each Shot.
+- Restricted wardrobe/hairstyle changes, injury, dirt, damage, shoe removal and accessory loss or transfer to explicitly authored story events. The changed outgoing state must persist as every later Shot's incoming state until another authored change.
+
+### Changed
+
+- The contract is written into the identity reference, Design Constraints, independent T2I support-reference prompts and the final H3 `subject_definitions`/`detailed_description`. Supporting generated Pictures inherit the current wardrobe and prop ledger but remain unable to redefine the face.
+- The Design system prompt now requires appearance-state transitions to cross Shot and Segment boundaries without an unexplained reset.
+
+### Verification
+
+- Replayed both user-supplied P1 and generated-only identity-anchor paths; each produces the fixed/variable/story-only contract idempotently, while support images receive the same current-state guardrails.
+- All `309` bundled tests pass.
+- All seven Standard Pipeline Release Gates pass independently.
+- Project format remains `20`; Workspace layout remains `2`; Smart Render policy remains `11`.
+
+## [0.3.1-alpha.1.7] - 2026-08-30
+
+### Fixed
+
+- Rejected copied instruction prose such as `Create a 12-second full-reference video...` as a Workspace title. Generic, corrupted and non-ASCII-only titles now use the complete first generated-reference keyword group, for example `marathon_track_morning_sunlight_trees`.
+- Made an explicitly authored user Picture face/identity reference authoritative over every independently generated Picture. The supplied Picture is widened to the whole Design; generated references lose any accidental identity-anchor flag and become environment, prop or action-state support with no readable competing face.
+- Clarified the final Ref2VA subject definitions and retention analysis so the authoritative face Picture and support-only Pictures cannot be interpreted as equal identity sources. The official `summary:\n[reference generation]` first-line contract remains enforced.
+- Added lightweight `shots/SHOT_ID/shot_manifest.json` mirrors. Shot folders now expose Timeline/source ranges and portable Preview/Final Segment references while keeping each MP4 stored only once under `segments/SEGMENT_ID/takes/`.
+
+### Verification
+
+- Replayed the reported marathon Design plan: its Workspace name resolves to `marathon_track_morning_sunlight_trees`, `P1` is the sole whole-design identity anchor, and all four generated Pictures point back to P1 without retaining a generated identity anchor.
+- Added Shot manifests to the reported Workspace for S1-S4 without creating any per-Shot MP4 copy.
+- All `309` bundled tests pass.
+- All seven Standard Pipeline Release Gates pass independently.
+- Project format remains `20`; Workspace layout remains `2`; Smart Render policy remains `11`.
+
+## [0.3.1-alpha.1.6] - 2026-08-30
+
+### Fixed
+
+- Fixed a universal Smart Render mapping defect where the global `unique_media` upload union repatched every Segment Workflow. When different Segments reused the same physical Loader node, the final Segment's file could overwrite every earlier Segment and replay the wrong reference. Segment Workflows now retain their own active upload names; the union is used only for one-time upload.
+- Updated portable-media validation to support several valid virtual assets sharing one physical Loader across different Segments while still rejecting missing, unbacked and stale files.
+- Added one whole-design generated character identity anchor when three or more independently generated Pictures contain a recurring person. Supporting action/environment references can no longer define a competing prominent face.
+
+### Added
+
+- Added a deterministic speech-duration budget based on language, punctuation and Delivery. Unlocked over-dense generated speech extends its owning Shot and shifts all later Shots, Text Layers, cues and media ranges on the 0.5-second grid.
+- User-authored exact timecodes remain locked. Over-budget Dialogue, Voice-over and Lyrics clips render deep red with a bright-red edge so the user can see where H3 may speak early, reorder, omit or change words.
+- Added Standard Pipeline Release Gate 6 for the `unique_media`/Segment Workflow collision. The previous compact Segment storage/reload gate is now Gate 7.
+
+### Verification
+
+- All `304` bundled tests pass.
+- All seven Standard Pipeline Release Gates pass independently.
+- Project format remains `20`; Workspace layout remains `2`; Smart Render policy remains `11`.
+
+## [0.3.1-alpha.1.5] - 2026-08-29
+
+### Fixed
+
+- Fixed Storyboard appearing unresponsive when a loaded project saved its Playhead exactly on the exclusive Work Area end. Storyboard now rewinds to the Work Area start, switches to Timeline source/audio and begins playback immediately while preserving the generated Final on the comparison side.
+- Fixed `RUN+QUEUE` being silently redirected back into Storyboard or Motion Preview by a hidden persisted quality-profile state. `RUN+QUEUE` is now an independent settings-quality Final render; `PREVIEW 0.2MP` and `ACCEPT>1.0MP` retain their dedicated seed-reuse workflow.
+- Removed the unreachable legacy upload branch that remained after the old Preview gate, leaving one authoritative ComfyUI generation path.
+
+### Verification
+
+- Reproduced the correction against `h3_project_young_male_influencer`: a saved 45.00-second Playhead rewinds to 0.00 and plays in Storyboard; the following `RUN+QUEUE` enters the Final generation path exactly once.
+- All `299` bundled tests and all six Standard Pipeline Release Gates pass.
+- Project format remains `20`; Workspace layout remains `2`; Smart Render policy remains `11`.
+
+## [0.3.1-alpha.1.4] - 2026-08-29
+
+### Added
+
+- Added Workspace layout 2 compact Segment storage. Every actual Render Segment now owns at most one `motion_preview.mp4` and one `approved_final.mp4`; Shot state stores portable Segment references plus Timeline and source in/out ranges.
+- Added verified layout 1 migration. Legacy per-Shot Takes and `approved.mp4` aliases are removed only after their SHA-256 matches a successfully archived canonical Segment asset.
+- Added relative Take paths for cross-computer project restoration and a post-save cache reclaimer that removes only an exact completed `.director_cache/generated_outputs/<kind>/<seed>` run after the Master and every Segment asset are verified inside the Workspace.
+- Added Standard Pipeline Release Gate 6 covering a 45-second three-Segment/nine-Shot Preview and Final, middle-Segment rerender, unchanged outer Segments, project reload and cache cleanup.
+
+### Changed
+
+- Smart Render manifests now point to durable `segments/SEGMENT_ID/takes` outputs instead of disposable cache paths, preserving future reuse after cache cleanup.
+- Full Preview and Final masters remain the two stable root files `generated_preview.mp4` and `generated_output.mp4`.
+
+### Verification
+
+- The real `h3_project_young_male_influencer` structure was exercised through a hard-linked shadow migration: 29 MP4 paths / 714.60 MB logical size became 8 MP4 paths / 244.33 MB, with all six Segment tier assets and all nine Shot references verified.
+- All `298` bundled tests and all six Standard Pipeline Release Gates pass.
+- Project format is `20`; Workspace layout is `2`; Smart Render policy remains `11`.
+
+## [0.3.1-alpha.1.3] - 2026-08-29
+
+### Added
+
+- Added a persistent `SUB OFF / SUB ON` switch beside Design Requirement and `LANG`. It defaults to off; on creates synchronized, editable subtitle Text Layers from Dialogue, Voice-over and Lyrics.
+- Added a deterministic editable-speech contract. A Requirement that asks for Dialogue, Voice-over/narration or Lyrics must produce matching A-track `text_layers` with `explicit_user_requested=true`.
+- Added descriptive fallback Workspace naming for non-ASCII titles. When a Chinese title cannot form an ASCII folder slug, Design now uses the first useful subject-media keyword, for example `h3_project_female_protagonist`.
+
+### Fixed
+
+- Reset the shipped and local Design language default to `Auto`. The previous persisted `English` selection could override a Chinese Requirement before Qwen was called.
+- Dialogue and narration can no longer be hidden as English quotations inside Shot instructions. Missing editable speech tracks or wrong-language generated lines are rejected and retried once; Apply remains blocked if the retry still violates the contract.
+- With subtitles off, AI-invented caption layers and theme hashtags are removed deterministically. Explicitly requested non-subtitle title/on-screen text remains supported.
+- Preview and final publication now maintain only the stable user-facing Workspace masters `generated_preview.mp4` and `generated_output.mp4`; assembled full-length masters are no longer duplicated into an additional render-take history. Per-Shot Takes remain intact for editable Smart Render.
+- Portable project reload now prefers the matching root Preview/Final master.
+
+### Verification
+
+- Added regressions for missing Voice-over tracks, speech hidden in Shot prose, subtitle off/on behavior, Auto language UI state, setting persistence and non-ASCII project naming.
+- All `293` bundled tests and all five Standard Pipeline Release Gates pass.
+- Project format remains `19`; Smart Render policy remains `11`.
+
+## [0.3.1-alpha.1.2] - 2026-08-29
+
+### Added
+
+- Added a compact `LANG` selector beside the Design Requirement dialogue-engine buttons with Auto plus MiniMax H3's 11 stably supported dialogue languages: Arabic, Chinese, English, French, German, Italian, Japanese, Korean, Portuguese, Russian and Spanish.
+- Added persistent `H3_DESIGN_DIALOGUE_LANGUAGE` storage in `design_ai.env`.
+
+### Fixed
+
+- Auto language now deterministically resolves explicit language wording and the requirement's writing system before the LM request; a Chinese requirement therefore defaults generated dialogue to Chinese instead of English.
+- Design planning and BLIP refinement now receive a mandatory dialogue-language contract. Generated Dialogue, Voice-over and Lyrics with an obvious wrong language/script are rejected and retried once instead of silently reaching Apply.
+- Exact user-authored words remain protected and are never translated by the new language selector.
+
+### Verification
+
+- Added language-catalog, automatic-detection, wrong-script rejection, prompt-contract, setting-round-trip and Design UI regressions.
+- All `289` bundled tests and all five Standard Pipeline Release Gates pass.
+- Project format remains `19`; Smart Render policy remains `11`.
+
+## [0.3.1-alpha.1.1] - 2026-08-29
+
+### Changed
+
+- Reordered the Generation Work Area controls as: Work Area, Aspect, Export API, ComfyUI address, Test Connect, Run+Queue, Storyboard, Preview 0.2MP, Accept 1.0MP, Reject and Estimate.
+- Replaced the long quality selector with direct `STORYBOARD`, `PREVIEW 0.2MP` and `ACCEPT>1.0MP` actions while retaining the same persisted quality-profile state.
+- Compacted `EXPORT ACTIVE API`, `TEST CONNECTION` and `UPLOAD + QUEUE` to `EXPORT API`, `TEST CONNECT` and `RUN+QUEUE`; full descriptions remain available through hover tooltips.
+
+### Verification
+
+- Added a toolbar-order regression covering all eleven requested control groups, compact labels, hover descriptions, hidden persisted quality state and direct Storyboard activation.
+- All `286` bundled tests and all five Standard Pipeline Release Gates pass.
+- Project format remains `19`; Smart Render policy remains `11`.
+
+## [0.3.1-alpha.1] - 2026-08-29
+
+### Added
+
+- Added the first budget-aware long-form production foundation: one project now owns one stable Workspace containing project snapshots, Design revisions, imported and generated media, audio, Shot Takes, Preview/Final renders, proxies, cache and logs.
+- Added non-destructive project-format 19 migration. Opening a format 18 or older project preserves the original JSON and records it in `project_manifest.json`; future saves use `project/director_project.h3director.json`.
+- Added immutable per-Shot Take state with seed, quality profile, latest Take and approved Take. Preview, accepted and final outputs are archived with hard links when possible so historical Takes do not multiply video storage.
+- Added visible Storyboard, Motion Preview 0.2MP and Approved Final 1.0MP quality tiers. Approved Final requires a completed preview and reuses its seed.
+- Added per-Workspace resource estimates, observed render calibration and a configurable free-disk reserve that blocks unsafe generation before TTS/H3 work starts.
+- Added `V0.3.1_ACCEPTANCE_CHECKLIST.md` as the staged release contract for the 45-to-120-second and future long-form workflow.
+
+### Changed
+
+- Repeated Design operations now create `R####` revisions inside the same Workspace instead of timestamped top-level project folders.
+- Newly loaded Media Pool sources are hard-linked or copied into `media/imported`; legacy sources remain untouched until explicitly replaced.
+- Preview and final masters use separate render directories while root-level compatibility links remain available to older scripts and portable projects.
+
+### Verification
+
+- Project Workspace, portable relocation, legacy preservation, quality-tier dispatch, resource calibration, Shot Take persistence and Settings `.env` round-trip regressions are included.
+- All `285` bundled tests pass. All five Standard Pipeline Release Gates pass: P/V/A mapping, post-Design Timeline reconciliation, track-kind repair, 15-second continuity without replay and backend rejection of missing/stale cross-computer media.
+- Project format is `19`; Smart Render policy remains `11`.
+
 ## [0.3.0-alpha.5] - 2026-08-29
 
 ### Added
