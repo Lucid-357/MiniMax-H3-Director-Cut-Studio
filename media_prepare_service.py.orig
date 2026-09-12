@@ -33,7 +33,7 @@ def main() -> int:
     runtime = RuntimePaths(
         python=Path(sys.executable),
         ffmpeg=ffmpeg,
-        ffprobe=ffmpeg.with_name("ffprobe"),
+        ffprobe=ffmpeg.with_name("ffprobe.exe"),
         blip_model_cache=Path(),
         blip_snapshot=Path(),
         blip_model_id="",

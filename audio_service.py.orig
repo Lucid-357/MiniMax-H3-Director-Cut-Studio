@@ -36,7 +36,7 @@ def main() -> int:
     runtime = RuntimePaths(
         python=Path(sys.executable),
         ffmpeg=Path(args.ffmpeg),
-        ffprobe=Path(args.ffmpeg).with_name("ffprobe"),
+        ffprobe=Path(args.ffmpeg).with_name("ffprobe.exe"),
         blip_model_cache=Path(),
         blip_snapshot=Path(),
         blip_model_id="",
