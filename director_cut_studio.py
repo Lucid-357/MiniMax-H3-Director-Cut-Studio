@@ -27,6 +27,7 @@ from PySide6.QtCore import (
 from PySide6.QtGui import QAction, QBrush, QColor, QDrag, QIcon, QImage, QKeySequence, QPainter, QPen, QPixmap, QPixmapCache, QPolygon, QUndoCommand, QUndoStack
 from PySide6.QtMultimedia import QAudioOutput, QMediaPlayer, QVideoSink
 from PySide6.QtMultimediaWidgets import QVideoWidget
+from PySide6.QtNetwork import QLocalServer
 from PySide6.QtWidgets import (
     QApplication,
     QAbstractItemView,
@@ -23292,6 +23293,168 @@ class DirectorCutStudio(QMainWindow):
 _CRASH_LOG_STREAM = None
 
 
+CONTROL_SOCKET_DEFAULT = "/tmp/dcs-control.sock"
+
+
+class DirectorControlHook(QObject):
+    """A local command channel that drives this window while a person watches it.
+
+    Owner's order 2026-09-12: DCS jobs are set up and run through its own GUI, narrated, so he
+    can learn it. Each command outlines the widget it is about to use, then uses it through the
+    same widget or slot a mouse would, so every change appears in the window. It listens on a
+    Unix socket file only, owner-readable, never a network port.
+
+    Every command replies immediately and acts a moment later: loading a project and RUN+QUEUE
+    can open modal dialogs, and a reply that waited on one would hang the caller. Poll `state`,
+    which reports any open dialog; `dismiss` closes it.
+    """
+
+    WIDGET_ALIASES = {
+        "work_area_start": "clip_start",
+        "work_area_end": "clip_end",
+        "run_queue": "queue_button",
+        "server_url": "server_url",
+    }
+
+    def __init__(self, window: "DirectorCutStudio", path: str) -> None:
+        super().__init__(window)
+        self.window = window
+        self.path = path
+        self._buffers: dict = {}
+        QLocalServer.removeServer(path)
+        self.server = QLocalServer(self)
+        self.server.setSocketOptions(QLocalServer.UserAccessOption)
+        self.server.newConnection.connect(self._accept)
+        self.listening = self.server.listen(path)
+
+    # -- transport -------------------------------------------------------------------------
+    def _accept(self) -> None:
+        while self.server.hasPendingConnections():
+            sock = self.server.nextPendingConnection()
+            self._buffers[sock] = b""
+            sock.readyRead.connect(lambda s=sock: self._read(s))
+            sock.disconnected.connect(lambda s=sock: self._buffers.pop(s, None))
+            sock.disconnected.connect(sock.deleteLater)
+
+    def _read(self, sock) -> None:
+        self._buffers[sock] = self._buffers.get(sock, b"") + bytes(sock.readAll())
+        if b"\n" not in self._buffers[sock]:
+            return
+        line, _, rest = self._buffers[sock].partition(b"\n")
+        self._buffers[sock] = rest
+        try:
+            request = json.loads(line.decode("utf-8"))
+            reply = self._dispatch(request)
+        except Exception as exc:  # a bad command must never take the window down
+            reply = {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
+        sock.write((json.dumps(reply, ensure_ascii=False) + "\n").encode("utf-8"))
+        sock.flush()
+        sock.disconnectFromServer()
+
+    # -- helpers ---------------------------------------------------------------------------
+    def _widget(self, target: str):
+        name = self.WIDGET_ALIASES.get(target, target)
+        widget = getattr(self.window, name, None)
+        if isinstance(widget, QWidget):
+            return widget
+        wanted = target.strip().upper()
+        for button in self.window.findChildren(QPushButton):
+            if button.text().strip().upper() == wanted and button.isVisible():
+                return button
+        return None
+
+    def _outline(self, widget, milliseconds: int) -> None:
+        if widget is None or milliseconds <= 0:
+            return
+        previous = widget.styleSheet()
+        widget.setStyleSheet(previous + "; border: 3px solid #ff3cac; border-radius: 4px;")
+        QTimer.singleShot(milliseconds, lambda: widget.setStyleSheet(previous))
+
+    def _after(self, widget, milliseconds: int, action) -> None:
+        self._outline(widget, milliseconds)
+        QTimer.singleShot(max(0, milliseconds), action)
+
+    def _dialog(self) -> dict | None:
+        modal = QApplication.activeModalWidget()
+        if modal is None:
+            return None
+        text = modal.text() if isinstance(modal, QMessageBox) else ""
+        return {"title": modal.windowTitle(), "text": text}
+
+    # -- commands --------------------------------------------------------------------------
+    def _dispatch(self, request: dict) -> dict:
+        command = str(request.get("command", "")).strip().lower()
+        ms = int(request.get("highlight_ms", 1200))
+        w = self.window
+        if command == "ping":
+            return {"ok": True, "title": w.windowTitle(), "socket": self.path}
+        if command == "state":
+            scan = getattr(w, "scan", None)
+            assets = []
+            if scan is not None:
+                for asset in getattr(scan, "assets", []) or []:
+                    assets.append({
+                        "node": getattr(asset, "node_id", ""),
+                        "type": getattr(asset, "media_type", ""),
+                        "file": getattr(asset, "filename", ""),
+                        "caption": getattr(asset, "clip_prompt", ""),
+                    })
+            try:
+                duration = float(w._timeline_duration_seconds()) if scan is not None else None
+            except Exception:
+                duration = None
+            return {
+                "ok": True,
+                "title": w.windowTitle(),
+                "project": str(w.project_path) if getattr(w, "project_path", None) else None,
+                "unsaved_changes": bool(getattr(w, "project_dirty", False)),
+                "work_area": [w.clip_start.value(), w.clip_end.value()],
+                "timeline_seconds": duration,
+                "run_button": {"text": w.queue_button.text(), "enabled": w.queue_button.isEnabled()},
+                "assets": assets,
+                "director_cues": len(getattr(w, "director_cues", []) or []),
+                "dialog": self._dialog(),
+            }
+        if command == "highlight":
+            widget = self._widget(str(request.get("target", "")))
+            if widget is None:
+                return {"ok": False, "error": f"no widget or button named {request.get('target')!r}"}
+            self._outline(widget, ms)
+            return {"ok": True, "highlighted": request.get("target")}
+        if command == "open_project":
+            path = Path(str(request.get("path", "")))
+            if not path.is_file():
+                return {"ok": False, "error": f"no such project file inside the container: {path}"}
+            self._after(self._widget("OPEN PROJECT"), ms, lambda: w.load_project_path(path))
+            return {"ok": True, "started": "open_project", "path": str(path)}
+        if command == "set_work_area":
+            start, end = float(request["start"]), float(request["end"])
+            if not 0 <= start < end:
+                return {"ok": False, "error": "work area must satisfy 0 <= start < end"}
+            def apply() -> None:
+                w.clip_start.setValue(start)
+                w.clip_end.setValue(end)
+            self._outline(w.clip_start, ms)
+            self._after(w.clip_end, ms, apply)
+            return {"ok": True, "started": "set_work_area", "start": start, "end": end}
+        if command == "run_queue":
+            if request.get("confirm") != "RUN":
+                return {"ok": False, "error": "RUN+QUEUE submits a render; resend with confirm=RUN"}
+            if not w.queue_button.isEnabled():
+                return {"ok": False, "error": f"RUN+QUEUE is disabled (shows {w.queue_button.text()!r})"}
+            self._after(w.queue_button, ms, w.queue_button.click)
+            return {"ok": True, "started": "run_queue"}
+        if command == "dismiss":
+            modal = QApplication.activeModalWidget()
+            if modal is None:
+                return {"ok": True, "dismissed": None}
+            info = self._dialog()
+            modal.close()
+            return {"ok": True, "dismissed": info}
+        return {"ok": False, "error": f"unknown command {command!r}",
+                "commands": ["ping", "state", "highlight", "open_project", "set_work_area", "run_queue", "dismiss"]}
+
+
 def _install_crash_logging() -> None:
     """Keep Python/native crash evidence instead of silently losing the window."""
     global _CRASH_LOG_STREAM
@@ -23332,6 +23495,10 @@ def main() -> int:
         window.showMaximized()
     else:
         window.show()
+    # The narrated control hook (owner, 2026-09-12). DCS_CONTROL_SOCKET=off disables it.
+    control_path = os.environ.get("DCS_CONTROL_SOCKET", CONTROL_SOCKET_DEFAULT).strip()
+    if app.platformName() != "offscreen" and control_path.lower() not in {"", "off", "0"}:
+        window.control_hook = DirectorControlHook(window, control_path)
     return app.exec()
 
 
