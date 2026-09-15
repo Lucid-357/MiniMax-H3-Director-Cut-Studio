@@ -8,8 +8,6 @@ Run inside the DCS container (the hook is a Unix socket there, never a network p
     python dcs_control.py highlight "OPEN PROJECT"          # outline a button or field
     python dcs_control.py open /app/dcs/<folder>/<name>.h3director.json
     python dcs_control.py work-area 0 15
-    python dcs_control.py generate-prompt                    # REFRESH NOW: DCS writes its own H3 prompt
-    python dcs_control.py save                               # SAVE PROJECT
     python dcs_control.py run --confirm RUN                  # RUN+QUEUE submits a render
     python dcs_control.py dismiss                            # close an open dialog
 
@@ -45,8 +43,6 @@ def main() -> int:
     sub.add_parser("ping")
     sub.add_parser("state")
     sub.add_parser("dismiss")
-    sub.add_parser("generate-prompt")
-    sub.add_parser("save")
     h = sub.add_parser("highlight"); h.add_argument("target")
     o = sub.add_parser("open"); o.add_argument("path")
     wa = sub.add_parser("work-area"); wa.add_argument("start", type=float); wa.add_argument("end", type=float)
@@ -56,10 +52,6 @@ def main() -> int:
     request = {"highlight_ms": args.highlight_ms}
     if args.cmd in ("ping", "state", "dismiss"):
         request["command"] = args.cmd
-    elif args.cmd == "generate-prompt":
-        request["command"] = "generate_prompt"
-    elif args.cmd == "save":
-        request["command"] = "save_project"
     elif args.cmd == "highlight":
         request.update(command="highlight", target=args.target)
     elif args.cmd == "open":

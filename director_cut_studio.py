@@ -23413,7 +23413,6 @@ class DirectorControlHook(QObject):
                 "run_button": {"text": w.queue_button.text(), "enabled": w.queue_button.isEnabled()},
                 "assets": assets,
                 "director_cues": len(getattr(w, "director_cues", []) or []),
-                "prompt_output_words": len(w.prompt_panel.output.toPlainText().split()),
                 "dialog": self._dialog(),
             }
         if command == "highlight":
@@ -23445,19 +23444,6 @@ class DirectorControlHook(QObject):
                 return {"ok": False, "error": f"RUN+QUEUE is disabled (shows {w.queue_button.text()!r})"}
             self._after(w.queue_button, ms, w.queue_button.click)
             return {"ok": True, "started": "run_queue"}
-        if command == "generate_prompt":
-            # the Prompt panel's REFRESH NOW button: DCS composes its own six-section prompt into
-            # the output box from the brief, the shot cues and the captions. No render, no LM call.
-            if getattr(w, "scan", None) is None:
-                return {"ok": False, "error": "no project or workflow is loaded"}
-            button = self._widget("PROMPT AUTO-GENERATES · REFRESH NOW")
-            self._after(button, ms, lambda: w.generate_prompt(interactive=True))
-            return {"ok": True, "started": "generate_prompt"}
-        if command == "save_project":
-            if getattr(w, "scan", None) is None:
-                return {"ok": False, "error": "no project or workflow is loaded"}
-            self._after(self._widget("SAVE PROJECT"), ms, w.save_project)
-            return {"ok": True, "started": "save_project"}
         if command == "dismiss":
             modal = QApplication.activeModalWidget()
             if modal is None:
@@ -23466,8 +23452,7 @@ class DirectorControlHook(QObject):
             modal.close()
             return {"ok": True, "dismissed": info}
         return {"ok": False, "error": f"unknown command {command!r}",
-                "commands": ["ping", "state", "highlight", "open_project", "set_work_area",
-                             "generate_prompt", "save_project", "run_queue", "dismiss"]}
+                "commands": ["ping", "state", "highlight", "open_project", "set_work_area", "run_queue", "dismiss"]}
 
 
 def _install_crash_logging() -> None:
