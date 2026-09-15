@@ -143,8 +143,16 @@ def _history_outputs(history_item: dict) -> list[dict]:
             if not isinstance(values, list):
                 continue
             for value in values:
-                if isinstance(value, dict) and value.get("filename"):
-                    files.append({"node_id": str(node_id), "kind": output_kind, **value})
+                if not (isinstance(value, dict) and value.get("filename")):
+                    continue
+                # ComfyUI 0.35.0 (upstream f9385059): core LoadVideo lists its INPUT file here as a
+                # preview, with the same "images" key and .mp4 suffix as SaveVideo's result. Only
+                # "type" tells them apart, and _primary_video() takes the first .mp4 - so a Segment
+                # with a video reference or video continuity could return its own source clip.
+                # An input entry is never a result.
+                if value.get("type") == "input":
+                    continue
+                files.append({"node_id": str(node_id), "kind": output_kind, **value})
     return files
 
 
