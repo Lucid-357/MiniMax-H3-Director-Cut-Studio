@@ -233,7 +233,7 @@ from project_storage import (
     safe_cleanup_workspace,
 )
 from project_integrity import repair_project_payload, repair_speech_timing_payload
-from runtime_paths import PROJECT_ROOT, load_runtime_paths
+from runtime_paths import LATEST_WORKFLOW, PROJECT_ROOT, load_runtime_paths  # LATEST_WORKFLOW = the default H3 graph
 from settings_engine import RenderSettings, load_settings, save_settings
 from version_info import APP_VERSION, PROJECT_FORMAT_VERSION
 from qwen3_tts_runtime import (
@@ -291,11 +291,6 @@ from workflow_engine import (
 )
 
 
-# Default = the house lane (owner order 2026-09-16): SparseRef DiT + ref2v 4-step turbo, TurboSampler,
-# shift 6/3 on the scheduler only. Siblings, picked with OPEN API WORKFLOW at project start:
-# ..._singularity_turbo_api.json (backup DiT) and ..._sparseref_fl2vturbo_api.json (arm-B variant).
-# Existing projects keep the workflow_path they recorded; the old 3audio_3video graph stays on disk.
-LATEST_WORKFLOW = PROJECT_ROOT / "video_minimax_h3_r2v_9image_sparseref_turbo_api.json"
 CACHE_ROOT = PROJECT_ROOT / ".director_cache"
 SETTINGS_ENV = PROJECT_ROOT / ".env"
 DESIGN_SETTINGS_ENV = PROJECT_ROOT / "design_ai.env"

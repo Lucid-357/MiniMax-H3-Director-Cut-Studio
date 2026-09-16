@@ -63,8 +63,11 @@
 默认主工作流提供每个 Segment 的实体执行容量：**9 张图片、3 段参考视频和 3 段独立音频**。这不是整个项目的 Media Pool 上限；v0.3.1-alpha.2 的 Virtual Media Pool 可保存不限数量的逻辑素材，并在生成时按 Segment 自动换入这些实体插槽：
 
 ```text
-video_minimax_h3_r2v_9image_3audio_3video_api.json
+video_minimax_h3_r2v_9image_sparseref_turbo_api.json
 ```
+
+(This fork's default. The two sibling graphs below and the older
+`video_minimax_h3_r2v_9image_3audio_3video_api.json` have the same 9 image / 3 video / 3 audio slots.)
 
 ### Model graphs on this fork (linux-port, mm-homelab)
 
@@ -72,7 +75,10 @@ Owner order 2026-09-16: the model is not locked in, and the default is the house
 model setting; the model is whichever API graph the project was started with. New projects open the
 default below. To use another model, press **OPEN API WORKFLOW** at project start and pick its file.
 Existing projects keep the `workflow_path` they recorded, and the old
-`video_minimax_h3_r2v_9image_3audio_3video_api.json` (w4a8 DiT) stays on disk for them.
+`video_minimax_h3_r2v_9image_3audio_3video_api.json` stays on disk for them. That file is upstream's
+graph as this fork reconfigured it on 2026-09-12 (w4a8 DiT, `nvfp4_awq` encoder, ref2v 4-step v0.1
+turbo, `res_multistep`); upstream's untouched original is kept beside it as
+`video_minimax_h3_r2v_9image_3audio_3video_api.json.upstream-orig`.
 
 | Graph | DiT (node 127) | Turbo LoRA (node 150) | Use it when |
 |---|---|---|---|
@@ -83,8 +89,9 @@ Existing projects keep the `workflow_path` they recorded, and the old
 All three share the rest of the lane: `MiniMaxH3TurboSampler` (node 123), scheduler `simple`,
 4 steps, and `MiniMaxH3SigmaShift` 6.0/3.0 (node 703) feeding the scheduler only; the guider (126)
 takes the unshifted model. Steps, aspect and megapixels come from `.env` at submit time
-(`H3_SAMPLING_STEPS=4`, `9:16`, `0.4` MP = 480x864). The model-file table below describes the
-upstream graph, not these.
+(`H3_SAMPLING_STEPS=4`, `9:16`, `0.4` MP = 480x864); node 115 in each file carries the same
+9:16 / 0.4 MP, so a graph opened directly matches. The model-file table below lists what these three
+graphs load.
 
 Design 页面使用以下工作流生成概念参考图：
 
@@ -98,24 +105,32 @@ Z-Image_Text2Image_for_webui_t2i_api.json
 
 ### 1. MiniMax H3 Ref2VA 主工作流
 
-以下是默认 `video_minimax_h3_r2v_9image_3audio_3video_api.json` 中所有会直接读取外部模型文件的节点，没有其他隐藏 checkpoint。
+Every node in this fork's three graphs that reads an external model file (no hidden checkpoints).
+Only nodes 127 and 150 differ between the three graphs.
 
-| 节点 ID | 节点类型 | 准确文件名 | 建议放置目录 | 用途 | 必需 |
-|---:|---|---|---|---|:---:|
-| 127 | `UNETLoader` | `minimax_h3_ref2va_int8_convrot.safetensors` | `ComfyUI/models/diffusion_models/` | H3 Ref2VA 主扩散模型 | 是 |
-| 128 | `CLIPLoader` | `qwen3vl_32b_h3_ultra_uncensored_heretic_int8_convrot.safetensors` | `ComfyUI/models/text_encoders/` | H3/Qwen3-VL 多模态文字与参考素材编码器 | 是 |
-| 119 | `VAELoader` | `minimax_h3_video_vae_fp16.safetensors` | `ComfyUI/models/vae/` | H3 视频 VAE | 是 |
-| 120 | `VAELoader` | `minimax_h3_audio_vae_fp32.safetensors` | `ComfyUI/models/vae/` | H3 原生音频 VAE | 是 |
-| 150 | `MiniMaxH3TurboLoRA` | `minimax_h3_turbo_v4_step600_ema.safetensors` | `ComfyUI/models/loras/` | H3 Turbo 8-step LoRA | 是 |
+| Node | Node type | Exact filename | Directory | Purpose | Graph |
+|---:|---|---|---|---|---|
+| 127 | `UNETLoader` | `minimaxH3Sparseref15_prunedPartialINT8V10.safetensors` | `ComfyUI/models/diffusion_models/` | H3 Ref2VA DiT, SparseRef | `…_sparseref_turbo_api.json` (default), `…_sparseref_fl2vturbo_api.json` |
+| 127 | `UNETLoader` | `Minimax-h3_Singularity_ref2va_Pruned_v1.3_int8.safetensors` | `ComfyUI/models/diffusion_models/` | H3 Ref2VA DiT, Singularity (backup) | `…_singularity_turbo_api.json` |
+| 150 | `LoraLoaderModelOnly` | `minimax_h3_ref2v_turbo_4step_v0.1_comfyui_bf16.safetensors` | `ComfyUI/models/loras/` | ref2v 4-step turbo LoRA, strength 1.0 | default, Singularity |
+| 150 | `LoraLoaderModelOnly` | `minimax_h3_fl2v_turbo_4step_v1.2_768p_comfyui_bf16.safetensors` | `ComfyUI/models/loras/` | fl2v 4-step turbo LoRA, strength 1.0 | arm B (`…_sparseref_fl2vturbo_api.json`) |
+| 128 | `CLIPLoader` | `qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors` | `ComfyUI/models/text_encoders/` | H3/Qwen3-VL text and reference encoder, type `minimax` | all three |
+| 119 | `VAELoader` | `minimax_h3_video_vae_fp16.safetensors` | `ComfyUI/models/vae/` | H3 video VAE | all three |
+| 120 | `VAELoader` | `minimax_h3_audio_vae_fp32.safetensors` | `ComfyUI/models/vae/` | H3 native audio VAE | all three |
 
-当前工作流的主要推理参数：
+Sampling in all three graphs:
 
-- Sampler：`res_multistep`
-- Scheduler：`simple`
-- Sampling steps：`8`
-- Denoise：`1.0`
-- 输出：`24 FPS`
-- RTX Video Super Resolution：默认 `2x / ULTRA`
+- Sampler: `MiniMaxH3TurboSampler` (node 123)
+- Scheduler: `simple` (node 124), fed by `MiniMaxH3SigmaShift` 6.0 video / 3.0 audio (node 703); the guider (node 126) takes the unshifted model
+- Sampling steps: `4`
+- Denoise: `1.0`
+- Output: `24 FPS`, 480x864 (9:16 at 0.4 MP, multiple 32)
+- RTX Video Super Resolution: not in these graphs (`H3_RTX_VIDEO_SUPER_RESOLUTION=false` in `.env`)
+
+Upstream's original graph (`…3audio_3video_api.json.upstream-orig`) loaded
+`minimax_h3_ref2va_int8_convrot`, the `qwen3vl_32b_h3_ultra_uncensored_heretic_int8_convrot` encoder
+and the 8-step `minimax_h3_turbo_v4_step600_ema` LoRA through `MiniMaxH3TurboLoRA`, with RTX 2x
+upscaling. None of those is used by this fork's graphs.
 
 如果你的 ComfyUI 使用旧目录布局，`CLIPLoader` 可能从 `ComfyUI/models/clip/` 读取，`UNETLoader` 也可能从 `ComfyUI/models/unet/` 读取。应以节点下拉菜单实际扫描到的目录为准；也可以在 ComfyUI 的 `extra_model_paths.yaml` 中映射模型目录。现代 ComfyUI 通常使用 `diffusion_models`、`text_encoders`、`vae` 与 `loras`。
 
@@ -191,17 +206,19 @@ Studio 每次 Design／AI Enrich 前都会校验保存的 Model ID。若原 GGUF
 ComfyUI/
 └─ models/
    ├─ diffusion_models/
-   │  ├─ minimax_h3_ref2va_int8_convrot.safetensors
+   │  ├─ minimaxH3Sparseref15_prunedPartialINT8V10.safetensors
+   │  ├─ Minimax-h3_Singularity_ref2va_Pruned_v1.3_int8.safetensors
    │  └─ z_image_turbo_bf16.safetensors
    ├─ text_encoders/
-   │  ├─ qwen3vl_32b_h3_ultra_uncensored_heretic_int8_convrot.safetensors
+   │  ├─ qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors
    │  └─ qwen_3_4b.safetensors
    ├─ vae/
    │  ├─ minimax_h3_video_vae_fp16.safetensors
    │  ├─ minimax_h3_audio_vae_fp32.safetensors
    │  └─ ae.safetensors
    └─ loras/
-      └─ minimax_h3_turbo_v4_step600_ema.safetensors
+      ├─ minimax_h3_ref2v_turbo_4step_v0.1_comfyui_bf16.safetensors
+      └─ minimax_h3_fl2v_turbo_4step_v1.2_768p_comfyui_bf16.safetensors
 ```
 
 模型放好后重启 ComfyUI，并逐一检查对应 Loader 节点的下拉菜单。不要只把文件复制进目录而不重启或刷新模型列表。
@@ -209,6 +226,13 @@ ComfyUI/
 ## 节点与自定义节点依赖
 
 下表来自当前工作流使用的 ComfyUI 节点类型。可以通过 `http://YOUR_COMFYUI_HOST:8189/object_info` 检查自己的节点安装；`comfy_extras.*` 属于较新版本 ComfyUI 的内置扩展，`custom_nodes.*` 需要相应自定义节点包。
+
+This fork's three graphs: the `MiniMaxH3TurboLoRA`, `MiniMaxH3MemoryEfficientSolAttentionPatch` and
+`RTXVideoSuperResolution` rows below are upstream-only and are not used. The fork's graphs add
+`LoraLoaderModelOnly` (`nodes`, core), `MiniMaxH3TurboSampler`
+(`custom_nodes.ComfyUI-MiniMax-H3-Turbo`), `MiniMaxH3SigmaShift` (`comfy_extras.nodes_minimax_h3`) and
+`ModelAttentionBackend` (`comfy_extras.nodes_model_advanced`), and use `SamplerCustomAdvanced`,
+`BasicScheduler` and `BasicGuider` (core).
 
 | 节点 | Python module | 来源/处理方式 | 额外模型文件 |
 |---|---|---|---|
@@ -270,7 +294,7 @@ video_minimax_h3_r2v API 3IMAGE 1AUDIO 1VIDEO.json
 | `VAELoader` | `minimax_h3_video_vae_fp16.safetensors` | `ComfyUI/models/vae/` |
 | `VAELoader` | `minimax_h3_audio_vae_fp32.safetensors` | `ComfyUI/models/vae/` |
 
-旧版 workflow 使用 `20 steps`，没有当前默认工作流中的 `minimax_h3_turbo_v4_step600_ema.safetensors` 节点。
+旧版 workflow 使用 `20 steps`，没有 turbo LoRA 节点（this fork's graphs use a 4-step turbo LoRA on node 150）。
 
 ## 安装与运行
 

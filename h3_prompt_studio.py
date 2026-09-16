@@ -10,6 +10,7 @@ import threading
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 
+from runtime_paths import LATEST_WORKFLOW
 from prompt_engine import (
     PromptSpec,
     build_structured_prompt,
@@ -333,7 +334,7 @@ class PromptStudio(tk.Tk):
             self._choose_workflow()
 
     def _auto_load_default_workflow(self) -> None:
-        preferred = Path.cwd() / "video_minimax_h3_r2v_9image_3audio_3video_api.json"
+        preferred = LATEST_WORKFLOW  # same default graph as director_cut_studio.py
         if preferred.exists():
             self._load_workflow_path(preferred, show_error=False)
 
