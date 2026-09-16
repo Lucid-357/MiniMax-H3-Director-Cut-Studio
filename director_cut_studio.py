@@ -22325,9 +22325,11 @@ class DirectorCutStudio(QMainWindow):
         self.quality_profile_combo.blockSignals(True)
         self.quality_profile_combo.setCurrentIndex(max(0, quality_index))
         self.quality_profile_combo.blockSignals(False)
+        # linux-port: ACCEPT renders at the Settings megapixels (H3_MEGAPIXELS, 0.4 = the 480 tier),
+        # not upstream's fixed 1.0 MP, so a click never escalates past the box's cost ladder.
         self._start_generation(
             "accepted",
-            1.0,
+            self.settings_megapixels.value(),
             self.preview_seed,
             self.settings_rtx_vsr.isChecked(),
         )

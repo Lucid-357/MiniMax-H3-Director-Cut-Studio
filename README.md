@@ -650,11 +650,11 @@ shipped `16:9`, `1.0` MP, 8 steps, RTX on, and `http://127.0.0.1:8189`.
 
 这项恢复适用于“客户端／局域网断线，但远端 ComfyUI 进程和 Queue 仍然存在”的情况。如果 ComfyUI 本身重启并清空 `/history`，旧 `prompt_id` 无法在客户端凭空重建模型计算，必须重新生成该 Segment。`H3_DIALOGUE_TTS_ENGINE` 可设为 `h3_native`、`voxcpm2_local`、`qwen3_tts_local` 或 `edge_tts`；默认 `h3_native` 直接让 MiniMax H3 根据最新 Timeline Text Layer 生成对白，不建立 WAV。`H3_BLIP_DEVICE` 可设为 `auto`、`cuda` 或 `cpu`；主页 Settings 也提供相同选择。默认 `auto` 会先在 CPU 安全载入 BLIP，执行真实 CUDA 探测后才把模型移到 GPU，任何启动或推理错误都会保留原任务并自动切回 CPU。Pre-run Preview 使用 `0.2 MP` 且跳过 RTX upscaling；Accept 会在正式 `1.0 MP` 生成中复用 seed，Reject 会用新 seed 重新生成低分辨率预览。
 
-**Megapixels by button, in this fork's code.** Only **RUN+QUEUE** reads `H3_MEGAPIXELS` (the
-Settings value, 0.4 MP = 480x864 here). **PREVIEW** is hardcoded to 0.2 MP (352x608 at 9:16), and
-**ACCEPT** is hardcoded to **1.0 MP** (`accept_pre_run_preview` in `director_cut_studio.py`), which
-ignores `.env` and renders **768x1376** at 9:16. To stay on the 480p tier, render with RUN+QUEUE,
-not PREVIEW then ACCEPT.
+**Megapixels by button, in this fork's code.** **RUN+QUEUE** and **ACCEPT** both render at the
+Settings megapixels (`H3_MEGAPIXELS`, 0.4 MP = 480x864 here). Upstream hardcodes ACCEPT to 1.0 MP
+(768x1376 at 9:16); this fork changed `accept_pre_run_preview` on 2026-09-16 (owner order) so a click
+never escalates past the 480p tier. **PREVIEW** stays hardcoded to 0.2 MP (352x608 at 9:16), a cheap
+draft below the tier. For a 1.0 MP final, raise Mega pixels in Settings first.
 
 ### Design AI 设置
 
@@ -746,7 +746,7 @@ H3_DESIGN_IMAGE_CFG=1.0
 - 生成时当前 Segment 自动变蓝；成功写入 manifest 后立即变绿，失败则保留红色。状态及黄色 dirty Segment 会跟随 Director Project 保存和恢复。
 - Program Monitor 在生成期间不会再被全屏遮罩取代：旧 Master／Timeline Source 会继续显示，上方使用横跨左右两个画面的半透明 spinner 和实时阶段文字；右侧生成视频通过 `QVideoSink` 绘制，避免 Windows 原生视频表面穿透遮罩。每个 Shot Unit 下载完成后会立即在右侧循环预览，同时后台继续生成下一段与组装 Master。
 - FFmpeg 会裁掉重复的重叠区，将所有段重编码为一个带音频的 `master.mp4`。Program Monitor 与 Export 始终只显示完整 Master。
-- Pre-run Preview 会为所有内部段建立稳定 seed；Accept 以 1.0MP 复用同一组 seed。(In this fork that 1.0 MP is still hardcoded and ignores `.env`: 768x1376 at 9:16. See "Megapixels by button" above.)
+- Pre-run Preview 会为所有内部段建立稳定 seed；Accept 以 1.0MP 复用同一组 seed。(In this fork ACCEPT uses the Settings megapixels instead, 0.4 MP = 480x864. See "Megapixels by button" above.)
 
 Smart Long Render 的项目文件格式目前为 **version 20**。version 20 加入 Workspace layout 2 的 Segment Take 索引、可携式相对路径、Shot 的 Preview/Final Segment 引用及旧 Shot Take 哈希验证迁移。运行时首先写入 `.director_cache/generated_outputs/`；当 Master、所有 Segment Take 和项目 JSON 都成功归档并验证后，Studio 才清理该次临时缓存。Design JSON 的 Timeline 长度上限为 600 秒；实际可行长度仍取决于磁盘空间、ComfyUI 稳定性和总生成时间。
 
