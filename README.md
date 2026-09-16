@@ -263,14 +263,17 @@ This fork's three graphs: the `MiniMaxH3TurboLoRA`, `MiniMaxH3MemoryEfficientSol
 为避免误以为还有遗漏，下面列出两个 API 中其余全部节点类型。这些节点只负责连接、采样、条件处理、媒体 I/O、解码、放大或内存清理，不会再读取新的 checkpoint：
 
 ```text
-H3 workflow:
+H3 workflow (this fork's three graphs; the same node set in all three):
 BasicGuider, BasicScheduler, ComfyMathExpression, CreateVideo,
-GetVideoComponents, KSamplerSelect, LoadAudio, LoadImage, LoadVideo,
-MiniMaxH3MemoryEfficientSolAttentionPatch, MiniMaxH3ReferenceToVideo,
+GetVideoComponents, LoadAudio, LoadImage, LoadVideo,
+MiniMaxH3ReferenceToVideo, MiniMaxH3SigmaShift, MiniMaxH3TurboSampler,
 ModelAttentionBackend, PrimitiveFloat, PrimitiveStringMultiline,
-RAMCleanup, RandomNoise, ResolutionSelector, RTXVideoSuperResolution,
+RAMCleanup, RandomNoise, ResolutionSelector,
 SamplerCustomAdvanced, SaveVideo, VAEDecode, VAEDecodeAudio,
 VRAM_Debug, VRAMCleanup
+(Upstream's original H3 graph, kept as `….upstream-orig`, used KSamplerSelect,
+MiniMaxH3MemoryEfficientSolAttentionPatch and RTXVideoSuperResolution here, and
+MiniMaxH3TurboLoRA as its LoRA loader. None of the four is in this fork's graphs.)
 
 Z-Image workflow:
 CLIPTextEncode, ConditioningZeroOut, EmptySD3LatentImage, KSampler,
@@ -620,25 +623,38 @@ Speaker 固定映射为普通话女声，S2／S4 等偶数 Speaker 固定映射�
 
 主页可以选择 Aspect Ratio，并测试 ComfyUI 连接。设置保存在项目根目录 `.env`：
 
+This fork's `.env` (the 480p house lane, 2026-09-16):
+
 ```dotenv
-H3_COMFYUI_URL=http://127.0.0.1:8189
-H3_ASPECT_RATIO=16:9
-H3_MEGAPIXELS=1.0
-H3_SAMPLING_STEPS=8
+H3_COMFYUI_URL=http://mm-homelab:8188
+H3_ASPECT_RATIO=9:16
+H3_MEGAPIXELS=0.4
+H3_SAMPLING_STEPS=4
 H3_DENOISE=1.0
-H3_RTX_VIDEO_SUPER_RESOLUTION=true
+H3_RTX_VIDEO_SUPER_RESOLUTION=false
 H3_HISTORY_POLL_INTERVAL=1.0
 H3_GENERATION_TIMEOUT=1800
 H3_HTTP_REQUEST_TIMEOUT=30
 H3_CONNECTION_RECOVERY_TIMEOUT=3600
 H3_DIALOGUE_TTS_ENGINE=h3_native
+H3_MUSIC_MODE=auto
 H3_BLIP_DEVICE=auto
 H3_WORKSPACE_FREE_DISK_RESERVE_GB=50.0
 ```
 
+9:16 at 0.4 MP with `ResolutionSelector` multiple 32 is 480x864. `H3_RTX_VIDEO_SUPER_RESOLUTION`
+stays `false`: the fork's graphs have no RTX node, so the setting has nothing to bypass. Upstream
+shipped `16:9`, `1.0` MP, 8 steps, RTX on, and `http://127.0.0.1:8189`.
+
 请把 URL 改成自己的 ComfyUI 地址。`H3_CONNECTION_RECOVERY_TIMEOUT` 默认是 `3600` 秒；ComfyUI 接受任务并返回 `prompt_id` 后，如果远端网络暂时中断，Studio 会保留该 ID、显示橙色 Reconnecting 状态并持续查询同一个 Server Job，不会因为客户端失联而重复排队。网络恢复后会接回真实进度、下载原任务的输出，再继续其余 Segment 与 Master 拼接；输出下载使用 `.part` 临时文件并在完整取得后才发布。可以在 Settings 的 `Connection recovery window` 调整等待时间。
 
 这项恢复适用于“客户端／局域网断线，但远端 ComfyUI 进程和 Queue 仍然存在”的情况。如果 ComfyUI 本身重启并清空 `/history`，旧 `prompt_id` 无法在客户端凭空重建模型计算，必须重新生成该 Segment。`H3_DIALOGUE_TTS_ENGINE` 可设为 `h3_native`、`voxcpm2_local`、`qwen3_tts_local` 或 `edge_tts`；默认 `h3_native` 直接让 MiniMax H3 根据最新 Timeline Text Layer 生成对白，不建立 WAV。`H3_BLIP_DEVICE` 可设为 `auto`、`cuda` 或 `cpu`；主页 Settings 也提供相同选择。默认 `auto` 会先在 CPU 安全载入 BLIP，执行真实 CUDA 探测后才把模型移到 GPU，任何启动或推理错误都会保留原任务并自动切回 CPU。Pre-run Preview 使用 `0.2 MP` 且跳过 RTX upscaling；Accept 会在正式 `1.0 MP` 生成中复用 seed，Reject 会用新 seed 重新生成低分辨率预览。
+
+**Megapixels by button, in this fork's code.** Only **RUN+QUEUE** reads `H3_MEGAPIXELS` (the
+Settings value, 0.4 MP = 480x864 here). **PREVIEW** is hardcoded to 0.2 MP (352x608 at 9:16), and
+**ACCEPT** is hardcoded to **1.0 MP** (`accept_pre_run_preview` in `director_cut_studio.py`), which
+ignores `.env` and renders **768x1376** at 9:16. To stay on the 480p tier, render with RUN+QUEUE,
+not PREVIEW then ACCEPT.
 
 ### Design AI 设置
 
@@ -730,7 +746,7 @@ H3_DESIGN_IMAGE_CFG=1.0
 - 生成时当前 Segment 自动变蓝；成功写入 manifest 后立即变绿，失败则保留红色。状态及黄色 dirty Segment 会跟随 Director Project 保存和恢复。
 - Program Monitor 在生成期间不会再被全屏遮罩取代：旧 Master／Timeline Source 会继续显示，上方使用横跨左右两个画面的半透明 spinner 和实时阶段文字；右侧生成视频通过 `QVideoSink` 绘制，避免 Windows 原生视频表面穿透遮罩。每个 Shot Unit 下载完成后会立即在右侧循环预览，同时后台继续生成下一段与组装 Master。
 - FFmpeg 会裁掉重复的重叠区，将所有段重编码为一个带音频的 `master.mp4`。Program Monitor 与 Export 始终只显示完整 Master。
-- Pre-run Preview 会为所有内部段建立稳定 seed；Accept 以 1.0MP 复用同一组 seed。
+- Pre-run Preview 会为所有内部段建立稳定 seed；Accept 以 1.0MP 复用同一组 seed。(In this fork that 1.0 MP is still hardcoded and ignores `.env`: 768x1376 at 9:16. See "Megapixels by button" above.)
 
 Smart Long Render 的项目文件格式目前为 **version 20**。version 20 加入 Workspace layout 2 的 Segment Take 索引、可携式相对路径、Shot 的 Preview/Final Segment 引用及旧 Shot Take 哈希验证迁移。运行时首先写入 `.director_cache/generated_outputs/`；当 Master、所有 Segment Take 和项目 JSON 都成功归档并验证后，Studio 才清理该次临时缓存。Design JSON 的 Timeline 长度上限为 600 秒；实际可行长度仍取决于磁盘空间、ComfyUI 稳定性和总生成时间。
 
@@ -821,8 +837,15 @@ http://YOUR_COMFYUI_HOST:8189/object_info/UNETLoader
 http://YOUR_COMFYUI_HOST:8189/object_info/CLIPLoader
 http://YOUR_COMFYUI_HOST:8189/object_info/VAELoader
 http://YOUR_COMFYUI_HOST:8189/object_info/MiniMaxH3ReferenceToVideo
-http://YOUR_COMFYUI_HOST:8189/object_info/RTXVideoSuperResolution
+http://YOUR_COMFYUI_HOST:8189/object_info/MiniMaxH3TurboSampler
+http://YOUR_COMFYUI_HOST:8189/object_info/MiniMaxH3SigmaShift
+http://YOUR_COMFYUI_HOST:8189/object_info/LoraLoaderModelOnly
 ```
+
+This fork's host is `http://mm-homelab:8188`. The `RTXVideoSuperResolution` check applies only to
+upstream's original graph (`….upstream-orig`); the fork's graphs do not use that node. Read the
+response **body**: ComfyUI answers `200 {}` for a node it does not have, so a 200 status alone
+proves nothing.
 
 ## 常见问题
 
@@ -986,6 +1009,11 @@ findstr /s /i /m "dghs-imgutils" custom_nodes\*.txt custom_nodes\*.toml custom_n
 空间声学只改变受影响 Segment 的 Prompt 与 fingerprint，不会接触素材 Mapping。标准交叉测试已经验证：修改中间 Shot 的大厅声场为走廊后，只有中间 Segment 需要重算；全部 P/V/A slots、H3 节点输入、有效标签及前后 24 帧 continuity metadata 保持一致。
 
 ### RTX Video Super Resolution 失败
+
+**Upstream graph only.** This section applies to upstream's original graph
+(`video_minimax_h3_r2v_9image_3audio_3video_api.json.upstream-orig`). The fork's three graphs have no
+`RTXVideoSuperResolution` node, and `Nvidia_RTX_Nodes_ComfyUI` is not installed on this fork's
+ComfyUI host. With those graphs the Settings checkbox has no effect.
 
 - 该节点只支持 NVIDIA RTX GPU，并需要匹配的 NVIDIA 驱动与节点依赖。
 - 可在 Settings 取消 `Enable RTX Video Super Resolution`，先以基础分辨率验证完整生成流程。
