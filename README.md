@@ -66,6 +66,26 @@
 video_minimax_h3_r2v_9image_3audio_3video_api.json
 ```
 
+### Model graphs on this fork (linux-port, mm-homelab)
+
+Owner order 2026-09-16: the model is not locked in, and the default is the house lane. DCS has no
+model setting; the model is whichever API graph the project was started with. New projects open the
+default below. To use another model, press **OPEN API WORKFLOW** at project start and pick its file.
+Existing projects keep the `workflow_path` they recorded, and the old
+`video_minimax_h3_r2v_9image_3audio_3video_api.json` (w4a8 DiT) stays on disk for them.
+
+| Graph | DiT (node 127) | Turbo LoRA (node 150) | Use it when |
+|---|---|---|---|
+| `video_minimax_h3_r2v_9image_sparseref_turbo_api.json` | `minimaxH3Sparseref15_prunedPartialINT8V10` | ref2v 4-step v0.1 | **Default.** Every new project. |
+| `video_minimax_h3_r2v_9image_singularity_turbo_api.json` | `Minimax-h3_Singularity_ref2va_Pruned_v1.3_int8` | ref2v 4-step v0.1 | Backup, when SparseRef will not give the shot. |
+| `video_minimax_h3_r2v_9image_sparseref_fl2vturbo_api.json` | `minimaxH3Sparseref15_prunedPartialINT8V10` | fl2v 4-step v1.2 | Arm B, a labelled variant. Only when asked for by name. |
+
+All three share the rest of the lane: `MiniMaxH3TurboSampler` (node 123), scheduler `simple`,
+4 steps, and `MiniMaxH3SigmaShift` 6.0/3.0 (node 703) feeding the scheduler only; the guider (126)
+takes the unshifted model. Steps, aspect and megapixels come from `.env` at submit time
+(`H3_SAMPLING_STEPS=4`, `9:16`, `0.4` MP = 480x864). The model-file table below describes the
+upstream graph, not these.
+
 Design 页面使用以下工作流生成概念参考图：
 
 ```text

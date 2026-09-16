@@ -291,7 +291,11 @@ from workflow_engine import (
 )
 
 
-LATEST_WORKFLOW = PROJECT_ROOT / "video_minimax_h3_r2v_9image_3audio_3video_api.json"
+# Default = the house lane (owner order 2026-09-16): SparseRef DiT + ref2v 4-step turbo, TurboSampler,
+# shift 6/3 on the scheduler only. Siblings, picked with OPEN API WORKFLOW at project start:
+# ..._singularity_turbo_api.json (backup DiT) and ..._sparseref_fl2vturbo_api.json (arm-B variant).
+# Existing projects keep the workflow_path they recorded; the old 3audio_3video graph stays on disk.
+LATEST_WORKFLOW = PROJECT_ROOT / "video_minimax_h3_r2v_9image_sparseref_turbo_api.json"
 CACHE_ROOT = PROJECT_ROOT / ".director_cache"
 SETTINGS_ENV = PROJECT_ROOT / ".env"
 DESIGN_SETTINGS_ENV = PROJECT_ROOT / "design_ai.env"
