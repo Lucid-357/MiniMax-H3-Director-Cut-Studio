@@ -87,7 +87,7 @@ turbo, `res_multistep`); upstream's untouched original is kept beside it as
 | `video_minimax_h3_r2v_9image_sparseref_fl2vturbo_api.json` | `minimaxH3Sparseref15_prunedPartialINT8V10` | fl2v 4-step v1.2 | Arm B, a labelled variant. Only when asked for by name. |
 
 All three share the rest of the lane: `MiniMaxH3TurboSampler` (node 123), scheduler `simple`,
-4 steps, and `MiniMaxH3SigmaShift` 6.0/3.0 (node 703) feeding the scheduler only; the guider (126)
+4 steps, and `MiniMaxH3SigmaShift` 12.0/3.0 (node 703) feeding the scheduler only; the guider (126)
 takes the unshifted model. Steps, aspect and megapixels come from `.env` at submit time
 (`H3_SAMPLING_STEPS=4`, `9:16`, `0.4` MP = 480x864); node 115 in each file carries the same
 9:16 / 0.4 MP, so a graph opened directly matches. The model-file table below lists what these three
@@ -121,7 +121,7 @@ Only nodes 127 and 150 differ between the three graphs.
 Sampling in all three graphs:
 
 - Sampler: `MiniMaxH3TurboSampler` (node 123)
-- Scheduler: `simple` (node 124), fed by `MiniMaxH3SigmaShift` 6.0 video / 3.0 audio (node 703); the guider (node 126) takes the unshifted model
+- Scheduler: `simple` (node 124), fed by `MiniMaxH3SigmaShift` 12.0 video / 3.0 audio (node 703); the guider (node 126) takes the unshifted model
 - Sampling steps: `4`
 - Denoise: `1.0`
 - Output: `24 FPS`, 480x864 (9:16 at 0.4 MP, multiple 32)
