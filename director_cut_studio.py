@@ -27,6 +27,7 @@ from PySide6.QtCore import (
 from PySide6.QtGui import QAction, QBrush, QColor, QDrag, QIcon, QImage, QKeySequence, QPainter, QPen, QPixmap, QPixmapCache, QPolygon, QUndoCommand, QUndoStack
 from PySide6.QtMultimedia import QAudioOutput, QMediaPlayer, QVideoSink
 from PySide6.QtMultimediaWidgets import QVideoWidget
+from PySide6.QtNetwork import QLocalServer
 from PySide6.QtWidgets import (
     QApplication,
     QAbstractItemView,
@@ -232,7 +233,7 @@ from project_storage import (
     safe_cleanup_workspace,
 )
 from project_integrity import repair_project_payload, repair_speech_timing_payload
-from runtime_paths import PROJECT_ROOT, load_runtime_paths
+from runtime_paths import LATEST_WORKFLOW, PROJECT_ROOT, load_runtime_paths  # LATEST_WORKFLOW = the default H3 graph
 from settings_engine import RenderSettings, load_settings, save_settings
 from version_info import APP_VERSION, PROJECT_FORMAT_VERSION
 from qwen3_tts_runtime import (
@@ -290,7 +291,6 @@ from workflow_engine import (
 )
 
 
-LATEST_WORKFLOW = PROJECT_ROOT / "video_minimax_h3_r2v_9image_3audio_3video_api.json"
 CACHE_ROOT = PROJECT_ROOT / ".director_cache"
 SETTINGS_ENV = PROJECT_ROOT / ".env"
 DESIGN_SETTINGS_ENV = PROJECT_ROOT / "design_ai.env"
@@ -1746,7 +1746,7 @@ class MediaCard(QFrame):
         self.filename.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
         self.filename.setToolTip(asset.filename)
         self.filename.setStyleSheet("color:#aeb3ba;")
-        self.ai_badge = QLabel("识别 --")
+        self.ai_badge = QLabel("Scan --")
         self.ai_badge.setStyleSheet("color:#68c9d8; font-size:10px;")
         foot.addWidget(self.filename, 1)
         foot.addWidget(self.ai_badge)
@@ -1801,9 +1801,9 @@ class MediaCard(QFrame):
         self.set_analysis_status(
             "AI ✓"
             if self.asset.semantic_enrichment
-            else "识别 ✓"
+            else "Scan ✓"
             if self.asset.recognition
-            else "识别 …"
+            else "Scan …"
         )
 
     def set_local_image_fallback(self) -> bool:
@@ -1845,9 +1845,9 @@ class MediaCard(QFrame):
         default_status = (
             "AI ✓"
             if self.asset.semantic_enrichment
-            else "识别 ✓"
+            else "Scan ✓"
             if self.asset.recognition
-            else "识别 --"
+            else "Scan --"
         )
         status = self.analysis_status or default_status
         if self.width() < 125:
@@ -3767,10 +3767,10 @@ class SpecialSkillCreatorDialog(QDialog):
         chinese_panel = QWidget()
         chinese_layout = QVBoxLayout(chinese_panel)
         chinese_layout.setContentsMargins(0, 0, 0, 0)
-        chinese_layout.addWidget(QLabel("SKILL.cn.md · 中文对照版本（可选）"))
+        chinese_layout.addWidget(QLabel("SKILL.cn.md · Chinese version (optional)"))
         self.chinese_edit = QPlainTextEdit()
         self.chinese_edit.setObjectName("specialSkillChineseEdit")
-        self.chinese_edit.setPlaceholderText("中文说明；留空则不建立中文版本")
+        self.chinese_edit.setPlaceholderText("Chinese description — leave empty to skip the Chinese version")
         chinese_layout.addWidget(self.chinese_edit, 1)
         editors.addWidget(chinese_panel)
         editors.setSizes([520, 420])
@@ -4328,7 +4328,7 @@ class ContentLayerDialog(QDialog):
             ("Delivery", self.delivery_combo),
             ("Overlap", self.overlap_combo),
             ("Lip Sync", self.lip_sync_check),
-            ("所属 Shot", self.shot_combo),
+            ("Parent shot", self.shot_combo),
         ):
             label = QLabel(title)
             form.addRow(label, widget)
@@ -6508,16 +6508,16 @@ class DesignPageDialog(QDialog):
         self.dialogue_language_combo.addItem("Auto", "auto")
         dialogue_language_labels = {
             "Arabic": "Arabic",
-            "Chinese": "中文",
+            "Chinese": "Chinese",
             "English": "English",
-            "French": "Français",
-            "German": "Deutsch",
-            "Italian": "Italiano",
-            "Japanese": "日本語",
-            "Korean": "한국어",
-            "Portuguese": "Português",
-            "Russian": "Русский",
-            "Spanish": "Español",
+            "French": "French",
+            "German": "German",
+            "Italian": "Italian",
+            "Japanese": "Japanese",
+            "Korean": "Korean",
+            "Portuguese": "Portuguese",
+            "Russian": "Russian",
+            "Spanish": "Spanish",
         }
         for language in H3_STABLE_DIALOGUE_LANGUAGES:
             self.dialogue_language_combo.addItem(
@@ -8694,8 +8694,15 @@ class DirectorCutStudio(QMainWindow):
         self.timeline_slider_seek_timer.timeout.connect(self._apply_timeline_slider_seek)
         CACHE_ROOT.mkdir(exist_ok=True)
         self.setWindowTitle(f"MiniMax H3 Director Cut Studio v{APP_VERSION}")
-        self.resize(1680, 980)
         self.setMinimumSize(1180, 720)
+        # Remember the window size and position across launches (owner, 2026-09-12). The file
+        # sits beside this script so it survives restarts and, on the box, container rebuilds.
+        self._window_geometry_path = Path(__file__).with_name("dcs-window-geometry.json")
+        self._window_geometry_timer = QTimer(self)
+        self._window_geometry_timer.setSingleShot(True)
+        self._window_geometry_timer.setInterval(500)
+        self._window_geometry_timer.timeout.connect(self._save_window_geometry)
+        self._restore_window_geometry()
         self._build_toolbar()
         self._build_workspace()
         self.statusBar().showMessage("Director Cut runtime ready")
@@ -15259,7 +15266,7 @@ class DirectorCutStudio(QMainWindow):
             if not integrity_repairs and not recovered_workspace_state:
                 self.undo_stack.setClean()
             self._update_window_title()
-            migration_note = " 路 legacy source preserved" if is_legacy_project else ""
+            migration_note = " · legacy source preserved" if is_legacy_project else ""
             repair_note = (
                 f" · auto-repaired {len(integrity_repairs)} integrity item(s); save to persist"
                 if integrity_repairs else ""
@@ -15802,7 +15809,7 @@ class DirectorCutStudio(QMainWindow):
             asset.recognition = "MEDIA PREPARATION\nQueued for FFprobe and preview generation."
         card = self.cards.get(asset.node_id)
         if card:
-            card.set_analysis_status("准备 …")
+            card.set_analysis_status("Prep …")
         self._refresh_semantic_card(asset)
         if asset is self.selected_asset:
             self._refresh_recognition_inspector(asset)
@@ -15865,7 +15872,7 @@ class DirectorCutStudio(QMainWindow):
             percent = max(0, min(99, round(float(payload["progress"]) * 100)))
             card = self.cards.get(asset.node_id)
             if card:
-                card.set_analysis_status(f"准备 {percent}%")
+                card.set_analysis_status(f"Prep {percent}%")
             self.statusBar().showMessage(
                 f"{asset.tag} · {payload.get('stage', 'preparing')} · {percent}%"
             )
@@ -16100,8 +16107,8 @@ class DirectorCutStudio(QMainWindow):
             "ready": "AI ✓",
             "stale": "AI STALE",
             "failed": "AI !",
-            "not_generated": "识别 ✓" if self._asset_has_semantic_evidence(asset) else "识别 --",
-        }.get(status, "识别 …")
+            "not_generated": "Scan ✓" if self._asset_has_semantic_evidence(asset) else "Scan --",
+        }.get(status, "Scan …")
         card.set_analysis_status(badge)
 
     def _refresh_recognition_inspector(self, asset: MediaAsset | None = None) -> None:
@@ -16740,7 +16747,7 @@ class DirectorCutStudio(QMainWindow):
         asset.recognition += f"\n\n{detail}"
         card = self.cards.get(asset.node_id)
         if card:
-            card.set_analysis_status("识别 !")
+            card.set_analysis_status("Scan !")
         if asset is self.selected_asset:
             self._refresh_recognition_inspector(asset)
         self.statusBar().showMessage(f"{asset.tag} analysis failed — use Analyze to retry")
@@ -17897,9 +17904,51 @@ class DirectorCutStudio(QMainWindow):
 
     def resizeEvent(self, event) -> None:  # noqa: N802
         super().resizeEvent(event)
+        self._schedule_window_geometry_save()
         if self.monitor_stack.currentWidget() == self.monitor_image:
             self.render_timeline_at(self.playhead_seconds, force_seek=True)
         self._scale_generated_video_frame()
+
+    def moveEvent(self, event) -> None:  # noqa: N802
+        super().moveEvent(event)
+        self._schedule_window_geometry_save()
+
+    def _window_geometry_persistence_enabled(self) -> bool:
+        # Headless test runs use the offscreen platform; they must never read or write the file.
+        return QApplication.platformName() != "offscreen"
+
+    def _restore_window_geometry(self) -> None:
+        self.resize(1680, 980)
+        if not self._window_geometry_persistence_enabled():
+            return
+        try:
+            saved = json.loads(self._window_geometry_path.read_text(encoding="utf-8"))
+            width = max(int(saved["width"]), self.minimumWidth())
+            height = max(int(saved["height"]), self.minimumHeight())
+            self.resize(width, height)
+            self.move(int(saved.get("x", 0)), int(saved.get("y", 0)))
+            self._restore_maximized = bool(saved.get("maximized", False))
+        except (OSError, ValueError, KeyError, TypeError):
+            self._restore_maximized = False
+
+    def _schedule_window_geometry_save(self) -> None:
+        timer = getattr(self, "_window_geometry_timer", None)
+        if timer is not None and self.isVisible():
+            timer.start()
+
+    def _save_window_geometry(self) -> None:
+        if not self._window_geometry_persistence_enabled():
+            return
+        maximized = self.isMaximized()
+        # While maximized, keep the last normal size so un-maximizing restores it.
+        rect = self.normalGeometry() if maximized else None
+        pos = self.pos() if not maximized else rect.topLeft()
+        width, height = (self.width(), self.height()) if not maximized else (rect.width(), rect.height())
+        payload = {"x": pos.x(), "y": pos.y(), "width": width, "height": height, "maximized": maximized}
+        try:
+            self._window_geometry_path.write_text(json.dumps(payload) + "\n", encoding="utf-8")
+        except OSError:
+            pass
 
     def set_activation_mode(self, mode: str) -> None:
         asset = self._selected_clip()
@@ -18884,7 +18933,7 @@ class DirectorCutStudio(QMainWindow):
                 asset.recognition += "\n\nAnalysis cancelled. Any late worker response will be ignored."
             card = self.cards.get(asset.node_id)
             if card:
-                card.set_analysis_status("已取消")
+                card.set_analysis_status("Cancelled")
             self._refresh_recognition_inspector(asset)
             self.statusBar().showMessage(f"Cancelled analysis for {asset.tag}")
 
@@ -18916,7 +18965,7 @@ class DirectorCutStudio(QMainWindow):
                     raise RuntimeError("BLIP service is still stopping")
             card = self.cards.get(asset.node_id)
             if card:
-                card.set_analysis_status("识别 0%")
+                card.set_analysis_status("Scan 0%")
             requests: list[tuple[str, Path, str]] = []
             for label, source in sources:
                 if asset.media_type == "image" and label != "full frame":
@@ -19011,7 +19060,7 @@ class DirectorCutStudio(QMainWindow):
         card = self.cards.get(asset.node_id)
         if pending:
             if card:
-                card.set_analysis_status("识别 …")
+                card.set_analysis_status("Scan …")
             return
         summary = render_blip_summary(
             (
@@ -19039,7 +19088,7 @@ class DirectorCutStudio(QMainWindow):
         self._mark_dirty()
         self.schedule_prompt_generation()
         if card:
-            card.set_analysis_status("识别 ✓" if "BLIP VISUAL SUMMARY" in summary else "识别 !")
+            card.set_analysis_status("Scan ✓" if "BLIP VISUAL SUMMARY" in summary else "Scan !")
         if asset is self.selected_asset:
             self._refresh_recognition_inspector(asset)
         self._maybe_auto_enrich(asset)
@@ -19083,7 +19132,7 @@ class DirectorCutStudio(QMainWindow):
             affected_assets.append(asset)
             card = self.cards.get(asset.node_id)
             if card:
-                card.set_analysis_status("识别 !")
+                card.set_analysis_status("Scan !")
         self.blip_jobs.clear()
         for asset in affected_assets:
             results = self.blip_results.pop(asset.node_id, [])
@@ -19140,7 +19189,7 @@ class DirectorCutStudio(QMainWindow):
             )
             card = self.cards.get(asset.node_id)
             if card:
-                card.set_analysis_status("音频 0%")
+                card.set_analysis_status("Audio 0%")
         except Exception as exc:
             for job_id, job_asset in list(self.audio_jobs.items()):
                 if job_asset is asset:
@@ -19198,7 +19247,7 @@ class DirectorCutStudio(QMainWindow):
             percent = max(0, min(99, round(float(payload["progress"]) * 100)))
             card = self.cards.get(asset.node_id)
             if card:
-                card.set_analysis_status(f"音频 {percent}%")
+                card.set_analysis_status(f"Audio {percent}%")
             self.statusBar().showMessage(
                 f"{asset.tag} audio · {payload.get('decoded_seconds', 0):.1f}/"
                 f"{payload.get('max_seconds', 0):.1f}s"
@@ -19219,7 +19268,7 @@ class DirectorCutStudio(QMainWindow):
         self._sync_prompt_panel_from_timeline(reconcile_brief=True)
         card = self.cards.get(asset.node_id)
         if card:
-            card.set_analysis_status("识别 ✓" if not payload.get("error") else "识别 !")
+            card.set_analysis_status("Scan ✓" if not payload.get("error") else "Scan !")
         if asset is self.selected_asset:
             self._refresh_recognition_inspector(asset)
         self._maybe_auto_enrich(asset)
@@ -19343,6 +19392,7 @@ class DirectorCutStudio(QMainWindow):
             except OSError:
                 pass
             self.generated_proxy_working = None
+        self._save_window_geometry()
         super().closeEvent(event)
 
     def _sync_prompt_panel_from_timeline(
@@ -22275,9 +22325,11 @@ class DirectorCutStudio(QMainWindow):
         self.quality_profile_combo.blockSignals(True)
         self.quality_profile_combo.setCurrentIndex(max(0, quality_index))
         self.quality_profile_combo.blockSignals(False)
+        # linux-port: ACCEPT renders at the Settings megapixels (H3_MEGAPIXELS, 0.4 = the 480 tier),
+        # not upstream's fixed 1.0 MP, so a click never escalates past the box's cost ladder.
         self._start_generation(
             "accepted",
-            1.0,
+            self.settings_megapixels.value(),
             self.preview_seed,
             self.settings_rtx_vsr.isChecked(),
         )
@@ -23242,6 +23294,168 @@ class DirectorCutStudio(QMainWindow):
 _CRASH_LOG_STREAM = None
 
 
+CONTROL_SOCKET_DEFAULT = "/tmp/dcs-control.sock"
+
+
+class DirectorControlHook(QObject):
+    """A local command channel that drives this window while a person watches it.
+
+    Owner's order 2026-09-12: DCS jobs are set up and run through its own GUI, narrated, so he
+    can learn it. Each command outlines the widget it is about to use, then uses it through the
+    same widget or slot a mouse would, so every change appears in the window. It listens on a
+    Unix socket file only, owner-readable, never a network port.
+
+    Every command replies immediately and acts a moment later: loading a project and RUN+QUEUE
+    can open modal dialogs, and a reply that waited on one would hang the caller. Poll `state`,
+    which reports any open dialog; `dismiss` closes it.
+    """
+
+    WIDGET_ALIASES = {
+        "work_area_start": "clip_start",
+        "work_area_end": "clip_end",
+        "run_queue": "queue_button",
+        "server_url": "server_url",
+    }
+
+    def __init__(self, window: "DirectorCutStudio", path: str) -> None:
+        super().__init__(window)
+        self.window = window
+        self.path = path
+        self._buffers: dict = {}
+        QLocalServer.removeServer(path)
+        self.server = QLocalServer(self)
+        self.server.setSocketOptions(QLocalServer.UserAccessOption)
+        self.server.newConnection.connect(self._accept)
+        self.listening = self.server.listen(path)
+
+    # -- transport -------------------------------------------------------------------------
+    def _accept(self) -> None:
+        while self.server.hasPendingConnections():
+            sock = self.server.nextPendingConnection()
+            self._buffers[sock] = b""
+            sock.readyRead.connect(lambda s=sock: self._read(s))
+            sock.disconnected.connect(lambda s=sock: self._buffers.pop(s, None))
+            sock.disconnected.connect(sock.deleteLater)
+
+    def _read(self, sock) -> None:
+        self._buffers[sock] = self._buffers.get(sock, b"") + bytes(sock.readAll())
+        if b"\n" not in self._buffers[sock]:
+            return
+        line, _, rest = self._buffers[sock].partition(b"\n")
+        self._buffers[sock] = rest
+        try:
+            request = json.loads(line.decode("utf-8"))
+            reply = self._dispatch(request)
+        except Exception as exc:  # a bad command must never take the window down
+            reply = {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
+        sock.write((json.dumps(reply, ensure_ascii=False) + "\n").encode("utf-8"))
+        sock.flush()
+        sock.disconnectFromServer()
+
+    # -- helpers ---------------------------------------------------------------------------
+    def _widget(self, target: str):
+        name = self.WIDGET_ALIASES.get(target, target)
+        widget = getattr(self.window, name, None)
+        if isinstance(widget, QWidget):
+            return widget
+        wanted = target.strip().upper()
+        for button in self.window.findChildren(QPushButton):
+            if button.text().strip().upper() == wanted and button.isVisible():
+                return button
+        return None
+
+    def _outline(self, widget, milliseconds: int) -> None:
+        if widget is None or milliseconds <= 0:
+            return
+        previous = widget.styleSheet()
+        widget.setStyleSheet(previous + "; border: 3px solid #ff3cac; border-radius: 4px;")
+        QTimer.singleShot(milliseconds, lambda: widget.setStyleSheet(previous))
+
+    def _after(self, widget, milliseconds: int, action) -> None:
+        self._outline(widget, milliseconds)
+        QTimer.singleShot(max(0, milliseconds), action)
+
+    def _dialog(self) -> dict | None:
+        modal = QApplication.activeModalWidget()
+        if modal is None:
+            return None
+        text = modal.text() if isinstance(modal, QMessageBox) else ""
+        return {"title": modal.windowTitle(), "text": text}
+
+    # -- commands --------------------------------------------------------------------------
+    def _dispatch(self, request: dict) -> dict:
+        command = str(request.get("command", "")).strip().lower()
+        ms = int(request.get("highlight_ms", 1200))
+        w = self.window
+        if command == "ping":
+            return {"ok": True, "title": w.windowTitle(), "socket": self.path}
+        if command == "state":
+            scan = getattr(w, "scan", None)
+            assets = []
+            if scan is not None:
+                for asset in getattr(scan, "assets", []) or []:
+                    assets.append({
+                        "node": getattr(asset, "node_id", ""),
+                        "type": getattr(asset, "media_type", ""),
+                        "file": getattr(asset, "filename", ""),
+                        "caption": getattr(asset, "clip_prompt", ""),
+                    })
+            try:
+                duration = float(w._timeline_duration_seconds()) if scan is not None else None
+            except Exception:
+                duration = None
+            return {
+                "ok": True,
+                "title": w.windowTitle(),
+                "project": str(w.project_path) if getattr(w, "project_path", None) else None,
+                "unsaved_changes": bool(getattr(w, "project_dirty", False)),
+                "work_area": [w.clip_start.value(), w.clip_end.value()],
+                "timeline_seconds": duration,
+                "run_button": {"text": w.queue_button.text(), "enabled": w.queue_button.isEnabled()},
+                "assets": assets,
+                "director_cues": len(getattr(w, "director_cues", []) or []),
+                "dialog": self._dialog(),
+            }
+        if command == "highlight":
+            widget = self._widget(str(request.get("target", "")))
+            if widget is None:
+                return {"ok": False, "error": f"no widget or button named {request.get('target')!r}"}
+            self._outline(widget, ms)
+            return {"ok": True, "highlighted": request.get("target")}
+        if command == "open_project":
+            path = Path(str(request.get("path", "")))
+            if not path.is_file():
+                return {"ok": False, "error": f"no such project file inside the container: {path}"}
+            self._after(self._widget("OPEN PROJECT"), ms, lambda: w.load_project_path(path))
+            return {"ok": True, "started": "open_project", "path": str(path)}
+        if command == "set_work_area":
+            start, end = float(request["start"]), float(request["end"])
+            if not 0 <= start < end:
+                return {"ok": False, "error": "work area must satisfy 0 <= start < end"}
+            def apply() -> None:
+                w.clip_start.setValue(start)
+                w.clip_end.setValue(end)
+            self._outline(w.clip_start, ms)
+            self._after(w.clip_end, ms, apply)
+            return {"ok": True, "started": "set_work_area", "start": start, "end": end}
+        if command == "run_queue":
+            if request.get("confirm") != "RUN":
+                return {"ok": False, "error": "RUN+QUEUE submits a render; resend with confirm=RUN"}
+            if not w.queue_button.isEnabled():
+                return {"ok": False, "error": f"RUN+QUEUE is disabled (shows {w.queue_button.text()!r})"}
+            self._after(w.queue_button, ms, w.queue_button.click)
+            return {"ok": True, "started": "run_queue"}
+        if command == "dismiss":
+            modal = QApplication.activeModalWidget()
+            if modal is None:
+                return {"ok": True, "dismissed": None}
+            info = self._dialog()
+            modal.close()
+            return {"ok": True, "dismissed": info}
+        return {"ok": False, "error": f"unknown command {command!r}",
+                "commands": ["ping", "state", "highlight", "open_project", "set_work_area", "run_queue", "dismiss"]}
+
+
 def _install_crash_logging() -> None:
     """Keep Python/native crash evidence instead of silently losing the window."""
     global _CRASH_LOG_STREAM
@@ -23278,7 +23492,14 @@ def main() -> int:
     app.setStyle("Fusion")
     app.setStyleSheet(APP_STYLE)
     window = DirectorCutStudio()
-    window.show()
+    if getattr(window, "_restore_maximized", False):
+        window.showMaximized()
+    else:
+        window.show()
+    # The narrated control hook (owner, 2026-09-12). DCS_CONTROL_SOCKET=off disables it.
+    control_path = os.environ.get("DCS_CONTROL_SOCKET", CONTROL_SOCKET_DEFAULT).strip()
+    if app.platformName() != "offscreen" and control_path.lower() not in {"", "off", "0"}:
+        window.control_hook = DirectorControlHook(window, control_path)
     return app.exec()
 
 

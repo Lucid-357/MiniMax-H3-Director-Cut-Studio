@@ -169,7 +169,7 @@ def load_workflow(path: str | Path) -> WorkflowScan:
     except UnicodeDecodeError:
         payload = json.loads(workflow_path.read_text(encoding="utf-16"))
     except json.JSONDecodeError as exc:
-        raise ValueError(f"不是有效的 ComfyUI JSON：第 {exc.lineno} 行，第 {exc.colno} 列。") from exc
+        raise ValueError(f"Not a valid ComfyUI JSON: line {exc.lineno}, column {exc.colno}.") from exc
 
     return scan_workflow_data(payload, workflow_path)
 
@@ -179,7 +179,7 @@ def scan_workflow_data(payload: Any, path: str | Path = "workflow.json") -> Work
     workflow_path = Path(path)
     nodes = _normalize_nodes(payload)
     if not nodes:
-        raise ValueError("JSON 中没有找到 ComfyUI 节点。请使用 Save (API Format) 导出的文件。")
+        raise ValueError("No ComfyUI nodes found in the JSON. Use a file exported with Save (API Format).")
 
     h3_ids = [
         node_id
@@ -337,7 +337,7 @@ def _discover_assets(scan: WorkflowScan) -> None:
             asset = _find_upstream_loader(connection[0], scan.nodes, wanted_type)
             if not asset:
                 scan.warnings.append(
-                    f"H3 节点 {h3_id} 的 {input_name} 已连接，但找不到上游素材加载节点。"
+                    f"{input_name} on H3 node {h3_id} is connected, but no upstream asset loader node was found."
                 )
                 continue
             asset.tag = f"<{label} {zero_index + 1}>"
@@ -432,15 +432,15 @@ def create_virtual_media_asset(
 
 def _add_warnings(scan: WorkflowScan) -> None:
     if not scan.h3_node_ids:
-        scan.warnings.append("没有检测到 MiniMaxH3ReferenceToVideo 节点。")
+        scan.warnings.append("No MiniMaxH3ReferenceToVideo node detected.")
     counts = scan.counts
     if counts["video"] == 0:
         scan.warnings.append(
-            "没有检测到 LoadVideo。若视频节点在 ComfyUI 中处于 bypass，API 导出会将它从可执行图中移除。"
+            "No LoadVideo detected. If the video node is bypassed in ComfyUI, the API export removes it from the executable graph."
         )
     if counts["audio"] == 0 and not any(asset.paired_audio_binding for asset in scan.assets):
         scan.warnings.append(
-            "没有检测到 LoadAudio 或视频配套音轨。若音频节点处于 bypass，API 文件无法保存其素材文件名。"
+            "No LoadAudio or paired video audio detected. If the audio node is bypassed, the API file cannot store its asset filename."
         )
 
 
@@ -611,7 +611,7 @@ def compile_active_workflow(
     if clip_end is None:
         clip_end = scan.duration_seconds
     if clip_start < 0 or clip_end <= clip_start:
-        raise ValueError("生成时间窗必须满足 0 ≤ 开始时间 < 结束时间。")
+        raise ValueError("The generation window must satisfy 0 ≤ start < end.")
 
     compiled = deepcopy(scan.nodes)
     active_source_assets = [

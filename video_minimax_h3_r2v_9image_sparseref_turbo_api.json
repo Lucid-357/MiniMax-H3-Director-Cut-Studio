@@ -16,8 +16,8 @@
  },
  "115": {
   "inputs": {
-   "aspect_ratio": "16:9 (Widescreen)",
-   "megapixels": 1,
+   "aspect_ratio": "9:16 (Portrait Widescreen)",
+   "megapixels": 0.4,
    "multiple": 32
   },
   "class_type": "ResolutionSelector",
@@ -76,12 +76,10 @@
   }
  },
  "123": {
-  "inputs": {
-   "sampler_name": "res_multistep"
-  },
-  "class_type": "KSamplerSelect",
+  "inputs": {},
+  "class_type": "MiniMaxH3TurboSampler",
   "_meta": {
-   "title": "K\u91c7\u6837\u5668\u9009\u62e9"
+   "title": "MiniMax-H3 Turbo Sampler (4-step)"
   }
  },
  "124": {
@@ -90,7 +88,7 @@
    "steps": 4,
    "denoise": 1,
    "model": [
-    "150",
+    "703",
     0
    ]
   },
@@ -145,7 +143,7 @@
  },
  "127": {
   "inputs": {
-   "unet_name": "minimax_h3_ref2va_pruned_w4a8_mixed.safetensors",
+   "unet_name": "minimaxH3Sparseref15_prunedPartialINT8V10.safetensors",
    "weight_dtype": "default"
   },
   "class_type": "UNETLoader",
@@ -605,6 +603,20 @@
   "class_type": "LoadImage",
   "_meta": {
    "title": "\u52a0\u8f7d\u56fe\u50cf"
+  }
+ },
+ "703": {
+  "inputs": {
+   "model": [
+    "150",
+    0
+   ],
+   "shift_video": 12.0,
+   "shift_audio": 3.0
+  },
+  "class_type": "MiniMaxH3SigmaShift",
+  "_meta": {
+   "title": "Sigma shift 6/3 (scheduler only)"
   }
  }
 }

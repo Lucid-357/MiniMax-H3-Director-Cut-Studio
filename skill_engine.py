@@ -119,13 +119,13 @@ def load_skill_profiles(workspace: str | Path) -> dict[str, SkillProfile]:
     default_folder = next((path for path in default_folder_candidates if path.is_dir()), None)
     if default_folder is None:
         raise FileNotFoundError(
-            "找不到 Default Skill。预期位置：skill default/h3-prompt-writing/SKILL.md"
+            "Default Skill not found. Expected at: skill default/h3-prompt-writing/SKILL.md"
         )
     default_path = default_folder / "SKILL.md"
     ref_path = default_folder / "references" / "ref-en.txt"
     missing = [path for path in (default_path, ref_path) if not path.exists()]
     if missing:
-        raise FileNotFoundError("缺少 Skill 文件：" + ", ".join(str(path) for path in missing))
+        raise FileNotFoundError("Missing Skill files: " + ", ".join(str(path) for path in missing))
 
     default_instruction = default_path.read_text(encoding="utf-8-sig")
     reference_guide = ref_path.read_text(encoding="utf-8-sig")
